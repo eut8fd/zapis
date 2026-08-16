@@ -1,0 +1,27 @@
+# Статика Mini App как systemd-сервис (вариант без Docker).
+# Наружу отдавать через nginx/Caddy с HTTPS — Telegram требует https.
+#
+#   sudo cp deploy/zapis-web.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now zapis-web
+
+[Unit]
+Description=Zapis — Mini App static server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zapis
+WorkingDirectory=/opt/zapis
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -u /opt/zapis/server/serve.py 8080
+Restart=always
+RestartSec=5
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

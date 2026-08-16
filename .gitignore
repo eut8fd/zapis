@@ -1,0 +1,8 @@
+.env
+.run/
+tools/
+bot/users.json
+bot/bookings.json
+*.log
+__pycache__/
+.DS_Store

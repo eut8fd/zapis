@@ -1,0 +1,56 @@
+name: Deploy Mini App
+
+# Публикует папку webapp/ на GitHub Pages при каждом пуше в main.
+# Приложение полностью статическое, поэтому сборка не нужна.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'webapp/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Проверить, что нет синтаксических ошибок в модулях
+        run: |
+          node --input-type=module -e "
+            import fs from 'fs';
+            const files = [];
+            const walk = d => fs.readdirSync(d, { withFileTypes: true }).forEach(e => {
+              const p = d + '/' + e.name;
+              if (e.isDirectory()) walk(p); else if (p.endsWith('.js')) files.push(p);
+            });
+            walk('webapp/js');
+            let bad = 0;
+            for (const f of files) {
+              try { new Function(fs.readFileSync(f, 'utf8').replace(/^(import|export)[^\n]*$/gm, '')); }
+              catch (e) { console.error('✗', f, e.message); bad++; }
+            }
+            console.log('проверено файлов:', files.length, '| ошибок:', bad);
+            if (bad) process.exit(1);
+          "
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: webapp
+      - id: deployment
+        uses: actions/deploy-pages@v4

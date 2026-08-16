@@ -1,0 +1,43 @@
+# Полный стек на своём сервере: бот + статика + автоматический HTTPS.
+#
+#   1) заполните .env (BOT_TOKEN, DOMAIN, WEBAPP_URL=https://<DOMAIN>)
+#   2) docker compose up -d
+#
+# Caddy сам получит сертификат Let's Encrypt для DOMAIN — ничего настраивать не нужно.
+
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - bot-data:/data
+    depends_on:
+      - web
+
+  web:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-u", "server/serve.py", "8080"]
+    expose:
+      - "8080"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?укажите DOMAIN в .env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - web
+
+volumes:
+  bot-data:
+  caddy-data:
+  caddy-config:

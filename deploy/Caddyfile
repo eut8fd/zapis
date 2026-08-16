@@ -1,0 +1,13 @@
+# HTTPS выпускается и продлевается автоматически.
+{$DOMAIN} {
+	encode zstd gzip
+
+	# Mini App должен открываться во фрейме Telegram
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer-when-downgrade
+	}
+
+	reverse_proxy web:8080
+}

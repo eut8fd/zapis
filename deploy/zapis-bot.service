@@ -1,0 +1,34 @@
+# Бот как systemd-сервис (вариант без Docker).
+#
+#   sudo cp deploy/zapis-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now zapis-bot
+#   journalctl -u zapis-bot -f
+#
+# Путь /opt/zapis подставьте свой.
+
+[Unit]
+Description=Zapis — Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zapis
+WorkingDirectory=/opt/zapis
+EnvironmentFile=/opt/zapis/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=utf-8
+Environment=DATA_DIR=/var/lib/zapis
+ExecStart=/usr/bin/python3 -u /opt/zapis/bot/bot.py
+Restart=always
+RestartSec=5
+
+# базовая изоляция
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/zapis
+
+[Install]
+WantedBy=multi-user.target
