@@ -1,4 +1,4 @@
-<#
+﻿<#
   Запуск демо одной командой:
     1) поднимает статический сервер с Mini App;
     2) открывает https-туннель Cloudflare (quick tunnel, без аккаунта);
@@ -117,7 +117,8 @@ foreach ($l in $lines) {
   else { $out += $l }
 }
 if (-not $hasUrl) { $out += "WEBAPP_URL=$public" }
-Set-Content -Path $envPath -Value $out -Encoding utf8
+# без BOM: иначе docker compose env_file и подобные читалки ломаются на первой строке
+[IO.File]::WriteAllText($envPath, ($out -join "`n") + "`n", (New-Object Text.UTF8Encoding($false)))
 
 # --- 4. бот -----------------------------------------------------------------
 Write-Host ''

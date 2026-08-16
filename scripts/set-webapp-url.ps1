@@ -1,4 +1,4 @@
-<#
+﻿<#
   Переключает бота на постоянный адрес приложения.
 
     powershell -ExecutionPolicy Bypass -File scripts\set-webapp-url.ps1 -Url https://user.github.io/repo/
