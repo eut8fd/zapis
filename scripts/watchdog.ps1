@@ -88,7 +88,14 @@ function Start-Tunnel {
   return $null
 }
 
-Say "сторож запущен, проверка каждые $IntervalSec сек" 'White'
+# PID-файл: по нему сторожа находят надёжно, без поиска по командной строке
+# (подстрока может случайно совпасть с чужим процессом и убить не то)
+$pidFile = Join-Path $logDir 'watchdog.pid'
+try { [IO.File]::WriteAllText($pidFile, "$PID") } catch { }
+$stopHandler = { try { Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue } catch { } }
+Register-EngineEvent PowerShell.Exiting -Action $stopHandler | Out-Null
+
+Say "сторож запущен (pid $PID), проверка каждые $IntervalSec сек" 'White'
 
 $fails = 0
 $tick = 0
