@@ -22,12 +22,73 @@ powershell -ExecutionPolicy Bypass -File scripts/start-demo.ps1
 
 Остановка — `Ctrl+C` (или `scripts/stop-demo.ps1`).
 
-> Адрес туннеля живёт, пока запущен скрипт. При каждом запуске он новый —
-> бот перенастраивается автоматически. Для постоянного адреса залейте папку
-> `webapp/` на любой https-хостинг и запустите
-> `scripts/start-demo.ps1 -Url https://ваш-домен`.
+> Адрес туннеля живёт, пока запущен скрипт, и при каждом запуске он новый.
+> Чтобы демо было доступно всем и всегда — см. «Публикация» ниже.
 
 Только браузер, без Telegram: `scripts/start-demo.ps1 -NoTunnel` → http://localhost:8080
+
+---
+
+## Публикация: чтобы демо открывалось у всех
+
+Mini App — статика без сборки и без бэкенда, поэтому его можно положить
+на бесплатный хостинг и он будет работать вечно, даже когда ваш компьютер
+выключен. Боту нужен отдельный процесс — он живёт там, где есть Python.
+
+### Вариант A. GitHub Pages (бесплатно, 5 минут)
+
+Приложение доступно всем 24/7 по постоянной ссылке.
+
+```powershell
+scripts\publish-pages.ps1 -Repo https://github.com/ВАШ_ЛОГИН/zapis-demo.git
+```
+
+Скрипт проверит, что `.env` и данные пользователей не попадут в репозиторий,
+закоммитит проект и запушит. Дальше один раз включите публикацию:
+**Settings → Pages → Source → GitHub Actions**. Через минуту приложение будет
+на `https://ВАШ_ЛОГИН.github.io/zapis-demo/`.
+
+Осталось сказать боту новый адрес:
+
+```powershell
+scripts\set-webapp-url.ps1 -Url https://ВАШ_ЛОГИН.github.io/zapis-demo/
+```
+
+Приложение теперь открывается у всех и без Telegram — по прямой ссылке в браузере.
+Бот при этом работает, пока запущен на вашем компьютере.
+
+### Вариант B. Свой сервер — работает всё, включая бота
+
+Нужен VPS с доменом (подойдёт самый дешёвый). HTTPS Caddy выпустит сам.
+
+```bash
+git clone https://github.com/ВАШ_ЛОГИН/zapis-demo.git /opt/zapis && cd /opt/zapis
+cp .env.example .env && nano .env      # BOT_TOKEN, DOMAIN, WEBAPP_URL=https://DOMAIN
+docker compose up -d
+```
+
+Поднимутся три сервиса: бот, статика и Caddy с автоматическим сертификатом.
+Данные бота (`users.json`, `bookings.json`) лежат на именованном томе и переживают
+перезапуск.
+
+Без Docker — юниты systemd в `deploy/`:
+
+```bash
+sudo cp deploy/zapis-*.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now zapis-bot zapis-web
+```
+
+### Вариант C. Приложение на Pages, бот на сервере
+
+Комбинация A и B: `WEBAPP_URL` указывает на GitHub Pages, а на сервере запускается
+только бот (`docker compose up -d bot` или юнит `zapis-bot`). Домен для статики
+не нужен.
+
+| | приложение | бот | стоимость |
+|---|---|---|---|
+| A | 24/7 | пока включён ПК | 0 ₽ |
+| B | 24/7 | 24/7 | цена VPS |
+| C | 24/7 | 24/7 | цена VPS |
 
 ---
 
