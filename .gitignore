@@ -6,3 +6,4 @@ bot/bookings.json
 *.log
 __pycache__/
 .DS_Store
+.run/watchdog.txt
