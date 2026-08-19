@@ -148,7 +148,7 @@ on('sv.del', async ds => {
    Команда
    ========================================================= */
 route('o.team', {
-  tab: 'o.more',
+  tab: 'o.team',
   fab: () => `<button class="fab" data-a="tm.add">${icon('plus', 26, 2.4)}</button>`,
   render() {
     const list = emps();
@@ -200,7 +200,7 @@ on('tm.add', () => {
 });
 
 route('o.employee', {
-  tab: 'o.more',
+  tab: 'o.team',
   render(p) {
     const e = emp(p.id);
     if (!e) return emptyState({ ic: 'users', title: 'Сотрудник не найден' });
@@ -323,7 +323,7 @@ on('ac.set', ds => { updateEmployee(ds.id, { access: ds.v }); window.__ac.close(
    График
    ========================================================= */
 route('o.schedule', {
-  tab: 'o.more',
+  tab: 'o.team',
   render(p) {
     const e = emp(p.id) || staff()[0];
     const days = [1, 2, 3, 4, 5, 6, 0];

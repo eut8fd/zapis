@@ -167,24 +167,26 @@ def client_text(cid):
     c = COMPANIES[cid]
     return (
         '<b>{name}</b>\n'
-        '★ {rating} · {reviews} отзывов · {city}\n'
+        '{cat} · {city}\n'
         '{addr}\n\n'
         '{about}\n\n'
         'Свободное время видно сразу — выберите услугу и запишитесь за полминуты.'
-    ).format(name=esc(c['name']), rating=c['rating'], reviews=c['reviews'],
+    ).format(name=esc(c['name']), cat=esc(c['cat']),
              city=esc(c['city']), addr=esc(c['addr']), about=esc(c['about']))
 
 
 def client_kb(cid, uid=None):
     mine = bk.user_bookings(uid) if uid is not None else []
     rows = [
-        [cb('⚡ Записаться — за 3 нажатия', 'bk::::')],
-        [open_btn('📱 Открыть приложение', cid + '_book')],
+        # основной путь — приложение: там полный календарь на месяцы вперёд
+        [open_btn('📅 Записаться', cid + '_book')],
+        # быстрый путь для тех, кто не хочет открывать приложение
+        [cb('⚡ Быстрая запись в чате', 'bk::::')],
+        [open_btn('Мои записи' + (' · %d' % len(mine) if mine else ''), cid + '_my')],
     ]
-    rows.append([cb('Мои записи' + (' · %d' % len(mine) if mine else ''), 'mine'),
-                 cb('Услуги и цены', 'services')])
-    rows.append([cb('Адрес и контакты', 'contacts')])
-    rows.append([cb('Это не мой салон', 'landing')])
+    rows.append([cb('Услуги и цены', 'services'), cb('Контакты', 'contacts')])
+    rows.append([cb('Поддержка', 'support')])
+    rows.append([cb('‹ Выбрать другой салон', 'landing')])
     return {'inline_keyboard': rows}
 
 
@@ -208,7 +210,7 @@ def contacts_text(cid):
 
 def client_back_kb(cid):
     return {'inline_keyboard': [
-        [cb('⚡ Записаться', 'bk::::')],
+        [open_btn('📅 Записаться', cid + '_book')],
         [cb('‹ Назад', 'menu')],
     ]}
 
@@ -273,9 +275,11 @@ def bk_screen(cid, uid, data):
                 line = []
         if line:
             rows.append(line)
+        rows.append([open_btn('📅 Полный календарь', cid + '_book')])
         rows.append([cb('‹ Назад', bk_data(svc))])
-        return ('<b>Выберите день</b>\n%s · %s' % (esc(s[0]), esc(who)),
-                {'inline_keyboard': rows})
+        return ('<b>Выберите день</b>\n%s · %s\n\n'
+                '<i>Здесь ближайшие дни. Нужна дата дальше — откройте полный календарь.</i>'
+                % (esc(s[0]), esc(who)), {'inline_keyboard': rows})
 
     d = bk_day(day)
 
@@ -293,6 +297,7 @@ def bk_screen(cid, uid, data):
                 line = []
         if line:
             rows.append(line)
+        rows.append([open_btn('📅 Полный календарь', cid + '_book')])
         rows.append([cb('‹ Назад', bk_data(svc, emp))])
         return ('<b>Выберите время</b>\n%s · %s · %s' % (
             esc(s[0]), esc(who), bk.day_label(d, today)), {'inline_keyboard': rows})
@@ -733,13 +738,29 @@ def main():
     print('bot: слушаю обновления… (Ctrl+C для выхода)')
     print('     WEBAPP_URL =', URL or '(пусто)')
     offset = None
+    conflicts = 0
     while True:
         try:
             r = api('getUpdates', offset=offset, timeout=30,
                     allowed_updates=['message', 'callback_query'])
             if not r.get('ok'):
+                # Telegram разрешает опрашивать бота только одному процессу.
+                # Если токен запущен ещё где-то (например, на втором ноутбуке),
+                # экземпляры будут бесконечно выбивать друг друга.
+                if 'Conflict' in str(r.get('error', '')):
+                    conflicts += 1
+                    if conflicts == 3:
+                        print('')
+                        print('!! Этот бот уже запущен на другом компьютере.')
+                        print('   Один токен = один работающий бот.')
+                        print('   Остановите демо на второй машине '
+                              '(4 ОСТАНОВИТЬ.cmd) и запустите здесь заново.')
+                        print('')
+                    time.sleep(min(60, 5 * conflicts))
+                    continue
                 time.sleep(3)
                 continue
+            conflicts = 0
             for u in r.get('result', []):
                 offset = u['update_id'] + 1
                 try:

@@ -121,10 +121,16 @@ route('o.home', {
 
     <div class="sec">
       <div class="sec-h"><div class="sec-t">Быстрые действия</div></div>
-      <div class="wrap acts">
+      <div class="wrap acts" style="margin-bottom:9px">
         <button class="act" data-a="qa.appt">${icon('calendarPlus', 21)}Запись</button>
-        <button class="act" data-a="qa.client">${icon('userPlus', 21)}Клиент</button>
-        <button class="act" data-a="nav" data-r="o.services">${icon('briefcase', 21)}Услуги</button>
+        <button class="act" data-a="tm.add">${icon('userPlus', 21)}Мастер</button>
+        <button class="act" data-a="qa.svc">${icon('briefcase', 21)}Услуга</button>
+        <button class="act" data-a="qa.block">${icon('lock', 21)}Занять время</button>
+      </div>
+      <div class="wrap acts">
+        <button class="act" data-a="nav" data-r="o.analytics">${icon('chart', 21)}Аналитика</button>
+        <button class="act" data-a="nav" data-r="o.finance">${icon('wallet', 21)}Финансы</button>
+        <button class="act" data-a="nav" data-r="o.services">${icon('grid', 21)}Все услуги</button>
         <button class="act" data-a="o.share">${icon('share', 21)}Ссылка</button>
       </div>
     </div>`;

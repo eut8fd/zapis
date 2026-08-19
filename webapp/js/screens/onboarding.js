@@ -5,7 +5,27 @@ import { route, go, render, resetStack } from '../router.js';
 import { on } from '../bus.js';
 import { haptic } from '../tg.js';
 
-const rr = () => render(false);
+// Перед любой перерисовкой снимаем значения полей в состояние.
+// Иначе введённое имя пропадает при нажатии на категорию, длительность и т.п.
+function capture() {
+  const v = id => { const e = document.querySelector(id); return e ? e.value : null; };
+  const n = v('#_n'); if (n !== null) ob.name = n;
+  const sn = v('#_sn'); if (sn !== null) ob.svc.name = sn;
+  const sp = v('#_sp'); if (sp !== null) ob.svc.price = sp;
+  const en = v('#_en'); if (en !== null) ob.emp = en;
+}
+// и возвращаем курсор в то же поле, где он был
+function rr() {
+  capture();
+  const a = document.activeElement;
+  const id = a && a.id ? '#' + a.id : null;
+  const pos = a && a.selectionStart != null ? a.selectionStart : null;
+  render(false);
+  if (id) {
+    const e = document.querySelector(id);
+    if (e) { e.focus(); if (pos != null && e.setSelectionRange) { try { e.setSelectionRange(pos, pos); } catch (x) { } } }
+  }
+}
 const CATS = [
   ['Салон красоты', 'nails', '#4C6FFF'], ['Барбершоп', 'bar', '#0EA5E9'], ['Спа и массаж', 'spa', '#12B76A'],
   ['Ногтевая студия', 'nails', '#EC4899'], ['Парикмахерская', 'hair', '#F79009'], ['Другое', 'nails', '#8B5CF6'],
@@ -28,8 +48,12 @@ route('onb', {
     </div>`;
   },
   mount() {
+    // фокус ставим только при первом входе на шаг: иначе он будет
+    // перебивать курсор при каждой перерисовке формы
+    if (ob._focused === ob.step) return;
+    ob._focused = ob.step;
     const i = document.querySelector('.ob input');
-    if (i && ob.step <= 3) setTimeout(() => i.focus(), 300);
+    if (i && ob.step <= 4) setTimeout(() => i.focus(), 300);
   },
 });
 
@@ -124,20 +148,19 @@ on('ob.back', () => { ob.step--; rr(); });
 on('ob.skip', () => { S.onboarded = true; emit(); resetStack('o.home'); });
 
 on('ob.s2', () => {
-  const v = document.querySelector('#_n');
-  ob.name = (v ? v.value : '').trim();
+  capture();
+  ob.name = (ob.name || '').trim();
   if (!ob.name) { toast('Введите название', 'dan'); return; }
   ob.step = 2; rr();
 });
 on('ob.s3', () => { ob.step = 3; rr(); });
 on('ob.s4', () => {
-  ob.svc.name = (document.querySelector('#_sn') || {}).value || '';
-  ob.svc.price = (document.querySelector('#_sp') || {}).value || '';
-  ob.svc.name = ob.svc.name.trim();
+  capture();
+  ob.svc.name = (ob.svc.name || '').trim();
   if (!ob.svc.name) { toast('Введите название услуги', 'dan'); return; }
   ob.step = 4; rr();
 });
-on('ob.finish', () => { ob.emp = ((document.querySelector('#_en') || {}).value || '').trim(); build(); });
+on('ob.finish', () => { capture(); ob.emp = (ob.emp || '').trim(); build(); });
 on('ob.finishLater', () => { ob.emp = ''; build(); });
 
 async function build() {

@@ -55,6 +55,7 @@ const TABS = {
     { r: 'o.home', t: 'Главная', i: 'home' },
     { r: 'o.cal', t: 'Календарь', i: 'calendar' },
     { r: 'o.clients', t: 'Клиенты', i: 'users' },
+    { r: 'o.team', t: 'Команда', i: 'userPlus' },
     { r: 'o.more', t: 'Ещё', i: 'grid' },
   ],
   employee: [

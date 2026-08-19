@@ -145,7 +145,7 @@ export function confirmSheet({ title, text, ok = 'Подтвердить', cance
     let done = false;
     const s = sheet({
       title,
-      body: `<div class="sm muted" style="padding-bottom:6px">${esc(text || '')}</div>`,
+      body: `<div class="sm muted" style="padding-bottom:6px;white-space:pre-line;line-height:1.5">${esc(text || '')}</div>`,
       footer: `<div class="btns"><button class="btn gh" data-c="0">${esc(cancel)}</button><button class="btn ${danger ? 'dan' : 'p'}" data-c="1">${esc(ok)}</button></div>`,
       onClose: () => { if (!done) res(false); }
     });
@@ -185,6 +185,59 @@ export function promptSheet({ title, label, value = '', placeholder = '', multil
     setTimeout(() => inp.focus(), 240);
     s.el.querySelector('[data-ok]').onclick = () => { done = true; res(inp.value.trim()); s.close(); };
   });
+}
+
+
+/* ---------------- Месячный календарь ----------------
+   Универсальная сетка месяца. Используется и клиентом при записи,
+   и бизнесом в календаре. Даты без свободных мест гасятся, но
+   остаются видимыми — так понятнее, чем прятать их совсем.
+   avail(date) -> null | число свободных слотов | true/false
+------------------------------------------------------- */
+export const MONTH_NAMES = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
+  'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+
+export function monthGrid(view, {
+  selected = null, action = 'cal.pick', navAction = 'cal.month',
+  avail = null, minDate = null, maxDate = null, showCounts = true,
+} = {}) {
+  const y = view.getFullYear(), m = view.getMonth();
+  const first = new Date(y, m, 1);
+  const daysIn = new Date(y, m + 1, 0).getDate();
+  const lead = (first.getDay() + 6) % 7;            // неделя с понедельника
+  const prev = new Date(y, m - 1, 1), next = new Date(y, m + 1, 1);
+  const lo = minDate ? startOfDay(minDate) : null;
+  const hi = maxDate ? startOfDay(maxDate) : null;
+  const canPrev = !lo || new Date(y, m, 0) >= lo;
+  const canNext = !hi || new Date(y, m + 1, 1) <= hi;
+
+  const cells = [];
+  for (let i = 0; i < lead; i++) cells.push('<div class="mc-cell mc-empty"></div>');
+  for (let d = 1; d <= daysIn; d++) {
+    const date = new Date(y, m, d);
+    const key = dayKey(date);
+    const isSel = selected && key === dayKey(selected);
+    const isToday = key === dayKey(new Date());
+    const before = lo && date < lo, after = hi && date > hi;
+    let free = null;
+    if (!before && !after && avail) { try { free = avail(date); } catch (e) { free = null; } }
+    const off = before || after || free === 0 || free === false;
+    cells.push(`<button class="mc-cell ${isSel ? 'on' : ''} ${off ? 'off' : ''} ${isToday ? 'today' : ''}"
+      ${off ? 'disabled' : `data-a="${action}" data-d="${date.getTime()}"`}>
+      <span class="d">${d}</span>
+      ${showCounts && typeof free === 'number' && free > 0 && !isSel ? '<i class="dot"></i>' : ''}
+    </button>`);
+  }
+
+  return `<div class="mcal">
+    <div class="mc-head">
+      <button class="ico-btn flat" ${canPrev ? `data-a="${navAction}" data-d="${prev.getTime()}"` : 'disabled'}>${icon('back', 18)}</button>
+      <div class="mc-title">${MONTH_NAMES[m]} ${y}</div>
+      <button class="ico-btn flat" ${canNext ? `data-a="${navAction}" data-d="${next.getTime()}"` : 'disabled'}>${icon('fwd', 18)}</button>
+    </div>
+    <div class="mc-wd">${['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ', 'ВС'].map(w => `<span>${w}</span>`).join('')}</div>
+    <div class="mc-grid">${cells.join('')}</div>
+  </div>`;
 }
 
 /* ---------------- Графики ---------------- */
