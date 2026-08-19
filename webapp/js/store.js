@@ -316,9 +316,53 @@ export function updateEmployee(id, patch) {
 }
 export function removeEmployee(id) { const e = emp(id); if (e) { e.active = false; emit(); } }
 
-export function addBlock({ employeeId, start, end, reason = 'Перерыв', companyId = cid() }) {
-  S.data.blocks.push({ id: uid('bl_'), companyId, employeeId, start: new Date(start).toISOString(), end: new Date(end).toISOString(), reason });
+// Причины отсутствия. allDay — занимает весь рабочий день,
+// многодневные (отпуск, больничный) разворачиваются в блок на каждый день.
+export const ABSENCE = {
+  break: { t: 'Перерыв', color: '#F79009', icon: 'coffee' },
+  busy: { t: 'Личные дела', color: '#8B5CF6', icon: 'lock' },
+  vacation: { t: 'Отпуск', color: '#06AED4', icon: 'gift' },
+  sick: { t: 'Больничный', color: '#F04462', icon: 'alert' },
+  dayoff: { t: 'Выходной', color: '#7C8AA5', icon: 'moon' },
+  other: { t: 'Другое', color: '#64748B', icon: 'dots' },
+};
+
+export function addBlock({ employeeId, start, end, reason = 'Перерыв', kind = 'break', allDay = false, companyId = cid() }) {
+  const b = {
+    id: uid('bl_'), companyId, employeeId, kind, allDay,
+    start: new Date(start).toISOString(), end: new Date(end).toISOString(), reason,
+  };
+  S.data.blocks.push(b);
   emit();
+  return b;
+}
+
+/** Отсутствие на диапазон дней — по блоку на каждый день (§53, §54). */
+export function addAbsence({ employeeId, from, to, kind = 'vacation', companyId = cid() }) {
+  const label = (ABSENCE[kind] || ABSENCE.other).t;
+  const a = startOfDay(new Date(from)), b = startOfDay(new Date(to));
+  const out = [];
+  for (let d = new Date(a); d <= b; d = new Date(d.getTime() + 86400000)) {
+    const e = emp(employeeId);
+    const w = e && e.schedule && e.schedule[d.getDay()];
+    const from_ = w && w.on ? toMin(w.from) : 9 * 60;
+    const to_ = w && w.on ? toMin(w.to) : 20 * 60;
+    out.push({
+      id: uid('bl_'), companyId, employeeId, kind, allDay: true, reason: label,
+      start: new Date(d.getFullYear(), d.getMonth(), d.getDate(), Math.floor(from_ / 60), from_ % 60).toISOString(),
+      end: new Date(d.getFullYear(), d.getMonth(), d.getDate(), Math.floor(to_ / 60), to_ % 60).toISOString(),
+    });
+  }
+  S.data.blocks.push(...out);
+  emit();
+  return out;
+}
+
+/** Отсутствия сотрудника на дату (для календаря и расписания). */
+export function absenceOn(date, employeeId, companyId = cid()) {
+  const k = dayKey(date);
+  return blocks(companyId).filter(b => b.employeeId === employeeId &&
+    dayKey(new Date(b.start)) === k && b.kind && b.kind !== 'break');
 }
 export function removeBlock(id) { S.data.blocks = S.data.blocks.filter(b => b.id !== id); emit(); }
 

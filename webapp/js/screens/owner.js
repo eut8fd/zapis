@@ -1,16 +1,17 @@
 import {
   S, co, cid, emp, emps, staff, svc, svcs, client, clients, appt, appts, apptTitle, apptColor, apptEnd,
   now, today, todayStats, rangeStats, nextAppt, dayAppts, blocks, me, toHM, toMin, workDay, companyHours,
-  lostClients, clientStats, emit,
+  lostClients, clientStats, emit, freeGaps, removeBlock, ABSENCE, absenceOn,
 } from '../store.js';
 import {
   esc, money, moneyShort, hhmm, dateLabel, dateFull, nMin, nAppt, avatar, greet, WD, WD_FULL, MONTHS,
   dayKey, startOfDay, addDays, emptyState, sheet, toast, segmented, sparkline, num, plural,
+  confirmSheet, monthGrid, MONTH_NAMES, MON_SHORT,
 } from '../ui.js';
 import { icon } from '../icons.js';
 import { route, go, render } from '../router.js';
 import { on } from '../bus.js';
-import { openApptSheet, newApptFlow, blockFlow, quickAdd, dateStrip } from '../flows.js';
+import { openApptSheet, newApptFlow, blockFlow, quickAdd, dateStrip, absenceFlow } from '../flows.js';
 import { haptic, copy, openLink } from '../tg.js';
 import { BOT_USERNAME } from '../config.js';
 
@@ -208,30 +209,82 @@ route('o.cal', {
 export function calendarScreen({ scope = 'company', fixedEmp = null } = {}) {
   if (!cal.date) cal.date = today();
   if (fixedEmp) cal.empId = fixedEmp;
+  // Фильтр мастера мог остаться от другой роли или компании — тогда календарь
+  // молча показывал бы пустой день. Сбрасываем, если мастера здесь больше нет.
+  else if (cal.empId && !staff().some(e => e.id === cal.empId)) cal.empId = null;
   const d = cal.date;
   const isToday = dayKey(d) === dayKey(now());
   const list = staff();
   const empId = fixedEmp || cal.empId;
 
+  // §44 — в режиме недели показываем диапазон, а не одно число
+  const wkStart = addDays(d, -((d.getDay() + 6) % 7)), wkEnd = addDays(wkStart, 6);
+  const title = cal.view === 'month'
+    ? MONTH_NAMES[d.getMonth()] + ' ' + d.getFullYear()
+    : cal.view === 'week'
+      ? (wkStart.getMonth() === wkEnd.getMonth()
+        ? wkStart.getDate() + '–' + wkEnd.getDate() + ' ' + MONTHS[wkEnd.getMonth()]
+        : wkStart.getDate() + ' ' + MON_SHORT[wkStart.getMonth()] + ' – ' + wkEnd.getDate() + ' ' + MON_SHORT[wkEnd.getMonth()])
+      : d.getDate() + ' ' + MONTHS[d.getMonth()] + ' ' + d.getFullYear();
+  const sub = cal.view === 'day' ? (isToday ? 'сегодня' : WD_FULL[d.getDay()]) : '';
+
   return `
   <div class="top blur">
-    <button class="ico-btn ${isToday ? '' : 'p'}" data-a="cal.today">${icon('calendar', 18)}</button>
-    <div class="grow center">
-      <div class="top-t center" style="font-size:17px">${d.getDate()} ${MONTHS[d.getMonth()]}</div>
-      <div class="top-sub center">${isToday ? 'сегодня' : WD_FULL[d.getDay()]}</div>
-    </div>
+    <button class="ico-btn ${isToday && cal.view === 'day' ? '' : 'p'}" data-a="cal.today">${icon('calendar', 18)}</button>
+    <button class="grow center" data-a="cal.pickDate" style="padding:0 4px">
+      <div class="top-t center" style="font-size:16.5px">${title} ${icon('down', 14, 2.4)}</div>
+      ${sub ? `<div class="top-sub center">${sub}</div>` : ''}
+    </button>
     <button class="ico-btn" data-a="cal.prev">${icon('back', 18)}</button>
     <button class="ico-btn" data-a="cal.next">${icon('fwd', 18)}</button>
   </div>
 
-  <div class="wrap" style="margin-bottom:12px">${segmented('cal.view', [{ v: 'day', t: 'День' }, { v: 'week', t: 'Неделя' }], cal.view)}</div>
+  <div class="wrap" style="margin-bottom:12px">${segmented('cal.view',
+    [{ v: 'day', t: 'День' }, { v: 'week', t: 'Неделя' }, { v: 'month', t: 'Месяц' }], cal.view)}</div>
 
   ${!fixedEmp && list.length > 1 ? `<div class="chips" style="margin-bottom:12px">
-    <button class="chip p ${!empId ? 'on' : ''}" data-a="cal.emp" data-id="">Все мастера</button>
-    ${list.map(e => `<button class="chip p ${empId === e.id ? 'on' : ''}" data-a="cal.emp" data-id="${e.id}">${esc(e.name.split(' ')[0])}</button>`).join('')}
+    <button class="chip ${!empId ? 'on' : ''}" data-a="cal.emp" data-id="">Все мастера</button>
+    ${list.map(e => `<button class="chip ${empId === e.id ? 'on' : ''}" data-a="cal.emp" data-id="${e.id}"
+      style="${empId === e.id ? 'background:' + e.color + ';border-color:transparent;color:#fff' : ''}">
+      <i style="width:7px;height:7px;border-radius:50%;background:${e.color};display:inline-block"></i>${esc(e.name.split(' ')[0])}</button>`).join('')}
   </div>` : ''}
 
-  ${cal.view === 'day' ? dayView(d, empId) : weekView(d, empId)}`;
+  ${periodStats(d, empId)}
+
+  ${cal.view === 'day' ? dayView(d, empId) : cal.view === 'week' ? weekView(d, empId) : monthView(d, empId)}`;
+}
+
+/* §58 — показатели прямо в календаре: сколько записей, загрузка,
+   свободные окна и ожидаемая выручка за видимый период. */
+function periodStats(d, empId) {
+  let days = [d];
+  if (cal.view === 'week') {
+    const s0 = addDays(d, -((d.getDay() + 6) % 7));
+    days = [0, 1, 2, 3, 4, 5, 6].map(i => addDays(s0, i));
+  } else if (cal.view === 'month') {
+    const n = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+    days = Array.from({ length: n }, (_, i) => new Date(d.getFullYear(), d.getMonth(), i + 1));
+  }
+  const team = empId ? [emp(empId)].filter(Boolean) : staff();
+  let cnt = 0, rev = 0, busyMin = 0, workMin = 0, gaps = 0;
+  days.forEach(day => {
+    dayAppts(day, { employeeId: empId }).forEach(a => { cnt++; rev += a.price; busyMin += a.duration; });
+    team.forEach(e => {
+      const w = workDay(e, day);
+      if (w) workMin += toMin(w.to) - toMin(w.from);
+      if (dayKey(day) >= dayKey(now())) gaps += freeGaps(day, e.id, cid(), 60).length;
+    });
+  });
+  const load = workMin ? Math.round(busyMin / workMin * 100) : 0;
+  const loadColor = load > 70 ? 'var(--ok)' : load > 40 ? 'var(--warn)' : 'var(--tx-2)';
+  return `<div class="wrap" style="margin-bottom:12px">
+    <div class="card flat" style="padding:11px 13px;display:flex;gap:12px;justify-content:space-between">
+      <div><div class="tiny dim">Записей</div><div class="b" style="font-size:16px">${cnt}</div></div>
+      <div><div class="tiny dim">Загрузка</div><div class="b" style="font-size:16px;color:${loadColor}">${load}%</div></div>
+      <div><div class="tiny dim">Свободно окон</div><div class="b" style="font-size:16px">${gaps}</div></div>
+      <div style="text-align:right"><div class="tiny dim">Ожидается</div><div class="b" style="font-size:16px">${moneyShort(rev)} ₸</div></div>
+    </div>
+  </div>`;
 }
 
 function dayView(d, empId) {
@@ -245,58 +298,60 @@ function dayView(d, empId) {
   const PX = 64;
   const y = m => (m - H0 * 60) / 60 * PX;
 
-  // раскладка пересечений
   const items = list.map(a => {
     const s = new Date(a.start);
     return { a, s: s.getHours() * 60 + s.getMinutes(), e: s.getHours() * 60 + s.getMinutes() + a.duration };
   }).sort((x, z) => x.s - z.s);
-  // группируем в кластеры пересекающихся записей — ширина считается внутри кластера
-  let cluster = [], clusterEnd = -1;
-  const flush = () => {
-    if (!cluster.length) return;
-    const lanes = [];
-    cluster.forEach(it => {
-      let li = lanes.findIndex(l => l[l.length - 1].e <= it.s);
-      if (li < 0) { lanes.push([it]); li = lanes.length - 1; } else lanes[li].push(it);
-      it.lane = li;
-    });
-    cluster.forEach(it => { it.lanes = lanes.length; });
-    cluster = [];
-  };
+  const lanes = [];
   items.forEach(it => {
-    if (cluster.length && it.s >= clusterEnd) flush();
-    cluster.push(it);
-    clusterEnd = Math.max(clusterEnd, it.e);
+    let li = lanes.findIndex(l => l[l.length - 1].e <= it.s);
+    if (li < 0) { lanes.push([it]); li = lanes.length - 1; } else lanes[li].push(it);
+    it.lane = li;
   });
-  flush();
+  const laneCount = Math.max(1, lanes.length);
 
   const nowMin = now().getHours() * 60 + now().getMinutes();
   const showNow = dayKey(d) === dayKey(now()) && nowMin >= H0 * 60 && nowMin <= H1 * 60;
+
+  // §57 — отсутствие на весь день показываем плашкой над сеткой
+  const allDay = blk.filter(b => b.allDay);
+  const banner = allDay.length ? `<div class="wrap" style="margin-bottom:10px"><div class="stack s">
+    ${allDay.map(b => {
+    const e = emp(b.employeeId), k = ABSENCE[b.kind] || ABSENCE.other;
+    return `<button class="lrow press" style="border-radius:14px;border:1px solid ${k.color}44;background:${k.color}14;width:100%"
+        data-a="cal.unblock" data-id="${b.id}">
+        <div class="ic" style="background:${k.color};color:#fff">${icon(k.icon, 17)}</div>
+        <div class="grow" style="text-align:left"><div class="tl">${esc(k.t)}</div>
+          <div class="st">${esc(e ? e.name : '')} · весь день</div></div>
+        ${icon('trash', 16)}</button>`;
+  }).join('')}</div></div>` : '';
 
   if (!list.length && !blk.length) {
     return `<div class="tline" style="position:relative">${hours(H0, H1, PX, d, empId)}</div>
       ${emptyState({ ic: 'coffee', title: dayKey(d) === dayKey(now()) ? 'Сегодня свободный день' : 'Записей нет', text: 'Нажмите на свободное время, чтобы добавить запись.', action: 'Добавить запись', act: 'cal.add' })}`;
   }
 
-  return `<div class="tline" style="position:relative">
+  return `${banner}<div class="tline" style="position:relative">
     ${hours(H0, H1, PX, d, empId)}
     <div style="position:absolute;left:58px;right:16px;top:0;bottom:8px;pointer-events:none">
       ${items.map(it => {
-        const a = it.a, c = apptColor(a), cl = client(a.clientId), e = emp(a.employeeId);
-        const h = Math.max(30, a.duration / 60 * PX - 4);
-        const w = 100 / (it.lanes || 1), left = it.lane * w;
-        return `<button class="tl-ev ${h < 44 ? 'mini' : ''} ${a.status === 'done' ? 'done' : ''}" data-a="ap.card" data-id="${a.id}"
+    const a = it.a, cl = client(a.clientId), e = emp(a.employeeId);
+    const c = e ? e.color : apptColor(a);
+    const h = Math.max(30, a.duration / 60 * PX - 4);
+    const w = 100 / laneCount, left = it.lane * w;
+    return `<button class="tl-ev ${h < 44 ? 'mini' : ''} ${a.status === 'done' ? 'done' : ''}" data-a="ap.card" data-id="${a.id}"
           style="pointer-events:auto;top:${y(it.s) + 2}px;height:${h}px;left:${left}%;width:calc(${w}% - 4px);--c:${c};--c-bg:${c}1a;${a.status === 'done' ? 'opacity:.62;' : ''}">
           <div class="n nowrap">${hhmm(new Date(a.start))} ${esc(cl ? cl.name.split(' ')[0] : '')}</div>
           <div class="s nowrap">${esc(apptTitle(a))}${e ? ' · ' + esc(e.name.split(' ')[0]) : ''}</div>
         </button>`;
-      }).join('')}
-      ${blk.map(b => {
-        const s = new Date(b.start), e2 = new Date(b.end);
-        const sm = s.getHours() * 60 + s.getMinutes(), em = e2.getHours() * 60 + e2.getMinutes();
-        return `<button class="tl-ev block" data-a="cal.unblock" data-id="${b.id}" style="pointer-events:auto;top:${y(sm) + 2}px;height:${Math.max(26, (em - sm) / 60 * PX - 4)}px;left:0;width:100%">
-          <div class="n nowrap">${icon('lock', 11, 2.4)} ${esc(b.reason)}</div></button>`;
-      }).join('')}
+  }).join('')}
+      ${blk.filter(b => !b.allDay).map(b => {
+    const s = new Date(b.start), e2 = new Date(b.end);
+    const sm = s.getHours() * 60 + s.getMinutes(), em = e2.getHours() * 60 + e2.getMinutes();
+    const k = ABSENCE[b.kind] || ABSENCE.other;
+    return `<button class="tl-ev block" data-a="cal.unblock" data-id="${b.id}" style="pointer-events:auto;top:${y(sm) + 2}px;height:${Math.max(26, (em - sm) / 60 * PX - 4)}px;left:0;width:100%;border-left-color:${k.color}">
+          <div class="n nowrap">${icon(k.icon, 11, 2.4)} ${esc(b.reason)}</div></button>`;
+  }).join('')}
     </div>
     ${showNow ? `<div class="tl-now" style="top:${y(nowMin)}px"></div>` : ''}
   </div>`;
@@ -324,49 +379,127 @@ function weekView(d, empId) {
     const isT = dayKey(day) === dayKey(now());
     cells.push(`<button class="wcol ${isT ? 'today' : ''}" data-a="cal.day" data-d="${day.getTime()}">
       <div class="w">${WD[day.getDay()]}</div><div class="n">${day.getDate()}</div>
-      ${list.slice(0, 4).map(a => `<div class="ev" style="background:${apptColor(a)}">${hhmm(new Date(a.start))}</div>`).join('')}
+      ${list.slice(0, 4).map(a => {
+      const e = emp(a.employeeId);
+      return `<div class="ev" style="background:${e ? e.color : apptColor(a)}">${hhmm(new Date(a.start))}</div>`;
+    }).join('')}
       ${list.length > 4 ? `<div class="tiny dim">+${list.length - 4}</div>` : ''}
       ${!list.length ? '<div class="tiny dim">—</div>' : ''}
     </button>`);
   }
-  const total = [0, 1, 2, 3, 4, 5, 6].reduce((s, i) => s + dayAppts(addDays(start, i), { employeeId: empId }).length, 0);
-  const rev = [0, 1, 2, 3, 4, 5, 6].reduce((s, i) => s + dayAppts(addDays(start, i), { employeeId: empId }).reduce((x, a) => x + a.price, 0), 0);
-  return `<div class="wgrid">${cells.join('')}</div>
-    <div class="wrap sec"><div class="grid2">
-      <div class="st-card"><div class="l">Записей за неделю</div><div class="v">${total}</div></div>
-      <div class="st-card"><div class="l">Ожидаемая выручка</div><div class="v">${moneyShort(rev)} ₸</div></div>
-    </div></div>`;
+  return `<div class="wgrid">${cells.join('')}</div>`;
+}
+
+/* §42 — месяц: сетка с числом записей и полоской загрузки; тап открывает день */
+function monthView(d, empId) {
+  const y = d.getFullYear(), m = d.getMonth();
+  const daysIn = new Date(y, m + 1, 0).getDate();
+  const lead = (new Date(y, m, 1).getDay() + 6) % 7;
+  const team = empId ? [emp(empId)].filter(Boolean) : staff();
+
+  const cells = [];
+  for (let i = 0; i < lead; i++) cells.push('<div class="mv-cell mv-empty"></div>');
+  for (let n = 1; n <= daysIn; n++) {
+    const day = new Date(y, m, n);
+    const list = dayAppts(day, { employeeId: empId });
+    const busy = list.reduce((s, a) => s + a.duration, 0);
+    let work = 0;
+    team.forEach(e => { const w = workDay(e, day); if (w) work += toMin(w.to) - toMin(w.from); });
+    const load = work ? Math.min(100, Math.round(busy / work * 100)) : 0;
+    const off = !work;
+    const away = team.some(e => absenceOn(day, e.id).length);
+    const isT = dayKey(day) === dayKey(now());
+    cells.push(`<button class="mv-cell ${isT ? 'today' : ''} ${off ? 'off' : ''}" data-a="cal.day" data-d="${day.getTime()}">
+      <span class="d">${n}</span>
+      ${list.length ? `<span class="cnt">${list.length}</span>` : off ? '<span class="cnt dim">вых</span>' : ''}
+      ${away ? '<i class="away"></i>' : ''}
+      <i class="bar" style="width:${load}%;background:${load > 70 ? 'var(--ok)' : load > 40 ? 'var(--warn)' : 'var(--p)'}"></i>
+    </button>`);
+  }
+  return `<div class="wrap"><div class="mv-grid-wd">${['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ', 'ВС'].map(w => `<span>${w}</span>`).join('')}</div>
+    <div class="mv-grid">${cells.join('')}</div>
+    <div class="mc-legend" style="margin-top:10px">
+      <span><i style="background:var(--ok)"></i>плотный день</span>
+      <span><i style="background:var(--p)"></i>есть места</span>
+      <span><i style="background:#06AED4"></i>отсутствие</span>
+    </div>
+  </div>`;
 }
 
 on('cal.view', ds => { cal.view = ds.v; rr(); });
 on('cal.emp', ds => { cal.empId = ds.id || null; rr(); });
 on('cal.today', () => { cal.date = today(); rr(); });
-on('cal.prev', () => { cal.date = addDays(cal.date, cal.view === 'week' ? -7 : -1); rr(); });
-on('cal.next', () => { cal.date = addDays(cal.date, cal.view === 'week' ? 7 : 1); rr(); });
+on('cal.prev', () => {
+  cal.date = cal.view === 'month'
+    ? new Date(cal.date.getFullYear(), cal.date.getMonth() - 1, 1)
+    : addDays(cal.date, cal.view === 'week' ? -7 : -1);
+  rr();
+});
+on('cal.next', () => {
+  cal.date = cal.view === 'month'
+    ? new Date(cal.date.getFullYear(), cal.date.getMonth() + 1, 1)
+    : addDays(cal.date, cal.view === 'week' ? 7 : 1);
+  rr();
+});
 on('cal.day', ds => { cal.date = startOfDay(new Date(+ds.d)); cal.view = 'day'; rr(); });
 on('cal.add', () => newApptFlow({ date: cal.date, employeeId: cal.empId }));
-on('cal.slot', ds => {
-  const m = +ds.m;
-  const s = sheet({
-    title: toHM(m) + ' · ' + dateLabel(cal.date, now()).toLowerCase(),
-    body: `<div class="stack s" style="padding-bottom:6px">
-      <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd)" data-a="cal.slotAdd" data-m="${m}">
-        <div class="ic" style="background:var(--p-soft);color:var(--p)">${icon('calendarPlus', 20)}</div>
-        <div class="grow" style="text-align:left"><div class="tl">Добавить запись</div><div class="st">Клиент придёт в ${toHM(m)}</div></div>
-        ${icon('fwd', 18)}</button>
-      <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd)" data-a="cal.slotBlock" data-m="${m}">
-        <div class="ic" style="background:var(--warn-soft);color:var(--warn)">${icon('lock', 20)}</div>
-        <div class="grow" style="text-align:left"><div class="tl">Заблокировать время</div><div class="st">Перерыв или личные дела</div></div>
-        ${icon('fwd', 18)}</button>
+
+/* §43 — тап по дате открывает календарь: можно уйти на любой день */
+on('cal.pickDate', () => {
+  let view = startOfDay(cal.date);
+  const sh = sheet({ title: 'Выберите дату', body: '' });
+  const draw = () => sh.set({
+    title: 'Выберите дату',
+    body: monthGrid(view, {
+      selected: cal.date, action: 'cd.pick', navAction: 'cd.month',
+      avail: d => dayAppts(d, { employeeId: cal.empId }).length || null,
+      showCounts: true,
+    }),
+    footer: `<div class="btns">
+      <button class="btn gh" data-a="cd.today">Сегодня</button>
+      <button class="btn gh" data-a="cd.week">Эта неделя</button>
     </div>`,
   });
-  window.__cs = s;
+  on('cd.month', d2 => { view = startOfDay(new Date(+d2.d)); draw(); });
+  on('cd.pick', d2 => { cal.date = startOfDay(new Date(+d2.d)); sh.close(); rr(); });
+  on('cd.today', () => { cal.date = today(); sh.close(); rr(); });
+  on('cd.week', () => { cal.date = today(); cal.view = 'week'; sh.close(); rr(); });
+  draw();
+});
+
+/* §50 — тап по свободному времени: четыре понятных действия */
+on('cal.slot', ds => {
+  const m = +ds.m;
+  const items = [
+    ['calendarPlus', 'Создать запись', 'Клиент придёт в ' + toHM(m), 'cal.slotAdd', '#4C6FFF'],
+    ['lock', 'Заблокировать время', 'Занять слот под свои дела', 'cal.slotBlock', '#F79009'],
+    ['coffee', 'Добавить перерыв', 'Обед или пауза', 'cal.slotBreak', '#8B5CF6'],
+    ['gift', 'Отметить отсутствие', 'Отпуск, больничный, выходной', 'cal.slotAway', '#06AED4'],
+  ];
+  const s2 = sheet({
+    title: toHM(m) + ' · ' + dateLabel(cal.date, now()).toLowerCase(),
+    body: `<div class="stack s" style="padding-bottom:6px">${items.map(i => `
+      <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd)" data-a="${i[3]}" data-m="${m}">
+        <div class="ic" style="background:${i[4]}1f;color:${i[4]}">${icon(i[0], 20)}</div>
+        <div class="grow" style="text-align:left"><div class="tl">${i[1]}</div><div class="st">${i[2]}</div></div>
+        ${icon('fwd', 18)}</button>`).join('')}</div>`,
+  });
+  window.__cs = s2;
 });
 on('cal.slotAdd', ds => { window.__cs && window.__cs.close(); setTimeout(() => newApptFlow({ date: cal.date, employeeId: cal.empId, startMin: +ds.m }), 260); });
 on('cal.slotBlock', ds => { window.__cs && window.__cs.close(); setTimeout(() => blockFlow({ date: cal.date, empId: cal.empId, startMin: +ds.m }), 260); });
+on('cal.slotBreak', ds => { window.__cs && window.__cs.close(); setTimeout(() => blockFlow({ date: cal.date, empId: cal.empId, startMin: +ds.m, kind: 'break' }), 260); });
+on('cal.slotAway', () => { window.__cs && window.__cs.close(); setTimeout(() => absenceFlow({ date: cal.date, empId: cal.empId }), 260); });
+
 on('cal.unblock', async ds => {
-  const ok = await import('../ui.js').then(m => m.confirmSheet({ title: 'Снять блокировку?', text: 'Время снова станет доступным для записи.', ok: 'Снять', danger: true }));
-  if (ok) { const { removeBlock } = await import('../store.js'); removeBlock(ds.id); toast('Блокировка снята'); }
+  const b = blocks().find(x => x.id === ds.id);
+  const k = b ? (ABSENCE[b.kind] || ABSENCE.other) : null;
+  const ok = await confirmSheet({
+    title: 'Снять «' + (b ? b.reason : 'блокировку') + '»?',
+    text: 'Время снова станет доступным для записи.',
+    ok: 'Снять', cancel: 'Оставить', danger: true,
+  });
+  if (ok) { removeBlock(ds.id); toast('Время освобождено'); }
 });
 
 /* уведомления (демо) */

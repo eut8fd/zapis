@@ -12,7 +12,7 @@ import {
 import { icon, catIcon } from '../icons.js';
 import { route, go, render } from '../router.js';
 import { on } from '../bus.js';
-import { newApptFlow, addServiceSheet, blockFlow, openApptSheet } from '../flows.js';
+import { newApptFlow, addServiceSheet, blockFlow, openApptSheet, absenceFlow } from '../flows.js';
 import { haptic, copy } from '../tg.js';
 
 const rr = () => render(false);
@@ -352,12 +352,13 @@ route('o.schedule', {
         </div>`;
     }).join('')}
     </div>
-    <div class="wrap sec">
-      <button class="btn gh" data-a="sch.copy" data-id="${e.id}">${icon('copy', 18)}Применить ко всем дням</button>
-    </div>
+    <div class="wrap sec"><div class="btns">
+      <button class="btn gh" data-a="sch.copy" data-id="${e.id}">${icon('copy', 18)}Копировать график</button>
+      <button class="btn gh" data-a="sch.block" data-id="${e.id}">${icon('lock', 18)}Занять время</button>
+    </div></div>
     <div class="sec">
-      <div class="sec-h"><div class="sec-t">Отпуск и блокировки</div>
-        <button class="sec-a" data-a="sch.block" data-id="${e.id}">${icon('plus', 14)} Добавить</button></div>
+      <div class="sec-h"><div class="sec-t">Отсутствия и блокировки</div>
+        <button class="sec-a" data-a="sch.away" data-id="${e.id}">${icon('plus', 14)} Отпуск / больничный</button></div>
       <div class="wrap stack s">
         ${bl.length ? bl.map(b => `<div class="lrow" style="border-radius:14px;border:1px solid var(--bd)">
           <div class="ic" style="background:var(--warn-soft);color:var(--warn)">${icon('lock', 18)}</div>
@@ -410,6 +411,7 @@ on('sch.copy', async ds => {
   updateEmployee(ds.id, {}); toast('График обновлён');
 });
 on('sch.block', ds => blockFlow({ empId: ds.id }));
+on('sch.away', ds => absenceFlow({ empId: ds.id }));
 on('sch.unblock', ds => { removeBlock(ds.id); toast('Блокировка снята'); });
 
 export function timePick(current, cb) {

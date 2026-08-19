@@ -518,3 +518,23 @@ body[data-tgback="1"] .top>.ico-btn[data-a="back"]{display:none}
 .mc-legend{display:flex;gap:14px;justify-content:center;margin-top:9px;font-size:11.5px;color:var(--tx-3)}
 .mc-legend span{display:inline-flex;align-items:center;gap:5px}
 .mc-legend i{width:5px;height:5px;border-radius:50%;background:var(--ok);display:inline-block}
+
+/* ---------- месяц в календаре бизнеса ---------- */
+.mv-grid-wd{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:5px}
+.mv-grid-wd span{text-align:center;font-size:10.5px;font-weight:700;color:var(--tx-3);letter-spacing:.04em}
+.mv-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.mv-cell{
+  position:relative;min-height:52px;border-radius:12px;background:var(--sf);
+  border:1px solid var(--bd);padding:5px 4px 9px;overflow:hidden;
+  display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:2px;
+  transition:transform .12s var(--e)
+}
+.mv-cell:active:not(.mv-empty){transform:scale(.94)}
+.mv-cell.mv-empty{background:transparent;border-color:transparent;pointer-events:none}
+.mv-cell.off{background:var(--sf-2);opacity:.62}
+.mv-cell.today{outline:2px solid var(--p);outline-offset:-2px}
+.mv-cell .d{font-size:13px;font-weight:650;color:var(--tx-2);line-height:1}
+.mv-cell .cnt{font-size:15px;font-weight:780;letter-spacing:-.02em;line-height:1.1}
+.mv-cell .cnt.dim{font-size:10px;font-weight:600;color:var(--tx-3);letter-spacing:0}
+.mv-cell .bar{position:absolute;left:0;bottom:0;height:3px;border-radius:0 2px 0 0;transition:width .4s var(--e)}
+.mv-cell .away{position:absolute;top:5px;right:5px;width:6px;height:6px;border-radius:50%;background:#06AED4}

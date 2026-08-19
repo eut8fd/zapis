@@ -3,11 +3,12 @@
 import {
   S, co, cid, emp, emps, staff, svc, svcs, client, clients, appt, appts, apptTitle, apptColor, apptEnd,
   now, today, slotsFor, slotFree, toMin, toHM, createAppointment, cancelAppointment, completeAppointment,
-  moveAppointment, createClient, createService, addBlock, clientStats, updateClient, nextFreeFor, workDay,
+  moveAppointment, createClient, createService, addBlock, addAbsence, ABSENCE, clientStats, updateClient,
+  nextFreeFor, workDay,
 } from './store.js';
 import {
   sheet, toast, confirmSheet, esc, money, hhmm, dateLabel, dateFull, nMin, avatar, WD, dayKey,
-  startOfDay, addDays, emptyState, promptSheet, wait, loadingBlock, relPast,
+  startOfDay, addDays, emptyState, promptSheet, wait, loadingBlock, relPast, plural, monthGrid,
 } from './ui.js';
 import { icon, catIcon } from './icons.js';
 import { on } from './bus.js';
@@ -368,38 +369,152 @@ export function blockFlow(pre = {}) {
     date: pre.date ? startOfDay(pre.date) : today(),
     from: pre.startMin != null ? pre.startMin : 13 * 60,
     len: 60,
-    reason: 'Перерыв',
+    kind: pre.kind || 'break',
+    allDay: false,
+    custom: false,          // §52 — произвольное время вместо готовых вариантов
+    to: (pre.startMin != null ? pre.startMin : 13 * 60) + 60,
   };
-  const s = sheet({ title: 'Заблокировать время', body: '' });
-  const REASONS = ['Перерыв', 'Обед', 'Личные дела', 'Обучение', 'Отпуск'];
-  const draw = () => s.set({
-    title: 'Заблокировать время',
-    body: `
+  const s = sheet({ title: 'Занять время', body: '' });
+  const KINDS = ['break', 'busy', 'other'];
+
+  const draw = () => {
+    const e = emp(st.empId);
+    const w = e ? workDay(e, st.date) : null;
+    const dayFrom = w ? toMin(w.from) : 9 * 60, dayTo = w ? toMin(w.to) : 20 * 60;
+    if (st.allDay) { st.from = dayFrom; st.to = dayTo; }
+    const endMin = st.custom || st.allDay ? st.to : st.from + st.len;
+
+    s.set({
+      title: 'Занять время',
+      body: `
       <div class="field"><label>Мастер</label>
-        <div class="pick">${staff().map(e => `<button class="o ${st.empId === e.id ? 'on' : ''}" data-a="bl.emp" data-id="${e.id}">${esc(e.name.split(' ')[0])}</button>`).join('')}</div>
+        <div class="pick">${staff().map(x => `<button class="o ${st.empId === x.id ? 'on' : ''}" data-a="bl.emp" data-id="${x.id}">${esc(x.name.split(' ')[0])}</button>`).join('')}</div>
       </div>
-      <div class="field"><label>Дата</label><div style="margin:0 -18px">${dateStrip(st.date, 'bl.date', 10)}</div></div>
+      <div class="field"><label>Причина</label>
+        <div class="pick">${KINDS.map(k => `<button class="o ${st.kind === k ? 'on' : ''}" data-a="bl.kind" data-k="${k}">${ABSENCE[k].t}</button>`).join('')}</div>
+      </div>
+      <div class="field"><label>Дата</label><div style="margin:0 -18px">${dateStrip(st.date, 'bl.date', 14)}</div></div>
+
+      <div class="lrow" style="border-radius:14px;border:1px solid var(--bd);margin-bottom:14px">
+        <div class="grow"><div class="tl">Весь день</div>
+          <div class="st">${w ? w.from + ' — ' + w.to : 'мастер не работает в этот день'}</div></div>
+        <button class="sw ${st.allDay ? 'on' : ''}" data-a="bl.allday"></button>
+      </div>
+
+      ${st.allDay ? '' : `
       <div class="field"><label>Начало</label>
         <div class="pick">${[9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19].map(h => `<button class="o ${st.from === h * 60 ? 'on' : ''}" data-a="bl.from" data-m="${h * 60}">${toHM(h * 60)}</button>`).join('')}</div>
       </div>
       <div class="field"><label>Длительность</label>
-        <div class="pick">${[30, 60, 90, 120, 240].map(m => `<button class="o ${st.len === m ? 'on' : ''}" data-a="bl.len" data-m="${m}">${nMin(m)}</button>`).join('')}</div>
+        <div class="pick">
+          ${[15, 30, 60, 90, 120, 240].map(m => `<button class="o ${!st.custom && st.len === m ? 'on' : ''}" data-a="bl.len" data-m="${m}">${nMin(m)}</button>`).join('')}
+          <button class="o ${st.custom ? 'on' : ''}" data-a="bl.custom">Своё время</button>
+        </div>
       </div>
-      <div class="field"><label>Причина</label>
-        <div class="pick">${REASONS.map(r => `<button class="o ${st.reason === r ? 'on' : ''}" data-a="bl.reason" data-r="${r}">${r}</button>`).join('')}</div>
-      </div>`,
-    footer: `<button class="btn p" data-a="bl.ok">Заблокировать ${toHM(st.from)}–${toHM(st.from + st.len)}</button>`,
-  });
-  on('bl.emp', ds => { st.empId = ds.id; draw(); });
-  on('bl.date', ds => { st.date = new Date(+ds.d); draw(); });
-  on('bl.from', ds => { st.from = +ds.m; draw(); });
-  on('bl.len', ds => { st.len = +ds.m; draw(); });
-  on('bl.reason', ds => { st.reason = ds.r; draw(); });
+      ${st.custom ? `<div class="inp-row" style="margin-bottom:14px">
+        <div class="field" style="margin:0"><label>С</label><input class="inp" id="_bf" value="${toHM(st.from)}" placeholder="12:17"></div>
+        <div class="field" style="margin:0"><label>По</label><input class="inp" id="_bt" value="${toHM(st.to)}" placeholder="12:47"></div>
+      </div>` : ''}`}
+
+      <div class="tiny dim">В это время клиенты не смогут записаться к мастеру.</div>`,
+      footer: `<button class="btn p" data-a="bl.ok">Занять ${st.allDay ? 'весь день' : toHM(st.from) + '–' + toHM(endMin)}</button>`,
+    });
+  };
+
+  const readCustom = () => {
+    if (!st.custom) return;
+    const f = s.el.querySelector('#_bf'), t = s.el.querySelector('#_bt');
+    if (f && /^\d{1,2}:\d{2}$/.test(f.value)) st.from = toMin(f.value);
+    if (t && /^\d{1,2}:\d{2}$/.test(t.value)) st.to = toMin(t.value);
+  };
+
+  on('bl.emp', ds => { readCustom(); st.empId = ds.id; draw(); });
+  on('bl.kind', ds => { readCustom(); st.kind = ds.k; draw(); });
+  on('bl.date', ds => { readCustom(); st.date = new Date(+ds.d); draw(); });
+  on('bl.allday', () => { readCustom(); st.allDay = !st.allDay; draw(); });
+  on('bl.from', ds => { st.from = +ds.m; st.to = st.from + st.len; st.custom = false; draw(); });
+  on('bl.len', ds => { st.len = +ds.m; st.to = st.from + st.len; st.custom = false; draw(); });
+  on('bl.custom', () => { readCustom(); st.custom = true; st.to = st.from + st.len; draw(); });
   on('bl.ok', () => {
+    readCustom();
+    const endMin = st.custom || st.allDay ? st.to : st.from + st.len;
+    if (endMin <= st.from) { toast('Конец должен быть позже начала', 'dan'); return; }
     const a = new Date(st.date); a.setHours(Math.floor(st.from / 60), st.from % 60, 0, 0);
-    const b = new Date(a.getTime() + st.len * 60000);
-    addBlock({ employeeId: st.empId, start: a, end: b, reason: st.reason });
-    s.close(); toast('Время заблокировано');
+    const b = new Date(st.date); b.setHours(Math.floor(endMin / 60), endMin % 60, 0, 0);
+    addBlock({ employeeId: st.empId, start: a, end: b, reason: ABSENCE[st.kind].t, kind: st.kind, allDay: st.allDay });
+    s.close();
+    toast(st.allDay ? 'День занят' : 'Время занято ' + toHM(st.from) + '–' + toHM(endMin));
+  });
+  draw();
+  return s;
+}
+
+/* =========================================================
+   Отсутствие: отпуск, больничный, выходной (§53–§56)
+   ========================================================= */
+export function absenceFlow(pre = {}) {
+  const st = {
+    empId: pre.empId || staff()[0].id,
+    kind: 'vacation',
+    from: pre.date ? startOfDay(pre.date) : today(),
+    to: pre.date ? startOfDay(pre.date) : today(),
+    picking: null,          // 'from' | 'to' — какую границу выбираем
+    month: pre.date ? startOfDay(pre.date) : today(),
+  };
+  const KINDS = ['vacation', 'sick', 'dayoff', 'busy', 'other'];
+  const s = sheet({ title: 'Отметить отсутствие', body: '' });
+
+  const days = Math.round((st.to - st.from) / 86400000) + 1;
+
+  const draw = () => {
+    const d = Math.round((st.to - st.from) / 86400000) + 1;
+    s.set({
+      title: st.picking ? (st.picking === 'from' ? 'С какого дня?' : 'По какой день?') : 'Отметить отсутствие',
+      back: st.picking ? () => { st.picking = null; draw(); } : null,
+      body: st.picking
+        ? monthGrid(st.month, {
+          selected: st.picking === 'from' ? st.from : st.to,
+          action: 'ab.pick', navAction: 'ab.month',
+          minDate: st.picking === 'to' ? st.from : null,
+        })
+        : `
+        <div class="field"><label>Кто отсутствует</label>
+          <div class="pick">${staff().map(x => `<button class="o ${st.empId === x.id ? 'on' : ''}" data-a="ab.emp" data-id="${x.id}">${esc(x.name.split(' ')[0])}</button>`).join('')}</div>
+        </div>
+        <div class="field"><label>Причина</label>
+          <div class="pick">${KINDS.map(k => `<button class="o ${st.kind === k ? 'on' : ''}" data-a="ab.kind" data-k="${k}"
+            style="${st.kind === k ? 'background:' + ABSENCE[k].color + '1f;color:' + ABSENCE[k].color + ';border-color:' + ABSENCE[k].color : ''}">${ABSENCE[k].t}</button>`).join('')}</div>
+        </div>
+        <div class="inp-row" style="margin-bottom:14px">
+          <button class="card flat press" style="flex:1;padding:12px 14px;text-align:left" data-a="ab.setFrom">
+            <div class="tiny dim">С</div><div class="b">${dateFull(st.from)}</div></button>
+          <button class="card flat press" style="flex:1;padding:12px 14px;text-align:left" data-a="ab.setTo">
+            <div class="tiny dim">По</div><div class="b">${dateFull(st.to)}</div></button>
+        </div>
+        <div class="card pad row" style="gap:10px;background:${ABSENCE[st.kind].color}14;border-color:transparent">
+          <span style="color:${ABSENCE[st.kind].color}">${icon(ABSENCE[st.kind].icon, 19)}</span>
+          <div class="sm" style="color:var(--tx-2)">${d} ${plural(d, ['день', 'дня', 'дней'])} — записи на это время приниматься не будут.</div>
+        </div>`,
+      footer: st.picking ? '' : `<button class="btn p" data-a="ab.ok">Отметить</button>`,
+    });
+  };
+
+  on('ab.emp', ds => { st.empId = ds.id; draw(); });
+  on('ab.kind', ds => { st.kind = ds.k; draw(); });
+  on('ab.setFrom', () => { st.picking = 'from'; st.month = startOfDay(st.from); draw(); });
+  on('ab.setTo', () => { st.picking = 'to'; st.month = startOfDay(st.to); draw(); });
+  on('ab.month', ds => { st.month = startOfDay(new Date(+ds.d)); draw(); });
+  on('ab.pick', ds => {
+    const v = startOfDay(new Date(+ds.d));
+    if (st.picking === 'from') { st.from = v; if (st.to < v) st.to = v; }
+    else st.to = v;
+    st.picking = null; draw();
+  });
+  on('ab.ok', () => {
+    const rows = addAbsence({ employeeId: st.empId, from: st.from, to: st.to, kind: st.kind });
+    s.close();
+    const e = emp(st.empId);
+    toast(`${ABSENCE[st.kind].t}: ${e ? e.name.split(' ')[0] : ''}, ${rows.length} ${plural(rows.length, ['день', 'дня', 'дней'])}`);
   });
   draw();
   return s;
