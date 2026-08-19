@@ -3,6 +3,7 @@
   rangeStats, todayStats, dayAppts, clientStats, updateService, deleteService, createService,
   updateEmployee, removeEmployee, createEmployee, addMoney, setPlan, blocks, removeBlock, addBroadcast,
   broadcasts, reviews, lostClients, emit, toHM, toMin, nextFreeFor, workDay,
+  ROLES, PERMS, roleOf, roleName, setRole, cats, catName, addCat, renameCat, removeCat,
 } from '../store.js';
 import {
   esc, money, moneyShort, hhmm, dateLabel, relPast, avatar, emptyState, sheet, toast, promptSheet,
@@ -62,7 +63,6 @@ route('o.more', {
 /* =========================================================
    Услуги
    ========================================================= */
-const CATN = { nails: 'Ногти', hair: 'Волосы', brow: 'Брови и ресницы', bar: 'Барбер', spa: 'Спа' };
 
 route('o.services', {
   tab: 'o.more',
@@ -74,11 +74,12 @@ route('o.services', {
     const s30 = rangeStats(30);
     return `
     <div class="top"><button class="ico-btn" data-a="back">${icon('back', 19)}</button>
-      <div class="grow"><div class="top-t">Услуги</div><div class="top-sub">${list.length} активных</div></div></div>
+      <div class="grow"><div class="top-t">Услуги</div><div class="top-sub">${list.length} активных</div></div>
+      <button class="ico-btn" data-a="sv.cats">${icon('grid', 18)}</button></div>
     ${!list.length ? emptyState({ ic: 'briefcase', title: 'Нет услуг', text: 'Добавьте первую услугу — она сразу появится на странице записи.', action: 'Добавить услугу', act: 'qa.svc' })
         : Object.keys(byCat).map(cat => `
       <div class="sec">
-        <div class="sec-h"><div class="sec-t" style="font-size:13px;color:var(--tx-3);text-transform:uppercase;letter-spacing:.05em">${CATN[cat] || 'Другое'}</div></div>
+        <div class="sec-h"><div class="sec-t" style="font-size:13px;color:var(--tx-3);text-transform:uppercase;letter-spacing:.05em">${esc(catName(cat))}</div></div>
         <div class="wrap stack s">
           ${byCat[cat].map(s => {
           const stat = s30.byService.find(x => x.name === s.name);
@@ -94,6 +95,51 @@ route('o.services', {
         </div>
       </div>`).join('')}`;
   },
+});
+
+on('sv.cats', () => {
+  const s = sheet({ title: 'Категории услуг', body: '' });
+  const draw = () => {
+    const list = cats();
+    s.set({
+      title: 'Категории услуг',
+      body: `<div class="stack s">${Object.entries(list).map(([k, v]) => {
+        const n = svcs().filter(x => x.cat === k).length;
+        const own = (co().cats || {})[k];
+        return `<div class="lrow" style="border-radius:14px;border:1px solid var(--bd)">
+          <div class="tint" style="background:${v.color}1f;color:${v.color}">${catIcon(k, 18)}</div>
+          <div class="grow"><div class="tl">${esc(v.t)}</div>
+            <div class="st">${n} ${plural(n, ['услуга', 'услуги', 'услуг'])}</div></div>
+          ${own ? `<button class="ico-btn flat" data-a="cat.ren" data-k="${k}">${icon('pencil', 16)}</button>
+                   <button class="ico-btn flat" data-a="cat.del" data-k="${k}">${icon('trash', 16)}</button>` : '<span class="bdg">базовая</span>'}
+        </div>`;
+      }).join('')}</div>
+      <div class="tiny dim" style="margin-top:10px">Базовые категории удалить нельзя. Свои — можно переименовать и удалить, услуги при этом сохранятся.</div>`,
+      footer: `<button class="btn p" data-a="cat.add">${icon('plus', 17)}Новая категория</button>`,
+    });
+  };
+  window.__cat = { s, draw };
+  draw();
+});
+on('cat.add', async () => {
+  const v = await promptSheet({ title: 'Новая категория', label: 'Название', placeholder: 'Например, Массаж' });
+  if (!v) return;
+  addCat(v); window.__cat.draw(); toast('Категория добавлена');
+});
+on('cat.ren', async ds => {
+  const v = await promptSheet({ title: 'Переименовать', label: 'Название', value: catName(ds.k) });
+  if (!v) return;
+  renameCat(ds.k, v); window.__cat.draw(); toast('Переименовано');
+});
+on('cat.del', async ds => {
+  const n = svcs().filter(x => x.cat === ds.k).length;
+  const ok = await confirmSheet({
+    title: 'Удалить категорию?',
+    text: n ? `${n} ${plural(n, ['услуга перейдёт', 'услуги перейдут', 'услуг перейдут'])} в «Другое». Сами услуги останутся.` : 'Категория пустая.',
+    ok: 'Удалить', danger: true,
+  });
+  if (!ok) return;
+  removeCat(ds.k); window.__cat.draw(); toast('Категория удалена', 'dan');
 });
 
 on('sv.open', ds => {
@@ -185,16 +231,20 @@ on('tm.add', () => {
       <div class="field"><label>Должность</label>
         <div class="pick">${['Мастер маникюра', 'Парикмахер', 'Барбер', 'Бровист', 'Массажист', 'Администратор'].map((r, i) => `<button class="o ${i === 0 ? 'on' : ''}" data-a="tm.role" data-r="${esc(r)}">${r}</button>`).join('')}</div></div>
       <div class="field"><label>Телефон</label><input class="inp" id="_p" placeholder="+7 ___ ___ __ __" inputmode="tel"></div>
-      <div class="tiny dim">График и услуги можно настроить сразу после добавления.</div>`,
+      <div class="field"><label>Роль</label>
+        <div class="pick">${Object.entries(ROLES).filter(([k]) => k !== 'owner').map(([k, r], i) => `<button class="o ${i === 0 ? 'on' : ''}" data-a="tm.access" data-v="${k}">${r.t}</button>`).join('')}</div></div>
+      <div class="tiny dim">После добавления сразу предложим настроить график и услуги.</div>`,
     footer: `<button class="btn p" data-a="tm.ok">Добавить сотрудника</button>`,
   });
-  window.__tm = { s, role: 'Мастер маникюра', st };
+  window.__tm = { s, role: 'Мастер маникюра', access: 'staff', st };
   on('tm.role', (ds, el) => { window.__tm.role = ds.r; s.el.querySelectorAll('[data-a="tm.role"]').forEach(o => o.classList.toggle('on', o === el)); });
+  on('tm.access', (ds, el) => { window.__tm.access = ds.v; s.el.querySelectorAll('[data-a="tm.access"]').forEach(o => o.classList.toggle('on', o === el)); });
   on('tm.ok', () => {
     const n = s.el.querySelector('#_n').value.trim();
     if (!n) { toast('Введите имя', 'dan'); return; }
     const e = createEmployee({ name: n, role: window.__tm.role, phone: s.el.querySelector('#_p').value.trim() });
-    s.close(); toast('Сотрудник добавлен'); go('o.employee', { id: e.id });
+    setRole(e.id, window.__tm.access || 'staff');
+    s.close(); toast('Добавлен: ' + ROLES[window.__tm.access || 'staff'].t); go('o.employee', { id: e.id });
   });
   setTimeout(() => s.el.querySelector('#_n').focus(), 250);
 });
@@ -237,8 +287,9 @@ route('o.employee', {
         <div class="ic" style="background:var(--ok-soft);color:var(--ok)">${icon('clock', 19)}</div>
         <div class="grow" style="text-align:left"><div class="tl">Записи</div><div class="st">Календарь мастера</div></div>${icon('fwd', 18)}</button>
       <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="emp.access" data-id="${e.id}">
-        <div class="ic" style="background:var(--sf-3)">${icon('lock', 19)}</div>
-        <div class="grow" style="text-align:left"><div class="tl">Доступ</div><div class="st">${e.access === 'owner' ? 'Владелец' : e.access === 'manager' ? 'Администратор' : 'Сотрудник'}</div></div>${icon('fwd', 18)}</button>
+        <div class="ic" style="background:var(--sf-3)">${icon('shield', 19)}</div>
+        <div class="grow" style="text-align:left"><div class="tl">Роль: ${roleName(e)}</div>
+          <div class="st">${ROLES[roleOf(e)].perms.length} ${plural(ROLES[roleOf(e)].perms.length, ['право', 'права', 'прав'])} доступа</div></div>${icon('fwd', 18)}</button>
     </div></div>
 
     <div class="wrap sec">
@@ -308,16 +359,38 @@ on('emp.svcs', ds => {
 });
 on('emp.access', ds => {
   const e = emp(ds.id);
-  const LV = [['staff', 'Сотрудник', 'Видит только свои записи и клиентов'], ['manager', 'Администратор', 'Видит всё расписание и клиентов'], ['owner', 'Владелец', 'Полный доступ, включая финансы']];
-  const s = sheet({
-    title: 'Уровень доступа',
-    body: `<div class="stack s">${LV.map(l => `
-      <button class="role ${e.access === l[0] ? 'on' : ''}" data-a="ac.set" data-id="${e.id}" data-v="${l[0]}" style="width:100%">
-        <div class="t">${l[1]}</div><div class="s">${l[2]}</div></button>`).join('')}</div>`,
-  });
-  window.__ac = s;
+  const s = sheet({ title: 'Роль и права', body: '' });
+  const draw = () => {
+    const cur = roleOf(emp(ds.id));
+    s.set({
+      title: 'Роль и права',
+      body: `
+        <div class="tiny muted b" style="margin-bottom:8px">РОЛЬ</div>
+        <div class="stack s" style="margin-bottom:18px">
+          ${Object.entries(ROLES).map(([k, r]) => `
+            <button class="role ${cur === k ? 'on' : ''}" data-a="ac.set" data-id="${ds.id}" data-v="${k}" style="width:100%;display:flex;align-items:center;gap:10px">
+              <div class="grow"><div class="t">${r.t}</div><div class="s">${r.s}</div></div>
+              ${cur === k ? `<span style="color:var(--p)">${icon('checkCircle', 19)}</span>` : ''}
+            </button>`).join('')}
+        </div>
+
+        <div class="tiny muted b" style="margin-bottom:8px">ЧТО РАЗРЕШЕНО</div>
+        <div class="card" style="padding:4px 0">
+          ${Object.entries(PERMS).map(([k, t]) => {
+            const has = ROLES[cur].perms.includes(k);
+            return `<div class="lrow" style="padding:10px 14px;background:transparent">
+              <span style="color:${has ? 'var(--ok)' : 'var(--tx-3)'};flex:none">${icon(has ? 'checkCircle' : 'xCircle', 17)}</span>
+              <div class="grow"><div class="tl" style="font-size:13.5px;font-weight:${has ? 600 : 400};color:${has ? 'var(--tx)' : 'var(--tx-3)'}">${t}</div></div>
+            </div>`;
+          }).join('')}
+        </div>
+        <div class="tiny dim" style="margin-top:10px">Права меняются вместе с ролью. Мастер видит только свой день и своих клиентов.</div>`,
+    });
+  };
+  window.__ac = { s, draw };
+  draw();
 });
-on('ac.set', ds => { updateEmployee(ds.id, { access: ds.v }); window.__ac.close(); toast('Доступ обновлён'); });
+on('ac.set', ds => { setRole(ds.id, ds.v); window.__ac.draw(); toast('Роль: ' + ROLES[ds.v].t); });
 
 /* =========================================================
    График
@@ -859,27 +932,75 @@ on('set.companySave', () => {
   emit(); s.close(); toast('Сохранено');
 });
 on('set.hours', () => {
+  const s = sheet({ title: 'Часы работы', body: '' });
+  const draw = () => {
+    const c = co();
+    s.set({
+      title: 'Часы работы',
+      body: `<div class="stack s">${[1, 2, 3, 4, 5, 6, 0].map(d => {
+        const w = c.hours[d];
+        return `<div class="card" style="padding:12px 14px">
+          <div class="row between">
+            <div class="grow">
+              <div class="b" style="text-transform:capitalize">${WD_FULL[d]}</div>
+              <div class="sm ${w.on ? 'muted' : 'dim'}">${w.on ? w.from + ' — ' + w.to : 'Выходной'}</div>
+            </div>
+            <button class="sw ${w.on ? 'on' : ''}" data-a="ch.day" data-d="${d}"></button>
+          </div>
+          ${w.on ? `<div class="row" style="gap:8px;margin-top:10px">
+            <button class="btn xs gh" data-a="ch.time" data-d="${d}" data-k="from">${icon('clock', 14)}${w.from}</button>
+            <span class="dim">—</span>
+            <button class="btn xs gh" data-a="ch.time" data-d="${d}" data-k="to">${w.to}</button>
+            <div class="grow"></div>
+            <button class="btn xs" data-a="ch.copy" data-d="${d}">${icon('copy', 13)}На все дни</button>
+          </div>` : ''}
+        </div>`;
+      }).join('')}</div>
+      <div class="tiny dim" style="margin-top:10px">
+        У каждого дня своё время — сокращённые суббота и воскресенье настраиваются здесь.
+        Индивидуальный график мастера задаётся в его карточке и не может выходить за эти рамки.
+      </div>`,
+      footer: `<button class="btn gh" data-a="ch.apply">Применить ко всем мастерам</button>`,
+    });
+  };
+  window.__ch = { s, draw };
+  draw();
+});
+on('ch.day', ds => {
+  const c = co(); c.hours[ds.d].on = !c.hours[ds.d].on; emit();
+  window.__ch.draw();
+});
+on('ch.time', ds => {
   const c = co();
-  const s = sheet({
-    title: 'Часы работы',
-    body: `<div class="stack s">${[1, 2, 3, 4, 5, 6, 0].map(d => {
-      const w = c.hours[d];
-      return `<div class="lrow" style="border-radius:14px;border:1px solid var(--bd)">
-        <div class="grow"><div class="tl" style="text-transform:capitalize">${WD_FULL[d]}</div>
-          <div class="st">${w.on ? w.from + ' — ' + w.to : 'Выходной'}</div></div>
-        <button class="sw ${w.on ? 'on' : ''}" data-a="ch.day" data-d="${d}"></button></div>`;
-    }).join('')}</div>
-    <div class="tiny dim" style="margin-top:10px">Это общие часы салона. Индивидуальный график мастера — в его карточке.</div>`,
-    footer: `<button class="btn gh" data-a="ch.apply">Применить ко всем мастерам</button>`,
+  timePick(c.hours[ds.d][ds.k], v => {
+    const w = c.hours[ds.d];
+    w[ds.k] = v;
+    // конец не может быть раньше начала
+    if (toMin(w.to) <= toMin(w.from)) w.to = toHM(Math.min(23 * 60 + 30, toMin(w.from) + 60));
+    emit(); window.__ch.draw(); toast('Часы обновлены');
   });
-  window.__ch = s;
 });
-on('ch.day', (ds, el) => { const c = co(); c.hours[ds.d].on = !c.hours[ds.d].on; el.classList.toggle('on', c.hours[ds.d].on); emit(); });
-on('ch.apply', () => {
+on('ch.copy', ds => {
+  const c = co(), src = c.hours[ds.d];
+  [1, 2, 3, 4, 5, 6, 0].forEach(d => {
+    if (String(d) === String(ds.d)) return;
+    if (!c.hours[d].on) return;         // выходные не трогаем
+    c.hours[d].from = src.from; c.hours[d].to = src.to;
+  });
+  emit(); window.__ch.draw(); toast('Время скопировано на рабочие дни');
+});
+on('ch.apply', async () => {
   const c = co();
+  const ok = await confirmSheet({
+    title: 'Применить график ко всем мастерам?',
+    text: 'Личные графики мастеров будут заменены общими часами салона. Отпуска и перерывы сохранятся.',
+    ok: 'Применить',
+  });
+  if (!ok) return;
   emps().forEach(e => { e.schedule = JSON.parse(JSON.stringify(c.hours)); });
-  emit(); window.__ch.close(); toast('График применён ко всем');
+  emit(); window.__ch.s.close(); toast('График применён ко всем');
 });
+
 on('set.reminders', () => {
   sheet({
     title: 'Напоминания',

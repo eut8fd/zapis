@@ -4,7 +4,7 @@ import {
   S, co, cid, emp, emps, staff, svc, svcs, client, clients, appt, appts, apptTitle, apptColor, apptEnd,
   now, today, slotsFor, slotFree, toMin, toHM, createAppointment, cancelAppointment, completeAppointment,
   moveAppointment, createClient, createService, addBlock, addAbsence, ABSENCE, clientStats, updateClient,
-  nextFreeFor, workDay,
+  nextFreeFor, workDay, cats, addCat,
 } from './store.js';
 import {
   sheet, toast, confirmSheet, esc, money, hhmm, dateLabel, dateFull, nMin, avatar, WD, dayKey,
@@ -545,41 +545,89 @@ export function addClientSheet(after) {
 }
 
 export function addServiceSheet(pre = {}) {
-  const st = { emps: staff().map(e => e.id), cat: pre.cat || svcs()[0] && svcs()[0].cat || 'nails' };
-  const CATS = [['nails', 'Ногти'], ['hair', 'Волосы'], ['brow', 'Брови и ресницы'], ['bar', 'Барбер'], ['spa', 'Спа']];
-  const s = sheet({
-    title: 'Новая услуга',
-    body: `
-      <div class="field"><label>Название</label><input class="inp" id="_n" value="${esc(pre.name || '')}" placeholder="Например, Педикюр"></div>
-      <div class="inp-row">
-        <div class="field"><label>Цена, ₸</label><input class="inp" id="_p" inputmode="numeric" value="${pre.price || ''}" placeholder="10000"></div>
-        <div class="field"><label>Время, мин</label><input class="inp" id="_d" inputmode="numeric" value="${pre.duration || ''}" placeholder="60"></div>
+  const st = {
+    emps: staff().map(e => e.id),
+    cat: pre.cat || Object.keys(cats())[0] || 'nails',
+    dur: pre.duration || 60,
+    custom: false,
+    name: pre.name || '',
+    price: pre.price || '',
+  };
+  const s = sheet({ title: 'Новая услуга', body: '' });
+
+  // §75 — снимаем введённое перед перерисовкой, иначе название пропадает
+  const capture = () => {
+    const n = s.el.querySelector('#_n'), p = s.el.querySelector('#_p'), d = s.el.querySelector('#_cd');
+    if (n) st.name = n.value;
+    if (p) st.price = p.value;
+    if (d && /^\d+$/.test(d.value)) st.dur = +d.value;
+  };
+
+  const draw = () => {
+    const list = cats();
+    s.set({
+      title: 'Новая услуга',
+      body: `
+      <div class="field"><label>Название</label><input class="inp" id="_n" value="${esc(st.name)}" placeholder="Например, Педикюр"></div>
+      <div class="field"><label>Цена, ₸</label><input class="inp" id="_p" inputmode="numeric" value="${esc(st.price)}" placeholder="10000"></div>
+
+      <div class="field"><label>Длительность</label>
+        <div class="pick">
+          ${[30, 45, 60, 90, 120, 150].map(m => `<button class="o ${!st.custom && st.dur === m ? 'on' : ''}" data-a="as.dur" data-m="${m}">${nMin(m)}</button>`).join('')}
+          <button class="o ${st.custom ? 'on' : ''}" data-a="as.custom">Своё время</button>
+        </div>
+        ${st.custom ? `<div class="row" style="gap:10px;margin-top:10px">
+          <input class="inp" id="_cd" inputmode="numeric" value="${st.dur}" style="flex:1" placeholder="75">
+          <span class="sm muted" style="flex:none">минут = ${nMin(st.dur)}</span>
+        </div>` : ''}
       </div>
+
       <div class="field"><label>Категория</label>
-        <div class="pick" id="_cats">${CATS.map(c => `<button class="o ${st.cat === c[0] ? 'on' : ''}" data-a="as.cat" data-c="${c[0]}">${c[1]}</button>`).join('')}</div>
+        <div class="pick">
+          ${Object.entries(list).map(([k, v]) => `<button class="o ${st.cat === k ? 'on' : ''}" data-a="as.cat" data-c="${k}"
+            style="${st.cat === k ? 'background:' + v.color + '1f;color:' + v.color + ';border-color:' + v.color : ''}">${esc(v.t)}</button>`).join('')}
+          <button class="o" data-a="as.newCat" style="border-style:dashed">${icon('plus', 13)} Своя</button>
+        </div>
       </div>
+
       <div class="field"><label>Кто выполняет</label>
-        <div class="pick" id="_emps">${staff().map(e => `<button class="o on" data-a="as.emp" data-id="${e.id}">${esc(e.name.split(' ')[0])}</button>`).join('')}</div>
+        <div class="pick">${staff().map(e => `<button class="o ${st.emps.includes(e.id) ? 'on' : ''}" data-a="as.emp" data-id="${e.id}">${esc(e.name.split(' ')[0])}</button>`).join('')}</div>
       </div>
       <div class="tiny dim">Описание, фото и буферное время можно настроить после создания.</div>`,
-    footer: `<button class="btn p" data-a="as.ok">Создать услугу</button>`,
-  });
-  on('as.cat', (ds, el) => { st.cat = ds.c; s.el.querySelectorAll('#_cats .o').forEach(o => o.classList.toggle('on', o.dataset.c === ds.c)); });
-  on('as.emp', (ds, el) => {
+      footer: `<button class="btn p" data-a="as.ok">Создать услугу</button>`,
+    });
+  };
+
+  on('as.cat', ds => { capture(); st.cat = ds.c; draw(); });
+  on('as.dur', ds => { capture(); st.dur = +ds.m; st.custom = false; draw(); });
+  on('as.custom', () => { capture(); st.custom = true; draw(); });
+  on('as.emp', ds => {
+    capture();
     const i = st.emps.indexOf(ds.id);
     if (i >= 0) st.emps.splice(i, 1); else st.emps.push(ds.id);
-    el.classList.toggle('on', st.emps.includes(ds.id));
+    draw();
+  });
+  on('as.newCat', async () => {
+    capture();
+    const v = await promptSheet({ title: 'Новая категория', label: 'Название', placeholder: 'Например, Массаж' });
+    if (!v) { draw(); return; }
+    const key = addCat(v);
+    if (key) st.cat = key;
+    draw(); toast('Категория добавлена');
   });
   on('as.ok', () => {
-    const n = s.el.querySelector('#_n').value.trim();
-    const p = +s.el.querySelector('#_p').value || 0;
-    const d = +s.el.querySelector('#_d').value || 60;
+    capture();
+    const n = (st.name || '').trim();
+    const price = +st.price || 0;
     if (!n) { toast('Введите название', 'dan'); return; }
-    const sv = createService({ name: n, price: p, duration: d, employeeIds: st.emps, cat: st.cat });
+    if (st.dur < 5) { toast('Укажите длительность', 'dan'); return; }
+    const sv = createService({ name: n, price, duration: st.dur, employeeIds: st.emps, cat: st.cat });
     s.close(); toast('Услуга добавлена');
     if (pre.after) pre.after(sv);
   });
-  setTimeout(() => s.el.querySelector('#_n').focus(), 250);
+
+  draw();
+  setTimeout(() => { const i = s.el.querySelector('#_n'); if (i) i.focus(); }, 250);
   return s;
 }
 

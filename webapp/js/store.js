@@ -262,10 +262,9 @@ export function createClient({ name, phone = '', tg = '', companyId = cid() }) {
 export function updateClient(id, patch) { const c = client(id); if (c) { Object.assign(c, patch); emit(); } }
 
 export function createService({ name, price, duration, employeeIds, companyId = cid(), cat = 'nails' }) {
-  const CATC = { nails: '#4C6FFF', hair: '#F79009', brow: '#8B5CF6', bar: '#0EA5E9', spa: '#12B76A' };
   const s = {
     id: uid('s_'), companyId, name, price: +price, duration: +duration, cat,
-    color: CATC[cat] || '#4C6FFF', active: true, buffer: 0, desc: '',
+    color: catInfo(cat, companyId).color, active: true, buffer: 0, desc: '',
     employeeIds: employeeIds && employeeIds.length ? employeeIds : staff(companyId).map(e => e.id),
   };
   S.data.services.push(s);
@@ -384,6 +383,116 @@ export function setPlan(companyId, plan, days) {
   emit();
 }
 export function setCompanyStatus(companyId, status) { const c = co(companyId); if (c) { c.status = status; emit(); } }
+
+/* ---------- категории услуг ----------
+   Базовые категории фиксированы, но компания может завести свои:
+   они живут в company.cats и подхватываются везде, где выбирается категория.
+--------------------------------------- */
+const BASE_CATS = {
+  nails: { t: 'Ногти', color: '#4C6FFF' },
+  hair: { t: 'Волосы', color: '#F79009' },
+  brow: { t: 'Брови и ресницы', color: '#8B5CF6' },
+  bar: { t: 'Барбер', color: '#0EA5E9' },
+  spa: { t: 'Спа', color: '#12B76A' },
+  other: { t: 'Другое', color: '#7C8AA5' },
+};
+const CAT_PALETTE = ['#EC4899', '#06AED4', '#F5A524', '#7C3AED', '#10B981', '#F04462', '#0EA5E9'];
+
+/** Все категории компании: базовые + добавленные владельцем. */
+export function cats(companyId = cid()) {
+  const c = co(companyId) || {};
+  const own = c.cats || {};
+  // Базовые показываем всегда: список короткий, а исчезающие пункты
+  // сбивают с толку. «Другое» — только если там что-то лежит.
+  const used = new Set(svcs(companyId).map(x => x.cat));
+  const out = {};
+  Object.entries(BASE_CATS).forEach(([k, v]) => {
+    if (k === 'other' && !used.has('other')) return;
+    out[k] = v;
+  });
+  Object.entries(own).forEach(([k, v]) => { out[k] = v; });
+  return out;
+}
+export function catInfo(key, companyId = cid()) {
+  return cats(companyId)[key] || BASE_CATS[key] || { t: 'Другое', color: '#7C8AA5' };
+}
+export function catName(key, companyId = cid()) { return catInfo(key, companyId).t; }
+
+export function addCat(title, companyId = cid()) {
+  const c = co(companyId); if (!c || !title) return null;
+  c.cats = c.cats || {};
+  const key = 'c' + Date.now().toString(36);
+  const n = Object.keys(c.cats).length;
+  c.cats[key] = { t: title.trim(), color: CAT_PALETTE[n % CAT_PALETTE.length] };
+  emit();
+  return key;
+}
+export function renameCat(key, title, companyId = cid()) {
+  const c = co(companyId);
+  if (c && c.cats && c.cats[key]) { c.cats[key].t = title.trim(); emit(); }
+}
+export function removeCat(key, companyId = cid()) {
+  const c = co(companyId);
+  if (!c || !c.cats || !c.cats[key]) return false;
+  // услуги этой категории переносим в «Другое», чтобы ничего не пропало
+  const moved = svcs(companyId).filter(x => x.cat === key);
+  moved.forEach(x => { x.cat = 'other'; x.color = '#7C8AA5'; });
+  delete c.cats[key];
+  emit();
+  return moved.length;
+}
+
+/* ---------- роли и права ----------
+   Роль — это набор прав. Права проверяются в интерфейсе (can()),
+   поэтому сотрудник физически не видит чужих разделов.
+------------------------------------ */
+export const PERMS = {
+  ownCalendar: 'Свой календарь',
+  ownSchedule: 'Свой график и перерывы',
+  allCalendar: 'Календарь всей команды',
+  createAppt: 'Создавать и переносить записи',
+  clients: 'База клиентов',
+  services: 'Услуги и цены',
+  team: 'Сотрудники и графики',
+  finance: 'Финансы',
+  analytics: 'Аналитика',
+  settings: 'Настройки компании',
+  billing: 'Тариф и оплата',
+};
+
+export const ROLES = {
+  staff: {
+    t: 'Мастер', s: 'Свой день, свои клиенты',
+    perms: ['ownCalendar', 'ownSchedule', 'createAppt'],
+  },
+  manager: {
+    t: 'Администратор', s: 'Весь календарь и клиенты',
+    perms: ['ownCalendar', 'ownSchedule', 'allCalendar', 'createAppt', 'clients', 'services', 'team', 'analytics'],
+  },
+  owner: {
+    t: 'Владелец', s: 'Полный доступ, включая деньги',
+    perms: Object.keys(PERMS),
+  },
+};
+
+export const roleOf = e => (e && ROLES[e.access]) ? e.access : 'staff';
+export const roleName = e => ROLES[roleOf(e)].t;
+
+/** Есть ли у текущего пользователя право? */
+export function can(perm, e = me()) {
+  if (S.session.role === 'admin') return true;
+  if (!e) return false;
+  if (e.isOwner) return true;
+  return ROLES[roleOf(e)].perms.includes(perm);
+}
+
+export function setRole(employeeId, access) {
+  const e = emp(employeeId);
+  if (!e || !ROLES[access]) return;
+  e.access = access;
+  if (access === 'owner') e.isOwner = true;
+  emit();
+}
 
 /* ---------- статистика ---------- */
 export function rangeStats(days, companyId = cid()) {
