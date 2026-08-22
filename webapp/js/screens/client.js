@@ -13,7 +13,7 @@ import { route, go, render, resetStack } from '../router.js';
 import { on } from '../bus.js';
 import { haptic, openLink, tgClose, copy } from '../tg.js';
 import { BOT_USERNAME } from '../config.js';
-import { dateStrip, reviewSheet } from '../flows.js';
+import { dateStrip, reviewSheet, tipOnce } from '../flows.js';
 
 const rr = () => render(false);
 const my = () => client(S.session.clientId) || clients()[0];
@@ -31,6 +31,13 @@ function expLine(e) {
    ========================================================= */
 route('cl.company', {
   tab: 'cl.company',
+  mount() {
+    tipOnce('cl.book', {
+      title: 'Записаться — одна кнопка',
+      text: 'Услуга, мастер, дата и время. Занятые дни в календаре зачёркнуты, а перенести или отменить запись можно прямо в «Моих записях».',
+      ic: 'calendarPlus',
+    });
+  },
   render() {
     const c = co();
     const me = my();

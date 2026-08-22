@@ -6,6 +6,7 @@
   ROLES, PERMS, roleOf, roleName, setRole, cats, catName, addCat, renameCat, removeCat,
   statsBetween, daysBetween, moneyOps, finCats, finCatName, finCatInfo, addFinCat, renameFinCat, removeFinCat,
   recurring, addRecurring, updateRecurring, removeRecurring, REPEAT, plans, planById, planPrice, PERIODS,
+  setupSteps, markSetup, resetTips, tipSeen, markTip, appt,
 } from '../store.js';
 import {
   esc, money, moneyShort, hhmm, dateLabel, relPast, avatar, emptyState, sheet, toast, promptSheet,
@@ -15,8 +16,8 @@ import {
 } from '../ui.js';
 import { icon, catIcon } from '../icons.js';
 import { route, go, render } from '../router.js';
-import { on } from '../bus.js';
-import { newApptFlow, addServiceSheet, blockFlow, openApptSheet, absenceFlow } from '../flows.js';
+import { on, fire } from '../bus.js';
+import { newApptFlow, addServiceSheet, blockFlow, openApptSheet, absenceFlow, tipOnce } from '../flows.js';
 import { haptic, copy } from '../tg.js';
 
 const rr = () => render(false);
@@ -231,6 +232,13 @@ on('sv.del', async ds => {
    ========================================================= */
 route('o.team', {
   tab: 'o.team',
+  mount() {
+    tipOnce('team', {
+      title: 'Роль решает, что видно',
+      text: 'Откройте сотрудника → «Роль»: там списком показано, к чему у него есть доступ. Мастер видит только свой день.',
+      ic: 'users',
+    });
+  },
   fab: () => `<button class="fab" data-a="tm.add">${icon('plus', 26, 2.4)}</button>`,
   render() {
     const list = emps();
@@ -695,6 +703,13 @@ function periodPicker(st, after) {
 const fin = { preset: 30, from: null, to: null, group: null, tab: 'ops' };
 route('o.finance', {
   tab: 'o.more',
+  mount() {
+    tipOnce('fin', {
+      title: 'Аренда и зарплата — регулярные',
+      text: 'Заведите их один раз в блоке «Регулярные платежи»: дальше они сами попадут в расчёт любого периода.',
+      ic: 'wallet',
+    });
+  },
   render() {
     const { start, end } = periodRange(fin);
     const s = statsBetween(start, end, cid(), { group: fin.group || 'auto' });
@@ -1014,6 +1029,13 @@ on('rc.ok', ds => {
 const an = { preset: 30, from: null, to: null, group: null };
 route('o.analytics', {
   tab: 'o.more',
+  mount() {
+    tipOnce('an', {
+      title: 'Период выбирается свободно',
+      text: 'Кроме готовых кнопок есть «Свой период» — любой отрезок дат из календаря. Графики группируются по дням, неделям или месяцам.',
+      ic: 'chart',
+    });
+  },
   render() {
     const { start, end } = periodRange(an);
     const s = statsBetween(start, end, cid(), { group: an.group || 'auto' });
@@ -1084,6 +1106,169 @@ route('o.analytics', {
 on('an.p', ds => { an.preset = +ds.v; an.from = an.to = null; rr(); });
 on('an.custom', () => periodPicker(an, rr));
 on('an.g', ds => { an.group = ds.v || null; rr(); });
+
+/* =========================================================
+   Обучение и помощь (§96–§99)
+   Видео в демо нет, поэтому вместо ложной кнопки «Play» —
+   честный разбор раздела текстом и переход прямо в него.
+   ========================================================= */
+const LESSONS = [
+  {
+    k: 'cal', ic: 'calendar', color: '#4C6FFF', t: 'Календарь и записи', min: 2,
+    s: 'День, неделя, месяц и работа со свободными окнами',
+    steps: [
+      'Переключайте День / Неделя / Месяц кнопками сверху — в месяце видно загрузку каждого дня.',
+      'Нажмите на заголовок с датой, чтобы прыгнуть на любое число.',
+      'Тап по свободному окну открывает меню: записать, заблокировать, перерыв или отсутствие.',
+      'В карточке записи есть перенос, отмена, звонок и AI-шпаргалка по клиенту.',
+    ],
+    go: 'o.cal',
+  },
+  {
+    k: 'svc', ic: 'briefcase', color: '#8B5CF6', t: 'Услуги и категории', min: 2,
+    s: 'Цены, длительность и свои категории',
+    steps: [
+      'Кнопка «+» создаёт услугу: название, цена, длительность и кто её выполняет.',
+      'Длительность можно задать свою — например, 75 минут.',
+      'Иконка сетки в шапке открывает категории: свои создаются кнопкой «Новая категория».',
+      'Фотография услуги видна клиенту при выборе.',
+    ],
+    go: 'o.services',
+  },
+  {
+    k: 'team', ic: 'users', color: '#12B76A', t: 'Команда и графики', min: 3,
+    s: 'Роли, права, часы и отсутствия',
+    steps: [
+      'У каждого сотрудника своя роль: Мастер, Администратор или Владелец — список прав виден целиком.',
+      'График задаётся по дням недели, с перерывами.',
+      'Отпуск и больничный отмечаются сразу на диапазон дат.',
+      'График мастера не может выходить за часы салона — лишнее время просто не предлагается клиентам.',
+    ],
+    go: 'o.team',
+  },
+  {
+    k: 'fin', ic: 'wallet', color: '#F79009', t: 'Финансы', min: 3,
+    s: 'Доходы, расходы и регулярные платежи',
+    steps: [
+      'Период выбирается кнопками или календарём — вплоть до своего отрезка дат.',
+      'Выручка по факту и ожидаемая по будущим записям считаются раздельно.',
+      'Аренду и зарплату заведите как регулярный платёж — дальше они учитываются сами.',
+      'Категории расходов можно добавлять свои.',
+    ],
+    go: 'o.finance',
+  },
+  {
+    k: 'ai', ic: 'sparkles', color: '#EC4899', t: 'AI-помощник', min: 2,
+    s: 'Итоги недели, возврат клиентов, тексты',
+    steps: [
+      'Итоги недели считаются по вашим реальным данным, а не по шаблону.',
+      'Помощник находит свободные окна и предлагает, кого на них позвать.',
+      'Заметку о клиенте можно надиктовать голосом — AI сам разложит её по полочкам.',
+    ],
+    go: 'ai.home',
+  },
+  {
+    k: 'client', ic: 'share', color: '#0EA5E9', t: 'Как это видит клиент', min: 1,
+    s: 'Страница записи и напоминания',
+    steps: [
+      'Клиент открывает ссылку в Telegram и выбирает услугу, мастера, дату и время.',
+      'Занятые дни в календаре зачёркнуты — записаться на них нельзя.',
+      'После визита клиент может оценить его; оценки видите только вы.',
+    ],
+    go: null,
+  },
+];
+
+route('o.help', {
+  tab: 'o.more',
+  render() {
+    const steps = setupSteps();
+    const done = steps.filter(s => s.done).length;
+    return `
+    <div class="top"><button class="ico-btn" data-a="back">${icon('back', 19)}</button>
+      <div class="grow"><div class="top-t">Обучение</div><div class="top-sub">Короткие разборы разделов</div></div></div>
+
+    <div class="wrap">
+      <div class="card pad">
+        <div class="row between" style="margin-bottom:8px">
+          <div class="b">Первая настройка</div>
+          <span class="bdg ${done === steps.length ? 'ok' : 'warn'}">${done} из ${steps.length}</span>
+        </div>
+        ${progress(done / steps.length * 100, done === steps.length ? 'var(--ok)' : 'var(--p)')}
+        <div class="stack s" style="margin-top:12px">
+          ${steps.map(st => `<button class="lrow press" style="border-radius:14px;border:1px solid var(--bd);width:100%;${st.done ? 'opacity:.6' : ''}"
+            data-a="hp.step" data-k="${st.k}" data-act="${st.act}">
+            <span style="color:${st.done ? 'var(--ok)' : 'var(--tx-3)'};flex:none">${icon(st.done ? 'checkCircle' : 'plus', 20)}</span>
+            <div class="grow" style="text-align:left"><div class="tl">${esc(st.t)}</div><div class="st">${esc(st.s)}</div></div>
+            ${st.done ? '' : icon('fwd', 17)}
+          </button>`).join('')}
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <div class="sec-h"><div class="sec-t">Разборы разделов</div></div>
+      <div class="wrap stack s">
+        ${LESSONS.map(l => `<button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="hp.lesson" data-k="${l.k}">
+          <div class="ic" style="background:${l.color}1f;color:${l.color}">${icon(l.ic, 19)}</div>
+          <div class="grow" style="text-align:left"><div class="tl">${esc(l.t)}</div><div class="st">${esc(l.s)}</div></div>
+          <span class="tiny dim" style="flex:none">${l.min} мин</span>
+          ${icon('fwd', 17)}
+        </button>`).join('')}
+      </div>
+    </div>
+
+    <div class="wrap sec"><div class="stack s">
+      <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="hp.tips">
+        <div class="ic" style="background:var(--p-soft);color:var(--p)">${icon('info', 18)}</div>
+        <div class="grow" style="text-align:left"><div class="tl">Показать подсказки заново</div>
+          <div class="st">Всплывающие пояснения при первом входе в раздел</div></div>${icon('fwd', 17)}</button>
+      <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="hp.support">
+        <div class="ic" style="background:var(--ok-soft);color:var(--ok)">${icon('msg', 18)}</div>
+        <div class="grow" style="text-align:left"><div class="tl">Написать в поддержку</div>
+          <div class="st">Ответим в Telegram</div></div>${icon('fwd', 17)}</button>
+    </div></div>`;
+  },
+});
+on('hp.step', ds => {
+  const act = ds.act;
+  if (act === 'o.share') { go('o.more'); setTimeout(() => fire('o.share'), 200); return; }
+  if (act === 'tm.add') { go('o.team'); setTimeout(() => fire('tm.add'), 200); return; }
+  fire(act);
+});
+on('hp.lesson', ds => {
+  const l = LESSONS.find(x => x.k === ds.k);
+  const s = sheet({
+    title: l.t,
+    body: `
+      <div class="row" style="gap:12px;align-items:center;margin-bottom:14px">
+        <div class="tint" style="background:${l.color}1f;color:${l.color};width:46px;height:46px">${icon(l.ic, 22)}</div>
+        <div class="grow"><div class="b">${esc(l.s)}</div><div class="tiny dim">${l.min} ${plural(l.min, ['минута', 'минуты', 'минут'])} чтения</div></div>
+      </div>
+      <div class="stack s">
+        ${l.steps.map((t, i) => `<div class="row" style="gap:10px;align-items:flex-start">
+          <div class="tint" style="width:26px;height:26px;flex:none;background:var(--sf-3);color:var(--tx-2);font-size:12px;font-weight:700;border-radius:9px">${i + 1}</div>
+          <div class="sm" style="line-height:1.5;color:var(--tx-2);padding-top:3px">${esc(t)}</div>
+        </div>`).join('')}
+      </div>`,
+    footer: l.go ? `<button class="btn p" data-a="hp.goto" data-r="${l.go}">Открыть раздел</button>` : `<button class="btn gh" data-a="hp.close">Понятно</button>`,
+  });
+  window.__hp = s;
+});
+on('hp.goto', ds => { window.__hp && window.__hp.close(); setTimeout(() => go(ds.r), 240); });
+on('hp.close', () => window.__hp && window.__hp.close());
+on('hp.tips', async () => {
+  const ok = await confirmSheet({
+    title: 'Показать подсказки заново?',
+    text: 'Короткие пояснения снова появятся при входе в разделы — по одному разу в каждом.',
+    ok: 'Показать',
+  });
+  if (!ok) return;
+  resetTips(); toast('Подсказки включены');
+});
+on('hp.support', () => demoNote('Поддержка',
+  'В рабочей версии кнопка открывает чат с поддержкой прямо в Telegram.',
+  'В демо переписки нет — показываем, как это будет выглядеть.'));
 
 /* =========================================================
    Отзывы (§80, §81)
@@ -1289,11 +1474,6 @@ export function broadcastFlow(pre = {}) {
 /* =========================================================
    Подписка
    ========================================================= */
-const PLANS = [
-  { id: 'START', price: 9900, feats: ['1 сотрудник', 'Онлайн-запись', 'База клиентов', 'Напоминания'] },
-  { id: 'PRO', price: 19900, feats: ['До 10 сотрудников', 'AI-помощник', 'Рассылки', 'Аналитика и финансы'] },
-  { id: 'BUSINESS', price: 39900, feats: ['Без ограничений', 'Несколько филиалов', 'API и интеграции', 'Приоритетная поддержка'] },
-];
 route('o.subscription', {
   tab: 'o.more',
   render() {
@@ -1319,13 +1499,13 @@ route('o.subscription', {
     <div class="sec">
       <div class="sec-h"><div class="sec-t">Тарифы</div></div>
       <div class="wrap stack">
-        ${PLANS.map(p => `<div class="card pad" style="${p.id === c.plan ? 'border-color:var(--p);box-shadow:0 0 0 1px var(--p)' : ''}">
+        ${plans().filter(p => p.active !== false || p.id === c.plan).map(p => `<div class="card pad" style="${p.id === c.plan ? 'border-color:var(--p);box-shadow:0 0 0 1px var(--p)' : ''}">
           <div class="row between" style="margin-bottom:8px">
-            <div><div class="b" style="font-size:17px">${p.id}</div>
-              <div class="tiny muted">${money(p.price)} / месяц</div></div>
+            <div><div class="b" style="font-size:17px">${esc(p.name)}</div>
+              <div class="tiny muted">${money(p.price)} / ${(PERIODS[p.period] || PERIODS.month).t}</div></div>
             ${p.id === c.plan ? '<span class="bdg p">текущий</span>' : `<button class="btn xs p" data-a="sub.switch" data-p="${p.id}">Выбрать</button>`}
           </div>
-          <div class="stack" style="gap:5px">${p.feats.map(f => `<div class="row sm" style="gap:7px;color:var(--tx-2)"><span style="color:var(--ok)">${icon('check', 14, 2.6)}</span>${f}</div>`).join('')}</div>
+          <div class="stack" style="gap:5px">${(p.feats || []).map(f => `<div class="row sm" style="gap:7px;color:var(--tx-2)"><span style="color:var(--ok)">${icon('check', 14, 2.6)}</span>${esc(f)}</div>`).join('')}</div>
         </div>`).join('')}
       </div>
     </div>
@@ -1335,17 +1515,19 @@ route('o.subscription', {
 on('sub.pay', async ds => {
   const s = sheet({ title: 'Оплата', body: loadingBlock('Проводим платёж…') });
   await wait(1500);
-  setPlan(cid(), co().plan, 30);
-  s.close(); toast('Подписка продлена на 30 дней');
+  const days = extendPlan(cid());
+  s.close(); toast('Подписка продлена на ' + days + ' ' + plural(days, ['день', 'дня', 'дней']));
 });
 on('sub.switch', async ds => {
-  const p = PLANS.find(x => x.id === ds.p);
-  const ok = await confirmSheet({ title: 'Перейти на ' + p.id + '?', text: money(p.price) + ' в месяц. Спишем сразу после подтверждения.', ok: 'Перейти' });
+  const p = planById(ds.p);
+  if (!p) return;
+  const per = (PERIODS[p.period] || PERIODS.month).t;
+  const ok = await confirmSheet({ title: 'Перейти на ' + p.name + '?', text: money(p.price) + ' за ' + per + '. Спишем сразу после подтверждения.', ok: 'Перейти' });
   if (!ok) return;
   const s = sheet({ title: 'Оплата', body: loadingBlock('Проводим платёж…') });
   await wait(1400);
-  setPlan(cid(), p.id, 30);
-  s.close(); toast('Тариф изменён на ' + p.id);
+  extendPlan(cid(), p.id);
+  s.close(); toast('Тариф изменён на ' + p.name);
 });
 
 /* =========================================================
@@ -1393,7 +1575,7 @@ route('o.settings', {
     </div></div>
 
     <div class="wrap sec"><div class="stack s">
-      ${row('shield', 'Демо-режим', 'Роли, компании, машина времени', 'dev.open')}
+      ${row('shield', 'Демо-режим', 'Роли, компании, тестовая дата', 'dev.open')}
       ${row('refresh', 'Сбросить демо-данные', 'Вернуть исходное состояние', 'set.reset')}
     </div></div>
 
@@ -1467,6 +1649,7 @@ on('ph.cover', async () => {
 on('ph.coverDel', () => { co().cover = null; emit(); window.__ph.draw(); toast('Фото удалено', 'dan'); });
 
 on('set.hours', () => {
+  markSetup('hours');
   const s = sheet({ title: 'Часы работы', body: '' });
   const draw = () => {
     const c = co();

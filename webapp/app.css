@@ -419,6 +419,23 @@ textarea.inp{height:auto;min-height:92px;padding:12px 14px;resize:none;line-heig
 @keyframes tin{from{opacity:0;transform:translateY(-18px) scale(.9)}to{opacity:1;transform:none}}
 @keyframes tout{to{opacity:0;transform:translateY(-14px) scale(.94)}}
 
+/* ---------- контекстная подсказка ---------- */
+/* лежит в #toasts, но крепится к низу: рядом с тем, что объясняет,
+   и выше таббара, чтобы не перекрывать навигацию */
+.tip{
+  position:fixed;left:12px;right:12px;bottom:calc(var(--safe-b) + 74px);
+  display:flex;align-items:flex-start;gap:11px;padding:13px 14px;border-radius:var(--r-m);
+  background:var(--sf);border:1px solid var(--bd);box-shadow:var(--sh-3);
+  pointer-events:auto;opacity:0;transform:translateY(14px);transition:opacity .26s var(--e),transform .26s var(--e)
+}
+body[data-tab="0"] .tip{bottom:calc(var(--safe-b) + 16px)}
+.tip.in{opacity:1;transform:none}
+.tip.out{opacity:0;transform:translateY(10px)}
+.tip-ic{width:36px;height:36px;border-radius:12px;flex:none;display:grid;place-items:center;background:var(--p-soft);color:var(--p)}
+.tip-t{font-size:14px;font-weight:700;letter-spacing:-.01em}
+.tip-s{font-size:12.5px;color:var(--tx-2);line-height:1.45;margin-top:2px}
+.tip-x{color:var(--tx-3);flex:none;padding:2px}
+
 /* ---------- skeleton ---------- */
 .sk{background:var(--sk);background-size:400% 100%;animation:shim 1.3s infinite linear;border-radius:10px}
 @keyframes shim{0%{background-position:100% 0}100%{background-position:-100% 0}}
@@ -484,6 +501,11 @@ textarea.inp{height:auto;min-height:92px;padding:12px 14px;resize:none;line-heig
 .ob-dots i.on{background:var(--p);width:30px}
 .ob h1{font-size:26px;font-weight:780;letter-spacing:-.035em;margin:0 0 6px}
 .ob p.sub{color:var(--tx-2);font-size:14.5px;margin:0 0 22px}
+/* приветственный экран: картинка сверху, заголовок крупнее обычного */
+.ob-hello{justify-content:flex-start;text-align:center}
+.ob-art{width:100%;max-width:300px;margin:8px auto 22px;aspect-ratio:260/190}
+.ob h1.ob-big{font-size:29px;line-height:1.18;margin-bottom:10px}
+.ob p.sub.ob-lead{font-size:15px;line-height:1.5;margin-bottom:0;max-width:340px;margin-left:auto;margin-right:auto}
 
 /* ---------- dev dock ---------- */
 .dev-fab{position:fixed;left:10px;bottom:calc(var(--tab-h) + var(--safe-b) + 8px);z-index:33;width:32px;height:32px;border-radius:11px;display:grid;place-items:center;background:var(--tx);color:var(--bg);opacity:.22;box-shadow:var(--sh-1);transition:.2s}

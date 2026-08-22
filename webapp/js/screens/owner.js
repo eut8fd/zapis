@@ -1,17 +1,18 @@
 import {
   S, co, cid, emp, emps, staff, svc, svcs, client, clients, appt, appts, apptTitle, apptColor, apptEnd,
-  now, today, todayStats, rangeStats, nextAppt, dayAppts, blocks, me, toHM, toMin, workDay, companyHours,
+  now, today, todayStats, rangeStats, nextAppt, dayAppts, blocks, me, toHM, toMin, workDay, workWindow, companyHours,
   lostClients, clientStats, emit, freeGaps, removeBlock, ABSENCE, absenceOn,
+  markSetup, setupSteps, tipSeen, markTip,
 } from '../store.js';
 import {
   esc, money, moneyShort, hhmm, dateLabel, dateFull, nMin, nAppt, avatar, greet, WD, WD_FULL, MONTHS,
   dayKey, startOfDay, addDays, emptyState, sheet, toast, segmented, sparkline, num, plural,
-  confirmSheet, monthGrid, MONTH_NAMES, MON_SHORT,
+  confirmSheet, monthGrid, MONTH_NAMES, MON_SHORT, tipCard,
 } from '../ui.js';
 import { icon } from '../icons.js';
 import { route, go, render } from '../router.js';
 import { on } from '../bus.js';
-import { openApptSheet, newApptFlow, blockFlow, quickAdd, dateStrip, absenceFlow } from '../flows.js';
+import { openApptSheet, newApptFlow, blockFlow, quickAdd, dateStrip, absenceFlow, tipOnce } from '../flows.js';
 import { haptic, copy, openLink } from '../tg.js';
 import { BOT_USERNAME } from '../config.js';
 
@@ -80,6 +81,8 @@ route('o.home', {
       </div>
     </div>
 
+    ${setupCard()}
+
     <div class="sec wrap">
       ${nx ? nextCard(nx) : `
         <div class="card pad center" style="padding:26px 20px">
@@ -138,6 +141,27 @@ route('o.home', {
   },
 });
 
+/* §97 — пошаговая настройка после регистрации.
+   Пропадает сама, когда всё сделано: постоянный чеклист на главной
+   у работающего салона только мешает. */
+function setupCard() {
+  const steps = setupSteps();
+  const left = steps.filter(s => !s.done);
+  if (!left.length) return '';
+  const done = steps.length - left.length;
+  return `<div class="sec wrap">
+    <button class="card press" style="width:100%;padding:15px;text-align:left" data-a="nav" data-r="o.help">
+      <div class="row between" style="margin-bottom:8px">
+        <div class="row" style="gap:9px"><span style="color:var(--p)">${icon('zap', 18)}</span>
+          <b>Настройка бизнеса</b></div>
+        <span class="bdg p">${done} из ${steps.length}</span>
+      </div>
+      <div class="prog"><i style="width:${done / steps.length * 100}%;background:var(--p)"></i></div>
+      <div class="sm muted" style="margin-top:8px">Дальше: ${esc(left[0].t.toLowerCase())} — ${esc(left[0].s.toLowerCase())}</div>
+    </button>
+  </div>`;
+}
+
 function nextCard(a) {
   const c = client(a.clientId), e = emp(a.employeeId);
   const st = new Date(a.start);
@@ -181,8 +205,9 @@ on('o.share', () => {
       <div class="tiny dim center" style="margin-top:14px">Поставьте ссылку в шапку профиля или сторис — клиент попадёт сразу на вашу страницу записи.</div>`,
   });
 });
-on('o.copyLink', async () => { await copy(bookingLink()); toast('Ссылка скопирована'); });
+on('o.copyLink', async () => { await copy(bookingLink()); markSetup('share'); toast('Ссылка скопирована'); });
 on('o.sendLink', () => {
+  markSetup('share');
   openLink('https://t.me/share/url?url=' + encodeURIComponent(bookingLink()) +
     '&text=' + encodeURIComponent('Записывайтесь онлайн — свободное время видно сразу'));
 });
@@ -204,6 +229,13 @@ route('o.cal', {
   tab: 'o.cal',
   fab: () => `<button class="fab" data-a="cal.add">${icon('plus', 26, 2.4)}</button>`,
   render() { return calendarScreen({ scope: 'company' }); },
+  mount() {
+    tipOnce('cal', {
+      title: 'Тап по свободному окну',
+      text: 'Откроется меню: записать клиента, занять время, поставить перерыв или отметить отсутствие. Заголовок с датой открывает календарь.',
+      ic: 'calendar',
+    });
+  },
 });
 
 export function calendarScreen({ scope = 'company', fixedEmp = null } = {}) {

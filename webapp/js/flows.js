@@ -4,18 +4,32 @@ import {
   S, co, cid, emp, emps, staff, svc, svcs, client, clients, appt, appts, apptTitle, apptColor, apptEnd,
   now, today, slotsFor, slotFree, toMin, toHM, createAppointment, cancelAppointment, completeAppointment,
   moveAppointment, createClient, createService, updateService, addBlock, addAbsence, ABSENCE, clientStats, updateClient,
-  nextFreeFor, workDay, workWindow, cats, addCat, addReview, reviewFor,
+  nextFreeFor, workDay, workWindow, cats, addCat, addReview, reviewFor, tipSeen, markTip,
 } from './store.js';
 import {
   sheet, toast, confirmSheet, esc, money, hhmm, dateLabel, dateFull, nMin, avatar, WD, dayKey,
   startOfDay, addDays, emptyState, promptSheet, wait, loadingBlock, relPast, plural, monthGrid,
-  pickImage, photoField, IMG_MAX,
+  pickImage, photoField, IMG_MAX, tipCard,
 } from './ui.js';
 import { icon, catIcon } from './icons.js';
 import { on } from './bus.js';
 import { go } from './router.js';
 import { haptic, openLink, copy } from './tg.js';
 import { parseNote, demoVoice } from './ai-engine.js';
+
+/* =========================================================
+   Контекстная подсказка при первом входе в раздел (§99)
+   Показывается ровно один раз; включить заново можно
+   в разделе «Обучение».
+   ========================================================= */
+export function tipOnce(key, { title, text, ic = 'info', delay = 700 } = {}) {
+  if (tipSeen(key)) return;
+  setTimeout(() => {
+    // экран мог смениться, пока ждали — подсказка не должна догонять
+    if (tipSeen(key)) return;
+    tipCard({ title, text, ic, onClose: () => markTip(key) });
+  }, delay);
+}
 
 /* =========================================================
    Карточка записи

@@ -230,6 +230,35 @@ export function confirmSheet({ title, text, ok = 'Подтвердить', cance
   });
 }
 
+/* ---------------- Контекстная подсказка (§99) ----------------
+   Всплывает снизу один раз на экран и не перекрывает работу:
+   модальная шторка при каждом входе раздражала бы сильнее,
+   чем помогала. Отметку о показе ставит вызывающая сторона.
+--------------------------------------------------------------- */
+export function tipCard({ title, text, ic = 'info', onClose }) {
+  const host = $('#toasts');
+  const el = document.createElement('div');
+  el.className = 'tip';
+  el.innerHTML = `
+    <div class="tip-ic">${icon(ic, 19)}</div>
+    <div class="grow">
+      <div class="tip-t">${esc(title)}</div>
+      <div class="tip-s">${esc(text)}</div>
+    </div>
+    <button class="tip-x" aria-label="Понятно">${icon('x', 17)}</button>`;
+  host.appendChild(el);
+  const close = () => {
+    if (el._gone) return; el._gone = true;
+    el.classList.add('out');
+    setTimeout(() => el.remove(), 260);
+    if (onClose) onClose();
+  };
+  el.querySelector('.tip-x').onclick = close;
+  requestAnimationFrame(() => el.classList.add('in'));
+  haptic('light');
+  return { close, el };
+}
+
 /** Честная заглушка: функция есть в продукте, но в демо не работает по-настоящему. */
 export function demoNote(title, text, what = '') {
   const s = sheet({

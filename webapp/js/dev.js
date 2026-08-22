@@ -1,4 +1,4 @@
-// Скрытая DEV-панель: роли, компании, машина времени, тестовые уведомления.
+// Скрытая DEV-панель: роли, компании, тестовая дата, тестовые уведомления.
 import { S, emit, sub, now, allCompanies, emps, clients, staff, autoComplete, reset, nextAppt, co, client, apptTitle } from './store.js';
 import { sheet, toast, esc, confirmSheet, hhmm, dateLabel, money, avatar, plural } from './ui.js';
 import { icon } from './icons.js';
@@ -60,7 +60,7 @@ function body() {
     </button>`).join('')}
   </div>
 
-  <div class="tiny muted b" style="margin-bottom:8px">МАШИНА ВРЕМЕНИ</div>
+  <div class="tiny muted b" style="margin-bottom:8px">ТЕСТОВАЯ ДАТА</div>
   <div class="card flat" style="padding:12px 14px;margin-bottom:10px">
     <div class="row between"><span class="sm muted">Сейчас в демо</span>
       <b>${t.getDate()} ${['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'][t.getMonth()]}, ${hhmm(t)}</b></div>
@@ -148,7 +148,7 @@ on('dev.time', ds => {
   if (ms === 0) S.shift = 0; else S.shift += ms;
   autoComplete();
   emit(); redraw(); mountFab();
-  toast(ms === 0 ? 'Время сброшено' : 'Время сдвинуто');
+  toast(ms === 0 ? 'Тестовая дата сброшена' : 'Тестовая дата сдвинута');
 });
 on('dev.reminder', () => {
   const a = nextAppt();

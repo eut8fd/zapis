@@ -723,6 +723,50 @@ export function setRole(employeeId, access) {
   emit();
 }
 
+/* ---------- обучение и подсказки (§97, §99) ----------
+   Подсказка показывается один раз: отметки живут в S.seenTips
+   и переживают перезагрузку. Сбросить их можно в разделе «Обучение».
+------------------------------------------------------ */
+export const tipSeen = k => !!(S.seenTips || {})[k];
+export function markTip(k) { S.seenTips = S.seenTips || {}; S.seenTips[k] = true; emit(); }
+export function resetTips() { S.seenTips = {}; emit(); }
+
+/** Шаг считается пройденным либо по данным, либо по отметке владельца. */
+export function setupSteps(companyId = cid()) {
+  const c = co(companyId) || {};
+  const mark = c.setup || {};
+  const list = staff(companyId);
+  return [
+    {
+      k: 'svc', t: 'Добавить услуги', s: 'Название, цена и длительность',
+      done: svcs(companyId).length > 0, act: 'qa.svc', ic: 'briefcase',
+    },
+    {
+      k: 'team', t: 'Собрать команду', s: 'Мастера, их графики и услуги',
+      done: list.length > 0, act: 'tm.add', ic: 'users',
+    },
+    {
+      k: 'hours', t: 'Указать часы работы', s: 'Своё время на каждый день недели',
+      done: !!mark.hours, act: 'set.hours', ic: 'clock',
+    },
+    {
+      k: 'photo', t: 'Загрузить фото и логотип', s: 'Как выглядит страница записи',
+      done: !!(c.logo || c.cover), act: 'set.photos', ic: 'image',
+    },
+    {
+      k: 'share', t: 'Поделиться ссылкой', s: 'Отправьте её клиентам в Telegram',
+      done: !!mark.share, act: 'o.share', ic: 'share',
+    },
+  ];
+}
+export function markSetup(key, companyId = cid()) {
+  const c = co(companyId); if (!c) return;
+  c.setup = c.setup || {};
+  c.setup[key] = true;
+  emit();
+}
+export const setupDone = (companyId = cid()) => setupSteps(companyId).filter(s => s.done).length;
+
 /* ---------- статистика ----------
    Считается по произвольному отрезку дат: 7/30/90 дней, полгода, год
    и «свой период» из календаря — всё это одна функция statsBetween.

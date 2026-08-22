@@ -32,7 +32,7 @@ const CATS = [
 ];
 
 const ob = {
-  step: 1, name: '', cat: 0,
+  step: 0, name: '', cat: 0,
   days: { 1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 0: false },
   from: '09:00', to: '20:00',
   svc: { name: '', price: '', dur: 60 },
@@ -42,9 +42,9 @@ const ob = {
 route('onb', {
   noTab: true,
   render() {
-    return `<div class="ob">
-      ${ob.step <= 4 ? `<div class="ob-dots">${[1, 2, 3, 4].map(i => `<i class="${i <= ob.step ? 'on' : ''}"></i>`).join('')}</div>` : ''}
-      ${[null, s1, s2, s3, s4, s5][ob.step]()}
+    return `<div class="ob ${ob.step === 0 ? 'ob-hello' : ''}">
+      ${ob.step >= 1 && ob.step <= 4 ? `<div class="ob-dots">${[1, 2, 3, 4].map(i => `<i class="${i <= ob.step ? 'on' : ''}"></i>`).join('')}</div>` : ''}
+      ${[s0, s1, s2, s3, s4, s5][ob.step]()}
     </div>`;
   },
   mount() {
@@ -53,9 +53,45 @@ route('onb', {
     if (ob._focused === ob.step) return;
     ob._focused = ob.step;
     const i = document.querySelector('.ob input');
-    if (i && ob.step <= 4) setTimeout(() => i.focus(), 300);
+    if (i && ob.step >= 1 && ob.step <= 4) setTimeout(() => i.focus(), 300);
   },
 });
+
+/* §19, §20 — приветствие: картинка, крупный заголовок, одна кнопка.
+   Раньше человек попадал сразу в форму, и текст терялся на фоне. */
+function s0() {
+  return `
+  <div class="ob-art">${welcomeArt()}</div>
+  <h1 class="ob-big">Онлайн-запись,<br>которая живёт в Telegram</h1>
+  <p class="sub ob-lead">Клиенты записываются сами — за полминуты и без звонков.
+  Вы видите день целиком: кто, когда и на сколько.</p>
+  <div class="grow"></div>
+  <button class="btn p" data-a="ob.begin" style="height:56px;font-size:16px">Создать свой бизнес</button>
+  <button class="btn" style="background:transparent;margin-top:8px;color:var(--tx-2)" data-a="ob.skip">Сначала посмотреть демо</button>`;
+}
+
+/** Иллюстрация приветствия. Рисуем сами: внешних картинок в проекте нет. */
+function welcomeArt() {
+  return `<svg viewBox="0 0 260 190" fill="none" xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">
+    <circle cx="130" cy="92" r="86" fill="var(--p)" opacity=".08"/>
+    <circle cx="130" cy="92" r="60" fill="var(--p)" opacity=".07"/>
+    <rect x="66" y="26" width="128" height="138" rx="20" fill="var(--sf)" stroke="var(--bd)" stroke-width="2"/>
+    <rect x="82" y="44" width="52" height="8" rx="4" fill="var(--tx-3)" opacity=".55"/>
+    <rect x="82" y="62" width="96" height="26" rx="9" fill="var(--p)" opacity=".14"/>
+    <rect x="90" y="71" width="34" height="8" rx="4" fill="var(--p)"/>
+    <rect x="134" y="71" width="20" height="8" rx="4" fill="var(--p)" opacity=".5"/>
+    <rect x="82" y="96" width="96" height="26" rx="9" fill="var(--ok)" opacity=".14"/>
+    <rect x="90" y="105" width="42" height="8" rx="4" fill="var(--ok)"/>
+    <rect x="82" y="130" width="96" height="26" rx="9" fill="var(--sf-3)"/>
+    <rect x="90" y="139" width="28" height="8" rx="4" fill="var(--tx-3)" opacity=".7"/>
+    <g>
+      <circle cx="196" cy="52" r="26" fill="var(--p)"/>
+      <path d="M185 52.5l7.5 7.5L208 45" stroke="#fff" stroke-width="4.4" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <circle cx="58" cy="122" r="15" fill="var(--ai)" opacity=".9"/>
+    <path d="M52.5 122h11M58 116.5v11" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+  </svg>`;
+}
 
 function s1() {
   return `
@@ -67,7 +103,7 @@ function s1() {
   </div>
   <div class="grow"></div>
   <button class="btn p" data-a="ob.s2" style="margin-top:20px">Продолжить</button>
-  <button class="btn" style="background:transparent;margin-top:6px" data-a="ob.skip">Посмотреть готовое демо</button>`;
+  <button class="btn" style="background:transparent;margin-top:6px" data-a="ob.back">Назад</button>`;
 }
 
 function s2() {
@@ -144,6 +180,7 @@ on('ob.time', async ds => {
   timePick(ob[ds.k], v => { ob[ds.k] = v; rr(); });
 });
 on('ob.dur', ds => { ob.svc.dur = +ds.m; rr(); });
+on('ob.begin', () => { ob.step = 1; rr(); });
 on('ob.back', () => { ob.step--; rr(); });
 on('ob.skip', () => { S.onboarded = true; emit(); resetStack('o.home'); });
 
@@ -178,12 +215,14 @@ async function build() {
     addr: 'Укажите адрес в настройках', phone: '+7 700 000 00 00', rating: 5.0, reviewsCount: 0,
     about: '', plan: 'PRO', planUntil: new Date(now().getTime() + 14 * 86400000).toISOString(),
     slug: id, tgLink: 'zapis_bot', initials, createdAt: now().toISOString(), hours, currency: '₸',
+    logo: null, cover: null, finCats: { income: {}, expense: {} }, setup: { hours: true },
   });
   const ownerId = id + '_owner';
   S.data.employees.push({
     id: ownerId, companyId: id, name: 'Вы', role: 'Владелец', isOwner: true, active: true,
     initials: 'В', color: '#4C6FFF', phone: '', schedule: JSON.parse(JSON.stringify(hours)),
     serviceIds: [], takesAppointments: true, access: 'owner', rating: '5.0',
+    photo: null, since: null, showExp: true,
   });
   S.session = { role: 'owner', companyId: id, employeeId: ownerId, clientId: null };
   ob.companyId = id;
