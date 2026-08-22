@@ -105,7 +105,9 @@ route('cl.company', {
       <div class="hscroll" style="gap:12px">
         ${team.map(e => {
       const nf = nextFreeFor(e.id, 60);
-      return `<button class="card press" style="flex:none;width:126px;padding:14px 10px;text-align:center" data-a="cl.startEmp" data-id="${e.id}">
+      // класс center, а не только text-align: аватар — блок фиксированной
+      // ширины, его центрирует правило .center > .av
+      return `<button class="card press center" style="flex:none;width:126px;padding:14px 10px" data-a="cl.startEmp" data-id="${e.id}">
             ${avatar(e, 'l', '')}
             <div class="b sm" style="margin-top:8px">${esc(e.name.split(' ')[0])}</div>
             <div class="tiny muted nowrap">${esc(e.role)}</div>
@@ -183,7 +185,9 @@ on('cl.map', () => {
 on('cl.mapOpen', ds => openLink(ds.u));
 on('cl.start', () => { book.reset(); go('cl.book'); });
 on('cl.startSvc', ds => { book.reset(); book.st.svcId = ds.id; book.st.step = 2; go('cl.book'); });
-on('cl.startEmp', ds => { book.reset(); book.st.empId = ds.id; go('cl.book'); });
+// Клиент нажал на мастера — значит выбрал его. Показываем его услуги
+// и пропускаем шаг «выберите мастера»: спрашивать второй раз нелогично.
+on('cl.startEmp', ds => { book.reset(); book.st.empId = ds.id; book.st.fixedEmp = true; go('cl.book'); });
 on('cl.appt', ds => openMyAppt(ds.id));
 
 /* =========================================================
@@ -191,7 +195,7 @@ on('cl.appt', ds => openMyAppt(ds.id));
    ========================================================= */
 const book = {
   st: {},
-  reset() { book.st = { step: 1, svcId: null, empId: null, date: null, month: null, min: null, created: null }; },
+  reset() { book.st = { step: 1, svcId: null, empId: null, fixedEmp: false, date: null, month: null, min: null, created: null }; },
 };
 book.reset();
 
@@ -200,24 +204,54 @@ route('cl.book', {
   render() {
     const s = book.st;
     const c = co();
-    const steps = 4;
+    const e = s.fixedEmp && s.empId ? emp(s.empId) : null;
+    // мастер уже выбран — шагов три, а не четыре
+    const total = s.fixedEmp ? 3 : 4;
+    const cur = s.fixedEmp ? (s.step === 1 ? 1 : s.step - 1) : s.step;
+    const title = s.step === 1 && e
+      ? 'Услуги мастера'
+      : ['', 'Выберите услугу', 'Выберите мастера', 'Выберите дату', 'Выберите время'][s.step];
     return `
     <div class="top">
       <button class="ico-btn" data-a="bk.back">${icon('back', 19)}</button>
-      <div class="grow"><div class="top-t" style="font-size:17px">${['', 'Выберите услугу', 'Выберите мастера', 'Выберите дату', 'Выберите время'][s.step]}</div>
-        <div class="top-sub">${esc(c.name)}</div></div>
+      <div class="grow"><div class="top-t" style="font-size:17px">${title}</div>
+        <div class="top-sub">${esc(e ? e.name : c.name)}</div></div>
     </div>
-    <div class="ob-dots" style="margin:2px 0 16px">${[1, 2, 3, 4].map(i => `<i class="${i <= s.step ? 'on' : ''}"></i>`).join('')}</div>
+    <div class="ob-dots" style="margin:2px 0 16px">${Array.from({ length: total }, (_, i) => `<i class="${i + 1 <= cur ? 'on' : ''}"></i>`).join('')}</div>
     ${s.step === 1 ? step1() : s.step === 2 ? step2() : s.step === 3 ? step3() : step4()}`;
   },
 });
 
 function step1() {
-  const list = svcs();
+  const st = book.st;
+  const e = st.fixedEmp && st.empId ? emp(st.empId) : null;
+  // мастер выбран — показываем только то, что делает он
+  const list = e ? svcs().filter(x => x.employeeIds.includes(e.id)) : svcs();
   const byCat = {};
   list.forEach(s => (byCat[s.cat] = byCat[s.cat] || []).push(s));
   const CATN = { nails: 'Ногти', hair: 'Волосы', brow: 'Брови и ресницы', bar: 'Услуги', spa: 'Спа' };
-  return Object.keys(byCat).map(cat => `
+
+  const head = e ? `
+    <div class="wrap" style="margin-bottom:4px">
+      <div class="card pad row" style="gap:12px">
+        ${avatar(e, 'm')}
+        <div class="grow">
+          <div class="b">${esc(e.name)}</div>
+          <div class="tiny muted">${esc(e.role)}${e.since && e.showExp !== false ? ' · опыт ' + Math.max(0, now().getFullYear() - e.since) + ' ' + plural(Math.max(0, now().getFullYear() - e.since), ['год', 'года', 'лет']) : ''}</div>
+        </div>
+        <button class="btn xs gh" style="width:auto" data-a="bk.anyEmp">Другой мастер</button>
+      </div>
+    </div>` : '';
+
+  if (!list.length) {
+    return head + `<div class="wrap sec">${emptyState({
+      ic: 'briefcase', title: 'У мастера пока нет услуг',
+      text: 'Выберите другого специалиста — покажем всё, что он делает.',
+      action: 'Все мастера', act: 'bk.anyEmp',
+    })}</div>`;
+  }
+
+  return head + Object.keys(byCat).map(cat => `
     <div class="sec" style="margin-top:6px">
       <div class="sec-h"><div class="sec-t" style="font-size:13px;color:var(--tx-3);text-transform:uppercase;letter-spacing:.05em">${CATN[cat] || 'Услуги'}</div></div>
       <div class="wrap stack s">
@@ -326,9 +360,21 @@ function summaryRow() {
   </div>`;
 }
 
-on('bk.back', () => { const s = book.st; if (s.step > 1) { s.step--; rr(); } else go('cl.company', {}, { root: true }); });
-on('bk.svc', ds => { book.st.svcId = ds.id; book.st.step = 2; rr(); });
+on('bk.back', () => {
+  const s = book.st;
+  if (s.step <= 1) { go('cl.company', {}, { root: true }); return; }
+  // шаг выбора мастера пропущен — назад со «дня» ведём сразу к услугам
+  s.step = s.fixedEmp && s.step === 3 ? 1 : s.step - 1;
+  rr();
+});
+on('bk.svc', ds => {
+  book.st.svcId = ds.id;
+  book.st.step = book.st.fixedEmp ? 3 : 2;   // мастер уже известен — сразу дата
+  rr();
+});
 on('bk.emp', ds => { book.st.empId = ds.id || null; book.st.step = 3; rr(); });
+/* «Другой мастер» на списке услуг: снимаем привязку и показываем всё */
+on('bk.anyEmp', () => { book.st.empId = null; book.st.fixedEmp = false; book.st.step = 1; rr(); });
 on('bk.date', ds => {
   book.st.date = startOfDay(new Date(+ds.d));
   book.st.month = startOfDay(book.st.date);
