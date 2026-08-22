@@ -1548,12 +1548,12 @@ route('o.settings', {
           ${avatar({ initials: c.initials, color: c.color, photo: c.logo }, 'l', 'av-sq')}
           <div class="grow"><div class="b" style="font-size:16px">${esc(c.name)}</div>
             <div class="sm muted">${esc(c.cat)} · ${esc(c.city)}</div></div>
-          <button class="ico-btn" data-a="set.company">${icon('pencil', 17)}</button>
         </div>
       </div>
     </div>
 
     <div class="wrap sec"><div class="stack s">
+      ${row('building', 'О компании', 'Название, адрес, телефон и цвет', 'set.company')}
       ${row('image', 'Фото и логотип', c.logo || c.cover ? 'Показываются на странице записи' : 'Пока не загружены', 'set.photos')}
     </div></div>
 

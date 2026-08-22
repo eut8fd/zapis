@@ -211,8 +211,36 @@ export function toast(msg, type = '') {
 
 /* ---------------- Bottom sheet ---------------- */
 let sheetStack = [];
+
+/* Пока открыта шторка, страница под ней листаться не должна: человек
+   тянет содержимое шторки, а уезжает фон. Одного overflow:hidden мало —
+   мобильные браузеры его игнорируют, поэтому фиксируем body и потом
+   возвращаем прокрутку ровно туда, где она была. */
+let lockedY = 0;
+function lockScroll() {
+  if (sheetStack.length) return;              // уже заперто предыдущей шторкой
+  lockedY = window.scrollY || document.documentElement.scrollTop || 0;
+  const b = document.body;
+  b.style.position = 'fixed';
+  b.style.top = -lockedY + 'px';
+  b.style.left = '0';
+  b.style.right = '0';
+  b.style.width = '100%';
+  b.style.overflow = 'hidden';
+  b.dataset.sheetLock = '1';
+}
+function unlockScroll() {
+  if (sheetStack.length || !document.body.dataset.sheetLock) return;
+  const b = document.body;
+  b.style.position = ''; b.style.top = ''; b.style.left = '';
+  b.style.right = ''; b.style.width = ''; b.style.overflow = '';
+  delete b.dataset.sheetLock;
+  window.scrollTo(0, lockedY);
+}
+
 export function sheet(opts) {
   const host = $('#sheets');
+  lockScroll();
   const mask = document.createElement('div'); mask.className = 'bd-mask';
   const el = document.createElement('div'); el.className = 'sheet';
   el.innerHTML = `<div class="grab"></div><div class="sheet-h"></div><div class="sheet-b"></div><div class="sheet-f" hidden></div>`;
@@ -237,6 +265,7 @@ export function sheet(opts) {
       if (api._closed) return; api._closed = true;
       el.classList.remove('in'); mask.classList.remove('in');
       sheetStack = sheetStack.filter(s => s !== api);
+      unlockScroll();
       setTimeout(() => { el.remove(); mask.remove(); }, 300);
       if (api._o && api._o.onClose) api._o.onClose();
     }
