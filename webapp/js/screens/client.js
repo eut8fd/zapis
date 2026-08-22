@@ -45,24 +45,32 @@ route('cl.company', {
     const team = staff();
     const st = me ? clientStats(me.id) : { next: null, visits: 0 };
 
+    const col = c.color === '#0D1220' ? '#2B3340' : c.color;
+    const today = c.hours[now().getDay()] || {};
+    // Фото салона — фон самой шапки, а не отдельная полоса сверху:
+    // два разных блока подряд читались как склейка. Градиент поверх фото
+    // нужен, чтобы белый текст оставался читаемым на любом снимке.
+    const heroBg = c.cover
+      ? `background-image:linear-gradient(170deg,rgba(12,16,32,.30) 0%,rgba(12,16,32,.78) 100%),url('${c.cover}')`
+      : `background-image:linear-gradient(160deg,${col} 0%,#6D5BF6 100%)`;
+
     return `
-    ${c.cover ? `<div class="cover" style="background-image:url('${c.cover}');border-radius:0 0 6px 6px"></div>` : ''}
-    <div class="pub-hero" style="background:linear-gradient(160deg,${c.color === '#0D1220' ? '#2B3340' : c.color} 0%,#6D5BF6 100%)${c.cover ? ';margin-top:-14px;border-radius:22px 22px 28px 28px;padding-top:18px' : ''}">
+    <div class="pub-hero ${c.cover ? 'has-cover' : ''}" style="${heroBg}">
       <div class="row between">
-        ${c.logo ? `<div class="av l av-sq av-photo" style="background-image:url('${c.logo}')"></div>`
-        : `<div class="av l av-sq" style="background:rgba(255,255,255,.22);backdrop-filter:blur(6px)">${esc(c.initials)}</div>`}
-        <button class="ico-btn flat" style="color:#fff" data-a="cl.share">${icon('share', 19)}</button>
+        ${c.logo ? `<div class="av l av-sq av-photo pub-logo" style="background-image:url('${c.logo}')"></div>`
+        : `<div class="av l av-sq pub-logo" style="background:rgba(255,255,255,.2)">${esc(c.initials)}</div>`}
+        <button class="ico-btn pub-share" data-a="cl.share">${icon('share', 19)}</button>
       </div>
       <div class="nm">${esc(c.name)}</div>
-      <div class="mt">
-        <span class="row" style="gap:4px">${icon('pin', 13, 2.4)} ${esc(c.city)}</span>
-        <span class="row" style="gap:4px">${icon('clock', 13, 2.4)} ${(c.hours[now().getDay()] || {}).on ? c.hours[now().getDay()].from + ' — ' + c.hours[now().getDay()].to : 'сегодня выходной'}</span>
+      <div class="pub-meta">
+        <span class="pill">${icon('pin', 13, 2.4)}${esc(c.city)}</span>
+        <span class="pill">${icon('clock', 13, 2.4)}${today.on ? today.from + ' — ' + today.to : 'сегодня выходной'}</span>
       </div>
-      <div class="mt" style="opacity:.8;font-size:12.5px">${esc(c.addr)}</div>
+      <div class="pub-addr">${esc(c.addr)}</div>
     </div>
 
-    <div class="wrap" style="margin-top:-18px;position:relative;z-index:2">
-      <button class="btn p" style="height:56px;font-size:16px;box-shadow:0 14px 30px -10px var(--p-glow)" data-a="cl.start">
+    <div class="wrap pub-cta">
+      <button class="btn hero-cta" style="color:${col}" data-a="cl.start">
         ${icon('calendarPlus', 20)}Записаться
       </button>
     </div>
