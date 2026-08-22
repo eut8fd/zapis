@@ -23,7 +23,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import booking as bk  # noqa: E402
@@ -397,6 +397,7 @@ def biz_kb(cid, uid=None):
         [open_btn('Календарь', 'owner_cal'), open_btn('Клиенты', 'owner_clients')],
         [cb('Ссылка для клиентов', 'link')],
         [cb('Подписка', 'plan'), cb('Поддержка', 'support')],
+        [cb('🔔 Очередь напоминаний', 'reminders')],
         [cb('Сменить компанию', 'switch')],
     ]
     if uid is not None and is_admin(uid):
@@ -539,6 +540,115 @@ def edit(chat_id, message_id, text, kb=None):
     if kb:
         p['reply_markup'] = kb
     return api('editMessageText', **p)
+
+
+# ------------------------------------------------------ напоминания (§16)
+# Отдельного планировщика нет и не нужно: цикл getUpdates просыпается
+# минимум раз в 30 секунд, поэтому очередь проверяем прямо в нём —
+# не чаще раза в минуту, чтобы не дёргать файл на каждой итерации.
+REMIND_EVERY = 60
+_last_remind_check = 0.0
+
+
+def reminder_text(b, kind, left_min):
+    c = COMPANIES.get(b['cid'])
+    if not c:
+        return None
+    try:
+        s = c['services'][b['svc']]
+        st = c['staff'][b['emp']]
+    except Exception:  # noqa: BLE001
+        return None
+    d = date.fromisoformat(b['date'])
+    when = '%s, %s' % (bk.day_label(d, date.today()), bk.hm(b['min']))
+    if kind == '24h':
+        head = '🔔 <b>Напоминание: завтра запись</b>'
+        tail = 'Если планы изменились, отмените заранее — время займёт кто-то другой.'
+    else:
+        hours = max(1, int(round(left_min / 60.0)))
+        head = '⏰ <b>Через %d %s — ваша запись</b>' % (
+            hours, 'час' if hours == 1 else 'часа' if hours < 5 else 'часов')
+        tail = 'Ждём вас! Если опаздываете — предупредите, мы придержим время.'
+    return (
+        '{head}\n\n'
+        '<b>{svc}</b>\n'
+        '{emp} · {when}\n'
+        '{price} · {dur}\n\n'
+        '{name}\n{addr}\n\n'
+        '{tail}'
+    ).format(head=head, svc=esc(s[0]), emp=esc(st['name']), when=when,
+             price=s[1], dur=s[2], name=esc(c['name']), addr=esc(c['addr']), tail=tail)
+
+
+def send_due_reminders():
+    """Разослать созревшие напоминания. Возвращает, сколько отправлено."""
+    sent = 0
+    for b, kind, left in bk.due_reminders():
+        txt = reminder_text(b, kind, left)
+        if not txt:
+            bk.mark_reminded(b.get('id'), kind)
+            continue
+        kb = {'inline_keyboard': [
+            [cb('Мои записи', 'mine')],
+            [cb('Отменить запись', 'cxl:' + b['id'])],
+        ]}
+        r = send(b['uid'], txt, kb)
+        # если пользователь заблокировал бота, помечаем как отправленное:
+        # иначе бот будет пытаться достучаться до него каждую минуту
+        bk.mark_reminded(b.get('id'), kind)
+        if r.get('ok'):
+            sent += 1
+        else:
+            print('   напоминание не ушло:', r.get('error') or r)
+    return sent
+
+
+def tick_reminders():
+    global _last_remind_check
+    now = time.time()
+    if now - _last_remind_check < REMIND_EVERY:
+        return
+    _last_remind_check = now
+    try:
+        n = send_due_reminders()
+        if n:
+            print('   напоминаний отправлено:', n)
+    except Exception as e:  # noqa: BLE001
+        print('   ошибка напоминаний:', e)
+
+
+def reminders_screen(uid):
+    """Служебная сводка: что и когда уйдёт клиентам. Помогает проверить §16."""
+    rows = bk.upcoming_all(12)
+    if not rows:
+        return ('<b>Очередь напоминаний</b>\n\nБудущих записей нет — напоминать не о чем.',
+                {'inline_keyboard': [[cb('‹ В меню', 'menu')]]})
+    now = datetime.now()
+    lines = []
+    for when, b in rows:
+        sent = b.get('reminded') or {}
+        marks = []
+        for kind, before in bk.REMINDERS:
+            point = when - timedelta(minutes=before)
+            label = 'за сутки' if kind == '24h' else 'за 2 часа'
+            if sent.get(kind):
+                marks.append('%s — отправлено' % label)
+            elif point < now:
+                marks.append('%s — пропущено' % label)
+            else:
+                marks.append('%s — %s' % (label, point.strftime('%d.%m %H:%M')))
+        c = COMPANIES.get(b['cid'], {})
+        svc = ''
+        try:
+            svc = c['services'][b['svc']][0]
+        except Exception:  # noqa: BLE001
+            svc = 'услуга'
+        lines.append('<b>%s</b> · %s\n%s\n%s' % (
+            esc(svc), when.strftime('%d.%m %H:%M'),
+            esc(b.get('name') or 'клиент'), '\n'.join(marks)))
+    return ('<b>Очередь напоминаний</b>\n\n' + '\n\n'.join(lines) +
+            '\n\nБот проверяет очередь раз в минуту.',
+            {'inline_keyboard': [[cb('Обновить', 'reminders')], [cb('‹ В меню', 'menu')]]})
 
 
 def menu_for(uid):
@@ -691,6 +801,10 @@ def handle_callback(cq):
         t, kb = mine_screen(cid, uid)
         edit(chat, mid, t, kb)
         return
+    if data == 'reminders':
+        t, kb = reminders_screen(uid)
+        edit(chat, mid, t, kb)
+        return
     if data.startswith('cxl:'):
         rec = bk.cancel_booking(uid, data.split(':', 1)[1])
         t, kb = mine_screen(cid, uid)
@@ -746,6 +860,7 @@ def main():
     conflicts = 0
     while True:
         try:
+            tick_reminders()
             r = api('getUpdates', offset=offset, timeout=30,
                     allowed_updates=['message', 'callback_query'])
             if not r.get('ok'):

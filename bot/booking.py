@@ -96,6 +96,73 @@ def user_bookings(uid, only_future=True):
     return out
 
 
+def booking_when(b):
+    """Дата и время визита как datetime."""
+    return datetime.strptime(b['date'] + ' ' + hm(b['min']), '%Y-%m-%d %H:%M')
+
+
+# ------------------------------------------------------- напоминания (§16)
+# Отметки об отправке лежат в самой записи, поэтому переживают перезапуск
+# бота: иначе после каждого рестарта клиент получал бы напоминание заново.
+REMINDERS = (
+    ('24h', 24 * 60),   # за сутки
+    ('2h', 2 * 60),     # за два часа
+)
+# Если бот стоял и точку напоминания проспали больше чем на столько минут,
+# сообщение не отправляем: «напомним за 24 часа» через 20 часов после факта
+# выглядит поломкой, а не заботой.
+LATE_LIMIT = 40
+
+
+def due_reminders(now=None):
+    """Напоминания, которые пора отправить: [(запись, вид, минут до визита)]."""
+    now = now or datetime.now()
+    out = []
+    for b in BOOKINGS:
+        if b.get('status') != 'active':
+            continue
+        when = booking_when(b)
+        if when < now:
+            continue
+        left = (when - now).total_seconds() / 60.0
+        sent = b.get('reminded') or {}
+        for kind, before in REMINDERS:
+            if sent.get(kind):
+                continue
+            if left > before:
+                continue
+            # проспали слишком сильно — молча закрываем, не отправляя
+            if left < before - LATE_LIMIT:
+                mark_reminded(b.get('id'), kind)
+                continue
+            out.append((b, kind, int(round(left))))
+    return out
+
+
+def mark_reminded(bid, kind):
+    for b in BOOKINGS:
+        if b.get('id') == bid:
+            b.setdefault('reminded', {})[kind] = True
+            _save(BOOKINGS)
+            return True
+    return False
+
+
+def upcoming_all(limit=20):
+    """Ближайшие активные записи всех клиентов — для служебной сводки."""
+    now = datetime.now()
+    out = []
+    for b in BOOKINGS:
+        if b.get('status') != 'active':
+            continue
+        when = booking_when(b)
+        if when < now:
+            continue
+        out.append((when, b))
+    out.sort(key=lambda x: x[0])
+    return out[:limit]
+
+
 def cancel_booking(uid, bid):
     for b in BOOKINGS:
         if b.get('id') == bid and str(b.get('uid')) == str(uid):
