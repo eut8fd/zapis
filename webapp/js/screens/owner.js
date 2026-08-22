@@ -1,7 +1,7 @@
 import {
-  S, co, cid, emp, emps, staff, svc, svcs, client, clients, appt, appts, apptTitle, apptColor, apptEnd,
+  S, co, cid, emp, emps, staff, svc, svcs, client, clients, appt, appts, apptTitle, apptColor,
   now, today, todayStats, rangeStats, nextAppt, dayAppts, blocks, me, toHM, toMin, workDay, workWindow, companyHours,
-  lostClients, clientStats, emit, freeGaps, removeBlock, ABSENCE, absenceOn,
+  clientStats, emit, freeGaps, removeBlock, ABSENCE, absenceOn,
   markSetup, setupSteps, tipSeen, markTip,
 } from '../store.js';
 import {
@@ -45,8 +45,6 @@ route('o.home', {
     const s7 = rangeStats(7);
     const nx = nextAppt();
     const list = t.list.filter(a => a.status !== 'cancelled');
-    const upcoming = list.filter(a => apptEnd(a) > now());
-    const lost = lostClients(cid(), 45);
 
     return `
     <div class="top">
@@ -102,42 +100,7 @@ route('o.home', {
       </div>
     </div>
 
-    <div class="sec">
-      <div class="sec-h"><div class="sec-t">AI-помощник</div>
-        <button class="sec-a" data-a="nav" data-r="ai.home">Открыть ${icon('fwd', 14, 2.4)}</button></div>
-      <div class="wrap stack s">
-        <button class="ai-card" style="width:100%;text-align:left" data-a="nav" data-r="ai.report">
-          <div class="ic">${icon('sparkles', 19)}</div>
-          <div class="grow">
-            <div class="b sm">Итоги недели готовы</div>
-            <div class="tiny muted" style="margin-top:2px">Выручка ${money(s7.revenue)}, ${s7.deltaRev >= 0 ? '+' : ''}${s7.deltaRev}% к прошлой неделе</div>
-          </div>${icon('fwd', 16)}
-        </button>
-        ${lost.length ? `<button class="ai-card" style="width:100%;text-align:left" data-a="nav" data-r="ai.return">
-          <div class="ic" style="background:var(--warn-soft);color:var(--warn)">${icon('users', 19)}</div>
-          <div class="grow">
-            <div class="b sm">${lost.length} ${plural(lost.length, ['клиент давно не был', 'клиента давно не были', 'клиентов давно не были'])}</div>
-            <div class="tiny muted" style="margin-top:2px">Можно вернуть рассылкой с бонусом</div>
-          </div>${icon('fwd', 16)}
-        </button>` : ''}
-      </div>
-    </div>
-
-    <div class="sec">
-      <div class="sec-h"><div class="sec-t">Быстрые действия</div></div>
-      <div class="wrap acts" style="margin-bottom:9px">
-        <button class="act" data-a="qa.appt">${icon('calendarPlus', 21)}Запись</button>
-        <button class="act" data-a="tm.add">${icon('userPlus', 21)}Мастер</button>
-        <button class="act" data-a="qa.svc">${icon('briefcase', 21)}Услуга</button>
-        <button class="act" data-a="qa.block">${icon('lock', 21)}Занять время</button>
-      </div>
-      <div class="wrap acts">
-        <button class="act" data-a="nav" data-r="o.analytics">${icon('chart', 21)}Аналитика</button>
-        <button class="act" data-a="nav" data-r="o.finance">${icon('wallet', 21)}Финансы</button>
-        <button class="act" data-a="nav" data-r="o.services">${icon('grid', 21)}Все услуги</button>
-        <button class="act" data-a="o.share">${icon('share', 21)}Ссылка</button>
-      </div>
-    </div>`;
+`;
   },
 });
 
