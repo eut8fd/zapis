@@ -160,6 +160,35 @@ svg{display:inline-block;vertical-align:middle;flex:none}
 .av.xl{width:84px;height:84px;font-size:28px;border-radius:28px}
 .center>.av,.center>.tint{margin-left:auto;margin-right:auto}
 .av-sq{border-radius:16px}
+/* фото вместо инициалов: размеры берём у .av, меняется только заливка */
+.av-photo{background-size:cover;background-position:center;background-repeat:no-repeat;color:transparent}
+
+/* ---------- загрузка изображений ---------- */
+.ph-row{display:flex;gap:14px;align-items:flex-start}
+.ph-box{
+  width:84px;height:84px;flex:none;border-radius:18px;border:1.5px dashed var(--bd-2);
+  background:var(--sf-2);color:var(--tx-3);display:grid;place-items:center;
+  background-size:cover;background-position:center;overflow:hidden;transition:transform .14s var(--e)
+}
+.ph-box:active{transform:scale(.97)}
+.ph-box.round{border-radius:var(--r-full)}
+.ph-box.has{border-style:solid;border-color:var(--bd)}
+.ph-row .grow{display:flex;flex-direction:column;align-items:flex-start}
+.ph-row .btn.xs{width:auto}
+
+/* ---------- оценка визита ---------- */
+.stars{display:inline-flex;gap:6px}
+.star{color:var(--tx-3);transition:transform .14s var(--e),color .14s;padding:2px}
+.star.on{color:#F5A524}
+.star.on svg{fill:#F5A524}
+.star:active{transform:scale(.9)}
+
+/* обложка страницы записи и фото услуги в списке */
+.cover{height:132px;background-size:cover;background-position:center;background-color:var(--sf-3)}
+.svc-ph{
+  width:46px;height:46px;border-radius:14px;flex:none;
+  background-size:cover;background-position:center;background-color:var(--sf-3)
+}
 
 /* ---------- buttons ---------- */
 .btn{

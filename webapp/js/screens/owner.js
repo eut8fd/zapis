@@ -49,7 +49,7 @@ route('o.home', {
 
     return `
     <div class="top">
-      <div class="av m av-sq" style="background:${c.color === '#0D1220' ? 'var(--tx)' : c.color}">${esc(c.initials)}</div>
+      ${avatar({ initials: c.initials, color: c.color === '#0D1220' ? '#2B3340' : c.color, photo: c.logo }, 'm', 'av-sq')}
       <div class="grow">
         <div class="top-t nowrap" style="font-size:17px">${esc(c.name)}</div>
         <div class="top-sub">${greet(now().getHours())}, ${esc(u.name.split(' ')[0])}</div>

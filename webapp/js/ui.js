@@ -56,8 +56,85 @@ export const greet = h => h < 5 ? 'Доброй ночи' : h < 12 ? 'Добро
 /* ---------------- Компоненты ---------------- */
 export function avatar(p, size = 'm', cls = '') {
   const c = p && p.color ? p.color : 'var(--p)';
+  // Фото важнее инициалов: если оно есть, показываем его (§65, §66)
+  if (p && p.photo) {
+    return `<div class="av ${size} ${cls} av-photo" style="background-image:url('${p.photo}')"></div>`;
+  }
   const st = `background:linear-gradient(145deg,${c},color-mix(in srgb,${c} 72%,#1a2030))`;
   return `<div class="av ${size} ${cls}" style="${st}">${esc(p && p.initials || '?')}</div>`;
+}
+
+/* ---------------- Изображения ----------------
+   Картинки лежат в localStorage вместе с остальными данными, а его
+   квота ~5 МБ на весь домен. Поэтому любое фото ужимается до
+   разумной стороны и пережимается в JPEG — иначе один снимок
+   с телефона выбивает всю базу.
+----------------------------------------------- */
+export const IMG_MAX = { photo: 640, avatar: 320, logo: 256 };
+
+export function resizeImage(file, max = IMG_MAX.photo, quality = 0.72) {
+  return new Promise((res, rej) => {
+    if (!file) { rej(new Error('нет файла')); return; }
+    if (!/^image\//.test(file.type)) { rej(new Error('Это не изображение')); return; }
+    const fr = new FileReader();
+    fr.onerror = () => rej(new Error('Не удалось прочитать файл'));
+    fr.onload = () => {
+      const img = new Image();
+      img.onerror = () => rej(new Error('Не удалось открыть изображение'));
+      img.onload = () => {
+        const k = Math.min(1, max / Math.max(img.width, img.height));
+        const w = Math.max(1, Math.round(img.width * k)), h = Math.max(1, Math.round(img.height * k));
+        const cv = document.createElement('canvas');
+        cv.width = w; cv.height = h;
+        const ctx = cv.getContext('2d');
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);   // JPEG не умеет прозрачность
+        ctx.drawImage(img, 0, 0, w, h);
+        try { res(cv.toDataURL('image/jpeg', quality)); }
+        catch (e) { rej(new Error('Не удалось обработать изображение')); }
+      };
+      img.src = fr.result;
+    };
+    fr.readAsDataURL(file);
+  });
+}
+
+/** Диалог выбора файла. Возвращает data-URL или null, если отменили. */
+export function pickImage(max = IMG_MAX.photo) {
+  return new Promise(res => {
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = 'image/*';
+    inp.style.cssText = 'position:fixed;left:-9999px;opacity:0';
+    document.body.appendChild(inp);
+    let done = false;
+    const finish = v => { if (done) return; done = true; inp.remove(); res(v); };
+    inp.onchange = async () => {
+      const f = inp.files && inp.files[0];
+      if (!f) { finish(null); return; }
+      try { finish(await resizeImage(f, max)); }
+      catch (e) { toast(e.message || 'Не удалось загрузить', 'dan'); finish(null); }
+    };
+    // отмену в диалоге браузер не сообщает — подстраховываемся фокусом
+    window.addEventListener('focus', () => setTimeout(() => { if (!inp.files || !inp.files.length) finish(null); }, 600), { once: true });
+    inp.click();
+  });
+}
+
+/** Квадратная область «фото или заглушка» с кнопками замены и удаления. */
+export function photoField({ src, label, hint = '', actPick, actDel, ic = 'image', round = false }) {
+  return `<div class="field"><label>${esc(label)}</label>
+    <div class="ph-row">
+      <button class="ph-box ${round ? 'round' : ''} ${src ? 'has' : ''}" data-a="${actPick}"
+        ${src ? `style="background-image:url('${src}')"` : ''}>
+        ${src ? '' : icon(ic, 24)}
+      </button>
+      <div class="grow">
+        <button class="btn xs gh" data-a="${actPick}">${icon(src ? 'refresh' : 'plus', 14)}${src ? 'Заменить' : 'Загрузить'}</button>
+        ${src ? `<button class="btn xs gh" style="margin-top:8px;color:var(--dan)" data-a="${actDel}">${icon('trash', 14)}Удалить</button>` : ''}
+        ${hint ? `<div class="tiny dim" style="margin-top:8px">${esc(hint)}</div>` : ''}
+      </div>
+    </div>
+  </div>`;
 }
 export function tint(name, color, size = 20) {
   return `<div class="tint" style="background:${color}22;color:${color}">${icon(name, size)}</div>`;

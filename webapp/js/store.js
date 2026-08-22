@@ -2,7 +2,7 @@ import { buildSeed } from './seed.js';
 import { startOfDay, dayKey, pad } from './ui.js';
 
 const KEY = 'zapis.demo.v2';
-const VER = 9;
+const VER = 10;
 
 export const S = {
   v: VER, anchor: null, shift: 0, theme: 'auto', aiMode: 'demo', onboarded: true,
@@ -148,6 +148,45 @@ export function companyHours(date, id = cid()) {
   return s && s.on ? s : null;
 }
 
+/** Рабочее окно мастера, обрезанное часами салона (§37).
+    Мастер физически не может принимать, когда салон закрыт, поэтому
+    расписание считается по пересечению двух графиков, а не по одному.
+    clipped — признак того, что график мастера шире салона: по нему
+    интерфейс показывает предупреждение владельцу. */
+export function workWindow(e, date, companyId = cid()) {
+  const w = workDay(e, date); if (!w) return null;
+  const c = co(companyId);
+  const ch = c && c.hours ? c.hours[date.getDay()] : null;
+  if (ch && !ch.on) return null;              // салон закрыт — записей нет
+  let from = toMin(w.from), to = toMin(w.to);
+  let clipped = false;
+  if (ch && ch.on) {
+    const cf = toMin(ch.from), ct = toMin(ch.to);
+    if (cf > from) { from = cf; clipped = true; }
+    if (ct < to) { to = ct; clipped = true; }
+  }
+  if (to - from < 5) return null;             // окно схлопнулось
+  return { on: true, from: toHM(from), to: toHM(to), breaks: w.breaks || [], clipped };
+}
+
+/** Конфликты графиков мастеров с часами салона — для предупреждений (§37). */
+export function scheduleConflicts(companyId = cid()) {
+  const c = co(companyId); if (!c || !c.hours) return [];
+  const out = [];
+  staff(companyId).forEach(e => {
+    for (let d = 0; d < 7; d++) {
+      const w = e.schedule && e.schedule[d];
+      if (!w || !w.on) continue;
+      const ch = c.hours[d];
+      if (!ch || !ch.on) { out.push({ emp: e, day: d, kind: 'closed' }); continue; }
+      if (toMin(w.from) < toMin(ch.from) || toMin(w.to) > toMin(ch.to)) {
+        out.push({ emp: e, day: d, kind: 'wider', empFrom: w.from, empTo: w.to, coFrom: ch.from, coTo: ch.to });
+      }
+    }
+  });
+  return out;
+}
+
 export function busyFor(empId, date, companyId = cid()) {
   const k = dayKey(date);
   const out = appts(companyId)
@@ -160,7 +199,7 @@ export function busyFor(empId, date, companyId = cid()) {
 
 export function slotFree(empId, date, startMin, duration, companyId = cid(), ignoreId = null) {
   const e = emp(empId); if (!e) return false;
-  const w = workDay(e, date); if (!w) return false;
+  const w = workWindow(e, date, companyId); if (!w) return false;
   const from = toMin(w.from), to = toMin(w.to);
   if (startMin < from || startMin + duration > to) return false;
   for (const b of (w.breaks || [])) {
@@ -181,7 +220,7 @@ export function slotFree(empId, date, startMin, duration, companyId = cid(), ign
 
 export function slotsFor(empIds, date, duration, { step = 30, companyId = cid(), ignoreId = null } = {}) {
   const list = empIds.map(emp).filter(Boolean);
-  const days = list.map(e => workDay(e, date)).filter(Boolean);
+  const days = list.map(e => workWindow(e, date, companyId)).filter(Boolean);
   if (!days.length) return [];
   const from = Math.min(...days.map(d => toMin(d.from)));
   const to = Math.max(...days.map(d => toMin(d.to)));
@@ -204,7 +243,7 @@ export function nextFreeFor(empId, duration, companyId = cid(), maxDays = 14) {
 }
 
 export function freeGaps(date, empId, companyId = cid(), minLen = 60) {
-  const e = emp(empId); const w = e && workDay(e, date); if (!w) return [];
+  const e = emp(empId); const w = e && workWindow(e, date, companyId); if (!w) return [];
   const from = toMin(w.from), to = toMin(w.to);
   const busy = busyFor(empId, date, companyId).concat((w.breaks || []).map(b => ({ s: toMin(b.from), e: toMin(b.to) })))
     .sort((a, b) => a.s - b.s);
@@ -264,7 +303,7 @@ export function updateClient(id, patch) { const c = client(id); if (c) { Object.
 export function createService({ name, price, duration, employeeIds, companyId = cid(), cat = 'nails' }) {
   const s = {
     id: uid('s_'), companyId, name, price: +price, duration: +duration, cat,
-    color: catInfo(cat, companyId).color, active: true, buffer: 0, desc: '',
+    color: catInfo(cat, companyId).color, active: true, buffer: 0, desc: '', photo: null,
     employeeIds: employeeIds && employeeIds.length ? employeeIds : staff(companyId).map(e => e.id),
   };
   S.data.services.push(s);
@@ -297,6 +336,7 @@ export function createEmployee({ name, role, phone = '', serviceIds = [], compan
     schedule: JSON.parse(JSON.stringify(emps(companyId)[0].schedule)),
     serviceIds: serviceIds.length ? serviceIds : svcs(companyId).map(s => s.id),
     access: 'staff', rating: '5.0',
+    photo: null, since: null, showExp: true,
   };
   S.data.employees.push(e);
   e.serviceIds.forEach(sid => { const s = svc(sid); if (s && !s.employeeIds.includes(e.id)) s.employeeIds.push(e.id); });
@@ -370,6 +410,184 @@ export function addMoney({ type, amount, cat, note = '', companyId = cid(), date
   (type === 'income' ? S.data.incomes : S.data.expenses).push(rec);
   emit(); return rec;
 }
+export function removeMoney(id) {
+  S.data.incomes = S.data.incomes.filter(x => x.id !== id);
+  S.data.expenses = S.data.expenses.filter(x => x.id !== id);
+  emit();
+}
+
+/* ---------- категории доходов и расходов (§85, §86) ----------
+   Устроены так же, как категории услуг: базовый набор плюс свои,
+   которые живут в company.finCats и подхватываются во всех списках.
+------------------------------------------------------------- */
+const BASE_FIN = {
+  income: {
+    sale: { t: 'Продажа товара', color: '#12B76A' },
+    cert: { t: 'Сертификат', color: '#06AED4' },
+    rent_in: { t: 'Субаренда места', color: '#8B5CF6' },
+    other_in: { t: 'Прочее', color: '#7C8AA5' },
+  },
+  expense: {
+    rent: { t: 'Аренда', color: '#F04462' },
+    materials: { t: 'Материалы', color: '#F79009' },
+    salary: { t: 'Зарплата', color: '#8B5CF6' },
+    ads: { t: 'Реклама', color: '#EC4899' },
+    utilities: { t: 'Коммунальные', color: '#06AED4' },
+    tax: { t: 'Налоги', color: '#0EA5E9' },
+    other_ex: { t: 'Прочее', color: '#7C8AA5' },
+  },
+};
+const FIN_PALETTE = ['#EC4899', '#06AED4', '#F5A524', '#7C3AED', '#10B981', '#F04462', '#0EA5E9'];
+
+export function finCats(type, companyId = cid()) {
+  const c = co(companyId) || {};
+  const own = (c.finCats && c.finCats[type]) || {};
+  return { ...BASE_FIN[type], ...own };
+}
+export function finCatInfo(type, key, companyId = cid()) {
+  return finCats(type, companyId)[key] || { t: key || 'Прочее', color: '#7C8AA5' };
+}
+export function finCatName(type, key, companyId = cid()) { return finCatInfo(type, key, companyId).t; }
+
+export function addFinCat(type, title, companyId = cid()) {
+  const c = co(companyId); if (!c || !title) return null;
+  c.finCats = c.finCats || { income: {}, expense: {} };
+  c.finCats[type] = c.finCats[type] || {};
+  const key = 'f' + Date.now().toString(36);
+  const n = Object.keys(c.finCats[type]).length;
+  c.finCats[type][key] = { t: title.trim(), color: FIN_PALETTE[n % FIN_PALETTE.length] };
+  emit();
+  return key;
+}
+export function renameFinCat(type, key, title, companyId = cid()) {
+  const c = co(companyId);
+  if (c && c.finCats && c.finCats[type] && c.finCats[type][key]) { c.finCats[type][key].t = title.trim(); emit(); }
+}
+export function removeFinCat(type, key, companyId = cid()) {
+  const c = co(companyId);
+  if (!c || !c.finCats || !c.finCats[type] || !c.finCats[type][key]) return false;
+  const fallback = type === 'income' ? 'other_in' : 'other_ex';
+  const list = type === 'income' ? S.data.incomes : S.data.expenses;
+  let moved = 0;
+  list.forEach(x => { if (x.companyId === companyId && x.cat === key) { x.cat = fallback; moved++; } });
+  recurring(companyId).forEach(x => { if (x.cat === key) { x.cat = fallback; moved++; } });
+  delete c.finCats[type][key];
+  emit();
+  return moved;
+}
+
+/* ---------- регулярные операции (§87–§90) ----------
+   Повторяющиеся платежи не материализуются в список операций:
+   они разворачиваются на лету внутри запрошенного периода.
+   Иначе база пухнет, а правка «аренды» не меняет прошлые месяцы.
+---------------------------------------------------- */
+export const REPEAT = {
+  week: { t: 'Каждую неделю', days: 7 },
+  month: { t: 'Каждый месяц', days: 30 },
+  quarter: { t: 'Раз в квартал', days: 91 },
+  year: { t: 'Раз в год', days: 365 },
+};
+
+export const recurring = (id = cid()) => (S.data.recurring || []).filter(r => r.companyId === id);
+
+export function addRecurring({ type, amount, cat, note = '', every = 'month', from, to = null, companyId = cid() }) {
+  const rec = {
+    id: uid('rc_'), companyId, type, amount: +amount, cat, note, every,
+    from: startOfDay(from ? new Date(from) : now()).toISOString(),
+    to: to ? startOfDay(new Date(to)).toISOString() : null,
+    active: true, createdAt: now().toISOString(),
+  };
+  S.data.recurring = S.data.recurring || [];
+  S.data.recurring.push(rec);
+  emit(); return rec;
+}
+export function updateRecurring(id, patch) {
+  const r = (S.data.recurring || []).find(x => x.id === id);
+  if (r) { Object.assign(r, patch); emit(); }
+}
+export function removeRecurring(id) {
+  S.data.recurring = (S.data.recurring || []).filter(x => x.id !== id);
+  emit();
+}
+
+/** Даты, в которые регулярная операция попадает в [start, end]. */
+export function recurringDates(r, start, end) {
+  if (r.active === false) return [];
+  const from = new Date(r.from), to = r.to ? new Date(r.to) : null;
+  const out = [];
+  const lo = startOfDay(start), hi = startOfDay(end);
+  let d = new Date(from);
+  let guard = 0;
+  while (d <= hi && guard++ < 800) {
+    if (d >= lo && (!to || d <= to)) out.push(new Date(d));
+    if (r.every === 'week') d = new Date(d.getTime() + 7 * 86400000);
+    else if (r.every === 'month') d = new Date(d.getFullYear(), d.getMonth() + 1, d.getDate());
+    else if (r.every === 'quarter') d = new Date(d.getFullYear(), d.getMonth() + 3, d.getDate());
+    else if (r.every === 'year') d = new Date(d.getFullYear() + 1, d.getMonth(), d.getDate());
+    else break;
+  }
+  return out;
+}
+
+/** Все денежные операции периода: разовые + развёрнутые регулярные + выручка. */
+export function moneyOps(start, end, companyId = cid(), { withRevenue = true } = {}) {
+  const lo = startOfDay(start), hi = new Date(startOfDay(end).getTime() + 86399999);
+  const inR = d => { const x = new Date(d); return x >= lo && x <= hi; };
+  const out = [];
+  if (withRevenue) {
+    appts(companyId).filter(a => a.status === 'done' && inR(a.start)).forEach(a => {
+      const c = client(a.clientId);
+      out.push({ id: 'ap_' + a.id, type: 'income', amount: a.price, cat: 'services', catName: apptTitle(a), note: c ? c.name : '', date: a.start, fromAppt: true });
+    });
+  }
+  S.data.incomes.filter(x => x.companyId === companyId && inR(x.date)).forEach(x => out.push({ ...x }));
+  S.data.expenses.filter(x => x.companyId === companyId && inR(x.date)).forEach(x => out.push({ ...x }));
+  recurring(companyId).forEach(r => {
+    recurringDates(r, lo, hi).forEach(d => {
+      out.push({ id: r.id + '_' + dayKey(d), type: r.type, amount: r.amount, cat: r.cat, note: r.note, date: d.toISOString(), recurringId: r.id });
+    });
+  });
+  return out.sort((a, b) => new Date(b.date) - new Date(a.date));
+}
+
+/* ---------- обратная связь после визита (§80, §81) ----------
+   Оценка видна только бизнесу: наружу, на страницу записи, отзывы
+   не выводятся — так просил заказчик. Рейтинг мастера пересчитываем
+   сразу, иначе он навсегда остался бы значением из сида.
+------------------------------------------------------------- */
+export function addReview({ apptId, rating, text = '', companyId = cid() }) {
+  const a = appt(apptId);
+  const rec = {
+    id: uid('rv_'), companyId, apptId,
+    clientId: a ? a.clientId : null, employeeId: a ? a.employeeId : null,
+    rating: +rating, text: String(text || '').trim(), createdAt: now().toISOString(),
+  };
+  S.data.reviews.push(rec);
+  if (a) a.reviewId = rec.id;
+  recalcRating(rec.employeeId, companyId);
+  emit();
+  return rec;
+}
+export const reviewFor = apptId => S.data.reviews.find(r => r.apptId === apptId);
+
+export function recalcRating(employeeId, companyId = cid()) {
+  const e = emp(employeeId); if (!e) return;
+  const list = S.data.reviews.filter(r => r.employeeId === employeeId && r.rating);
+  if (list.length) e.rating = (list.reduce((s, r) => s + r.rating, 0) / list.length).toFixed(1);
+  const c = co(companyId);
+  if (c) {
+    const all = reviews(companyId).filter(r => r.rating);
+    if (all.length) { c.rating = +(all.reduce((s, r) => s + r.rating, 0) / all.length).toFixed(1); c.reviewsCount = all.length; }
+  }
+}
+
+/** Выполненные визиты клиента, по которым он ещё не оставил оценку. */
+export function pendingReviews(clientId) {
+  const rated = new Set(S.data.reviews.map(r => r.apptId));
+  return clientAppts(clientId)
+    .filter(a => a.status === 'done' && !rated.has(a.id))
+    .filter(a => (now() - new Date(a.start)) / 86400000 < 30);
+}
 
 export function addBroadcast(b) {
   const rec = { id: uid('bc_'), companyId: cid(), status: 'sent', sentAt: now().toISOString(), open: 0, booked: 0, ...b };
@@ -381,6 +599,17 @@ export function setPlan(companyId, plan, days) {
   c.plan = plan;
   if (days != null) c.planUntil = new Date(now().getTime() + days * 86400000).toISOString();
   emit();
+}
+/** Продлить подписку на один период выбранного тарифа (месяц, квартал, год). */
+export function extendPlan(companyId, planId = null) {
+  const c = co(companyId); if (!c) return 0;
+  const p = planById(planId || c.plan);
+  const days = p ? (PERIODS[p.period] || PERIODS.month).days : 30;
+  const base = Math.max(now().getTime(), new Date(c.planUntil).getTime() || 0);
+  if (planId) c.plan = planId;
+  c.planUntil = new Date(base + days * 86400000).toISOString();
+  emit();
+  return days;
 }
 export function setCompanyStatus(companyId, status) { const c = co(companyId); if (c) { c.status = status; emit(); } }
 
@@ -494,29 +723,73 @@ export function setRole(employeeId, access) {
   emit();
 }
 
-/* ---------- статистика ---------- */
-export function rangeStats(days, companyId = cid()) {
-  const end = now(), start = new Date(startOfDay(end).getTime() - (days - 1) * 86400000);
+/* ---------- статистика ----------
+   Считается по произвольному отрезку дат: 7/30/90 дней, полгода, год
+   и «свой период» из календаря — всё это одна функция statsBetween.
+   rangeStats(days) оставлен обёрткой, им пользуются старые экраны.
+--------------------------------- */
+const WD_SHORT = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
+const MON_S = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+
+/** Сколько дней в отрезке включительно. */
+export const daysBetween = (a, b) => Math.round((startOfDay(b) - startOfDay(a)) / 86400000) + 1;
+
+/** Разбивка отрезка на корзины: по дням, неделям или месяцам (§91). */
+export function buckets(start, end, group = 'auto') {
+  const lo = startOfDay(start), hi = startOfDay(end);
+  const n = daysBetween(lo, hi);
+  if (group === 'auto') group = n <= 31 ? 'day' : n <= 120 ? 'week' : 'month';
+  const out = [];
+  if (group === 'day') {
+    for (let d = new Date(lo); d <= hi; d = new Date(d.getTime() + 86400000)) {
+      out.push({ from: new Date(d), to: new Date(d), label: n <= 7 ? WD_SHORT[d.getDay()] : String(d.getDate()) });
+    }
+  } else if (group === 'week') {
+    // недели считаем с понедельника — так привычнее в расписании
+    let d = new Date(lo); d = new Date(d.getTime() - ((d.getDay() + 6) % 7) * 86400000);
+    for (; d <= hi; d = new Date(d.getTime() + 7 * 86400000)) {
+      const to = new Date(d.getTime() + 6 * 86400000);
+      out.push({ from: new Date(Math.max(d, lo)), to: new Date(Math.min(to, hi)), label: d.getDate() + '.' + MON_S[d.getMonth()] });
+    }
+  } else {
+    let d = new Date(lo.getFullYear(), lo.getMonth(), 1);
+    for (; d <= hi; d = new Date(d.getFullYear(), d.getMonth() + 1, 1)) {
+      const to = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+      out.push({ from: new Date(Math.max(d, lo)), to: new Date(Math.min(to, hi)), label: MON_S[d.getMonth()] });
+    }
+  }
+  return { group, list: out };
+}
+
+export function statsBetween(start, end, companyId = cid(), { group = 'auto' } = {}) {
+  const lo = startOfDay(start), hi = new Date(startOfDay(end).getTime() + 86399999);
+  const days = daysBetween(lo, hi);
   const all = appts(companyId);
-  const inR = a => { const d = new Date(a.start); return d >= start && d <= end; };
+  const inR = a => { const d = new Date(a.start); return d >= lo && d <= hi; };
   const done = all.filter(a => a.status === 'done' && inR(a));
+  const upcoming = all.filter(a => a.status === 'planned' && inR(a));
   const planned = all.filter(a => a.status !== 'cancelled' && inR(a));
   const cancelled = all.filter(a => a.status === 'cancelled' && inR(a));
-  const revenue = done.reduce((s, a) => s + a.price, 0);
 
-  // предыдущий период
-  const pStart = new Date(start.getTime() - days * 86400000), pEnd = new Date(start.getTime() - 1);
+  // §61 — фактическая и ожидаемая выручка считаются раздельно
+  const revenue = done.reduce((s, a) => s + a.price, 0);
+  const expected = upcoming.reduce((s, a) => s + a.price, 0);
+
+  // предыдущий отрезок такой же длины
+  const pEnd = new Date(lo.getTime() - 1), pStart = new Date(startOfDay(lo).getTime() - days * 86400000);
   const pDone = all.filter(a => a.status === 'done' && new Date(a.start) >= pStart && new Date(a.start) <= pEnd);
   const pRev = pDone.reduce((s, a) => s + a.price, 0);
 
-  // ряд по дням
-  const series = [], labels = [];
-  for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(startOfDay(end).getTime() - i * 86400000);
-    const k = dayKey(d);
-    series.push(done.filter(a => dayKey(new Date(a.start)) === k).reduce((s, a) => s + a.price, 0));
-    labels.push(days <= 7 ? ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'][d.getDay()] : String(d.getDate()));
-  }
+  const bk = buckets(lo, hi, group);
+  const series = [], labels = [], seriesExpected = [], seriesCount = [];
+  bk.list.forEach(b => {
+    const f = startOfDay(b.from).getTime(), t = startOfDay(b.to).getTime() + 86399999;
+    const inB = a => { const x = new Date(a.start).getTime(); return x >= f && x <= t; };
+    series.push(done.filter(inB).reduce((s, a) => s + a.price, 0));
+    seriesExpected.push(upcoming.filter(inB).reduce((s, a) => s + a.price, 0));
+    seriesCount.push(done.filter(inB).length);
+    labels.push(b.label);
+  });
 
   const byService = {};
   done.forEach(a => a.serviceIds.forEach(id => {
@@ -532,29 +805,47 @@ export function rangeStats(days, companyId = cid()) {
   });
 
   const cls = clients(companyId);
-  const newClients = cls.filter(c => new Date(c.createdAt) >= start).length;
+  const newClients = cls.filter(c => new Date(c.createdAt) >= lo && new Date(c.createdAt) <= hi).length;
   const clientIds = new Set(done.map(a => a.clientId));
   let repeat = 0;
   clientIds.forEach(id => { if (all.filter(a => a.clientId === id && a.status === 'done').length > 1) repeat++; });
 
-  const expenses = S.data.expenses.filter(e => e.companyId === companyId && new Date(e.date) >= start && new Date(e.date) <= end)
-    .reduce((s, e) => s + e.amount, 0);
-  const extraIncome = S.data.incomes.filter(e => e.companyId === companyId && new Date(e.date) >= start && new Date(e.date) <= end)
-    .reduce((s, e) => s + e.amount, 0);
+  // деньги: разовые операции и регулярные платежи периода
+  const ops = moneyOps(lo, hi, companyId, { withRevenue: false });
+  const extraIncome = ops.filter(o => o.type === 'income').reduce((s, o) => s + o.amount, 0);
+  const expenses = ops.filter(o => o.type === 'expense').reduce((s, o) => s + o.amount, 0);
+  const byCat = { income: {}, expense: {} };
+  ops.forEach(o => {
+    const info = finCatInfo(o.type, o.cat, companyId);
+    const box = byCat[o.type];
+    box[o.cat] = box[o.cat] || { key: o.cat, name: info.t, color: info.color, sum: 0, count: 0 };
+    box[o.cat].sum += o.amount; box[o.cat].count++;
+  });
+  if (revenue) byCat.income.services = { key: 'services', name: 'Услуги', color: '#12B76A', sum: revenue, count: done.length };
 
   return {
-    days, revenue, income: revenue + extraIncome, expenses, profit: revenue + extraIncome - expenses,
-    count: done.length, planned: planned.length, cancelled: cancelled.length,
+    start: lo, end: startOfDay(end), days, group: bk.group,
+    revenue, expected, income: revenue + extraIncome, extraIncome, expenses,
+    profit: revenue + extraIncome - expenses,
+    count: done.length, upcoming: upcoming.length, planned: planned.length, cancelled: cancelled.length,
     avg: done.length ? Math.round(revenue / done.length) : 0,
     prevRevenue: pRev, prevCount: pDone.length,
     deltaRev: pRev ? Math.round((revenue - pRev) / pRev * 100) : (revenue ? 100 : 0),
     deltaCount: done.length - pDone.length,
-    series, labels,
+    series, labels, seriesExpected, seriesCount,
     byService: Object.values(byService).sort((a, b) => b.count - a.count),
     byEmployee: Object.values(byEmployee).sort((a, b) => b.sum - a.sum),
+    byIncomeCat: Object.values(byCat.income).sort((a, b) => b.sum - a.sum),
+    byExpenseCat: Object.values(byCat.expense).sort((a, b) => b.sum - a.sum),
     newClients, repeat, totalClients: cls.length,
     load: Math.min(100, Math.round(done.length / Math.max(1, staff(companyId).length * days * 6) * 100)),
   };
+}
+
+export function rangeStats(days, companyId = cid(), opts = {}) {
+  const end = now();
+  const start = new Date(startOfDay(end).getTime() - (days - 1) * 86400000);
+  return statsBetween(start, end, companyId, opts);
 }
 
 export function todayStats(companyId = cid(), employeeId = null) {
@@ -580,21 +871,125 @@ export function lostClients(companyId = cid(), days = 45) {
 }
 
 /* ---------- супер-админ ---------- */
+
+/* Тарифы — данные, а не константы (§100–§102): название, цену, период,
+   лимиты и список функций правит владелец платформы прямо в панели. */
+export const PERIODS = { month: { t: 'месяц', days: 30 }, quarter: { t: 'квартал', days: 90 }, year: { t: 'год', days: 365 } };
+
+export const DEFAULT_PLANS = () => ([
+  {
+    id: 'START', name: 'START', price: 9900, period: 'month', active: true, color: '#0EA5E9',
+    limits: { staff: 1, services: 20, broadcasts: 2 },
+    feats: ['1 сотрудник', 'Онлайн-запись', 'База клиентов', 'Напоминания'],
+  },
+  {
+    id: 'PRO', name: 'PRO', price: 19900, period: 'month', active: true, color: '#4C6FFF',
+    limits: { staff: 10, services: 100, broadcasts: 20 },
+    feats: ['До 10 сотрудников', 'AI-помощник', 'Рассылки', 'Аналитика и финансы'],
+  },
+  {
+    id: 'BUSINESS', name: 'BUSINESS', price: 39900, period: 'month', active: true, color: '#8B5CF6',
+    limits: { staff: 0, services: 0, broadcasts: 0 },
+    feats: ['Без ограничений', 'Несколько филиалов', 'API и интеграции', 'Приоритетная поддержка'],
+  },
+]);
+
+export const plans = () => (S.data.plans && S.data.plans.length ? S.data.plans : DEFAULT_PLANS());
+export const planById = id => plans().find(p => p.id === id) || null;
+export const planPrice = id => { const p = planById(id); return p ? p.price : 0; };
+/** Цена, приведённая к месяцу — иначе годовой тариф раздувает MRR. */
+export const planMonthly = id => {
+  const p = planById(id); if (!p) return 0;
+  return Math.round(p.price / ((PERIODS[p.period] || PERIODS.month).days / 30));
+};
+
+export function updatePlan(id, patch) {
+  S.data.plans = S.data.plans && S.data.plans.length ? S.data.plans : DEFAULT_PLANS();
+  const p = S.data.plans.find(x => x.id === id);
+  if (!p) return null;
+  Object.assign(p, patch);
+  emit(); return p;
+}
+export function addPlan({ name, price, period = 'month', feats = [], limits = {} }) {
+  S.data.plans = S.data.plans && S.data.plans.length ? S.data.plans : DEFAULT_PLANS();
+  const id = String(name || 'PLAN').toUpperCase().replace(/[^A-ZА-Я0-9]/gi, '').slice(0, 12) || ('P' + Date.now().toString(36));
+  if (S.data.plans.some(p => p.id === id)) return null;
+  const p = { id, name, price: +price, period, active: true, color: '#12B76A', limits, feats };
+  S.data.plans.push(p); emit(); return p;
+}
+export function removePlan(id) {
+  if (allCompanies().some(c => c.plan === id)) return false;   // тариф с клиентами не удаляем
+  S.data.plans = plans().filter(p => p.id !== id);
+  emit(); return true;
+}
+
+/* Системные уведомления платформы (§106) */
+export const NOTICE_KINDS = {
+  update: { t: 'Обновление', color: '#4C6FFF', icon: 'sparkles' },
+  maintenance: { t: 'Технические работы', color: '#F79009', icon: 'gear' },
+  billing: { t: 'Оплата', color: '#F04462', icon: 'card' },
+};
+export const notices = () => (S.data.notices || []).slice().sort((a, b) => new Date(b.sentAt) - new Date(a.sentAt));
+export function addNotice({ kind = 'update', title, text, segment = 'all', to = 0 }) {
+  const rec = { id: uid('nt_'), kind, title, text, segment, to, sentAt: now().toISOString() };
+  S.data.notices = S.data.notices || [];
+  S.data.notices.push(rec); emit(); return rec;
+}
+export function removeNotice(id) { S.data.notices = (S.data.notices || []).filter(n => n.id !== id); emit(); }
+
+/* Сегменты компаний для рассылок платформы (§105) */
+export function saSegments() {
+  const cs = allCompanies();
+  const isActive = c => c.status !== 'blocked' && new Date(c.planUntil) > now();
+  const segs = [
+    { v: 'all', t: 'Все компании', s: 'Каждая компания в системе', list: cs },
+    { v: 'active', t: 'Активные', s: 'Подписка оплачена', list: cs.filter(isActive) },
+    { v: 'inactive', t: 'Неактивные', s: 'Истёкшие и заблокированные', list: cs.filter(c => !isActive(c)) },
+  ];
+  plans().forEach(p => segs.push({ v: 'plan:' + p.id, t: 'Тариф ' + p.name, s: 'Компании на этом тарифе', list: cs.filter(c => c.plan === p.id) }));
+  return segs;
+}
+export const saBroadcasts = () => (S.data.saBroadcasts || []).slice().sort((a, b) => new Date(b.sentAt) - new Date(a.sentAt));
+export function addSaBroadcast({ title, text, segment, to, open = 0 }) {
+  const rec = { id: uid('sb_'), title, text, segment, to, open, sentAt: now().toISOString() };
+  S.data.saBroadcasts = S.data.saBroadcasts || [];
+  S.data.saBroadcasts.push(rec); emit(); return rec;
+}
+
 export function saStats() {
   const cs = allCompanies();
-  const PRICE = { START: 9900, PRO: 19900, BUSINESS: 39900 };
   const active = cs.filter(c => c.status !== 'blocked' && new Date(c.planUntil) > now());
+  const price = {};
+  plans().forEach(p => { price[p.id] = p.price; });
+  const byPlan = plans().map(p => ({
+    ...p,
+    count: cs.filter(c => c.plan === p.id).length,
+    activeCount: active.filter(c => c.plan === p.id).length,
+    mrr: active.filter(c => c.plan === p.id).length * planMonthly(p.id),
+  }));
+  // регистрации по месяцам за последние полгода (§104)
+  const signups = [];
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now().getFullYear(), now().getMonth() - i, 1);
+    const to = new Date(d.getFullYear(), d.getMonth() + 1, 1);
+    signups.push({
+      label: MON_S[d.getMonth()],
+      count: cs.filter(c => { const x = new Date(c.createdAt); return x >= d && x < to; }).length,
+    });
+  }
   return {
     companies: cs.length,
     active: active.length,
-    mrr: active.reduce((s, c) => s + (PRICE[c.plan] || 0), 0),
+    mrr: active.reduce((s, c) => s + planMonthly(c.plan), 0),
+    arpu: active.length ? Math.round(active.reduce((s, c) => s + planMonthly(c.plan), 0) / active.length) : 0,
     users: S.data.employees.length,
     clients: S.data.clients.length,
     todayAppts: S.data.appointments.filter(a => dayKey(new Date(a.start)) === dayKey(now()) && a.status !== 'cancelled').length,
     totalAppts: S.data.appointments.length,
     expiring: cs.filter(c => { const d = (new Date(c.planUntil) - now()) / 86400000; return d > 0 && d < 10; }),
     blocked: cs.filter(c => c.status === 'blocked'),
-    price: PRICE,
+    newThisMonth: signups[signups.length - 1].count,
+    signups, byPlan, price,
   };
 }
 export function companyStats(id) {

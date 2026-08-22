@@ -93,7 +93,33 @@ const CO = [
 ];
 
 const CAT_COLOR = { nails: '#4C6FFF', hair: '#F79009', brow: '#8B5CF6', bar: '#0EA5E9', spa: '#12B76A' };
-const EXPENSES = [['Аренда', 350000, 1], ['Материалы', 60000, 6], ['Зарплата', 220000, 2], ['Реклама', 40000, 4], ['Коммунальные', 25000, 1], ['Кофе и вода', 12000, 8]];
+// разовые расходы: ключ категории, база, частота в месяц
+const EXPENSES = [['materials', 60000, 6], ['ads', 40000, 4], ['utilities', 25000, 1], ['other_ex', 12000, 8]];
+// то, что повторяется само: аренда и зарплата не заводятся руками каждый месяц
+const RECUR = [
+  ['expense', 'rent', 350000, 'month', ''],
+  ['expense', 'salary', 220000, 'month', 'Администраторы'],
+  ['income', 'rent_in', 60000, 'month', 'Кресло у окна'],
+];
+
+// стартовая тарифная сетка платформы — дальше её правит Super Admin
+const PLANS = () => ([
+  {
+    id: 'START', name: 'START', price: 9900, period: 'month', active: true, color: '#0EA5E9',
+    limits: { staff: 1, services: 20, broadcasts: 2 },
+    feats: ['1 сотрудник', 'Онлайн-запись', 'База клиентов', 'Напоминания'],
+  },
+  {
+    id: 'PRO', name: 'PRO', price: 19900, period: 'month', active: true, color: '#4C6FFF',
+    limits: { staff: 10, services: 100, broadcasts: 20 },
+    feats: ['До 10 сотрудников', 'AI-помощник', 'Рассылки', 'Аналитика и финансы'],
+  },
+  {
+    id: 'BUSINESS', name: 'BUSINESS', price: 39900, period: 'month', active: true, color: '#8B5CF6',
+    limits: { staff: 0, services: 0, broadcasts: 0 },
+    feats: ['Без ограничений', 'Несколько филиалов', 'API и интеграции', 'Приоритетная поддержка'],
+  },
+]);
 
 // «Фоновые» компании — нужны, чтобы панель Super Admin выглядела как настоящий SaaS
 const BG = [
@@ -121,8 +147,9 @@ function buildBackground(st, today) {
       slug: id, tgLink: id, initials: initials(name), status: days < -1 ? 'blocked' : null,
       createdAt: new Date(today.getTime() - int(r, 20, 500) * 86400000).toISOString(),
       hours: WEEK_DEFAULT(), currency: '₸',
+      logo: null, cover: null, finCats: { income: {}, expense: {} },
     });
-    const owner = { id: id + '_owner', companyId: id, name: pick(r, M) + ' ' + pick(r, SM), role: 'Владелец', isOwner: true, active: true, initials: 'ВЛ', color: AV[bi % AV.length], phone: phone(r), schedule: WEEK_DEFAULT(), serviceIds: [], takesAppointments: false, access: 'owner' };
+    const owner = { id: id + '_owner', companyId: id, name: pick(r, M) + ' ' + pick(r, SM), role: 'Владелец', isOwner: true, active: true, initials: 'ВЛ', color: AV[bi % AV.length], phone: phone(r), schedule: WEEK_DEFAULT(), serviceIds: [], takesAppointments: false, access: 'owner', photo: null, since: null, showExp: true };
     st.employees.push(owner);
     const team = [];
     for (let i = 0; i < int(r, 1, 4); i++) {
@@ -132,11 +159,12 @@ function buildBackground(st, today) {
         initials: initials(nm), color: AV[(bi + i) % AV.length], phone: phone(r),
         schedule: WEEK_DEFAULT(), serviceIds: [], takesAppointments: true, tags: ['nails'],
         access: 'staff', rating: (4.5 + r() * .5).toFixed(1),
+        photo: null, since: today.getFullYear() - int(r, 1, 9), showExp: true,
       });
     }
     st.employees.push(...team);
     const svcs = [['Основная услуга', 9000, 60], ['Быстрая услуга', 5000, 30], ['Премиум', 20000, 120]]
-      .map((s, i) => ({ id: id + '_s' + i, companyId: id, name: s[0], price: s[1], duration: s[2], cat: 'nails', color, active: true, buffer: 0, desc: '', employeeIds: team.map(e => e.id) }));
+      .map((s, i) => ({ id: id + '_s' + i, companyId: id, name: s[0], price: s[1], duration: s[2], cat: 'nails', color, active: true, buffer: 0, desc: '', photo: null, employeeIds: team.map(e => e.id) }));
     st.services.push(...svcs);
     team.forEach(e => { e.serviceIds = svcs.map(s => s.id); });
     const cls = [];
@@ -166,6 +194,7 @@ export function buildSeed(anchor) {
   const st = {
     companies: [], employees: [], services: [], clients: [], appointments: [],
     expenses: [], incomes: [], reviews: [], broadcasts: [], blocks: [], notes: [],
+    recurring: [], plans: PLANS(), notices: [], saBroadcasts: [],
   };
 
   CO.forEach(co => {
@@ -177,6 +206,7 @@ export function buildSeed(anchor) {
       plan: co.plan, planUntil: untilDate.toISOString(), slug: co.slug, tgLink: co.tgLink,
       initials: initials(co.name), createdAt: new Date(today.getTime() - int(r, 120, 400) * 86400000).toISOString(),
       hours: WEEK_DEFAULT(), currency: '₸',
+      logo: null, cover: null, finCats: { income: {}, expense: {} },
     });
 
     // владелец
@@ -185,6 +215,7 @@ export function buildSeed(anchor) {
       id: ownerId, companyId: co.id, name: co.owner.name, role: co.owner.role, isOwner: true, active: true,
       initials: initials(co.owner.name), color: AV[0], phone: phone(r), schedule: WEEK_DEFAULT(),
       serviceIds: [], takesAppointments: false, access: 'owner',
+      photo: null, since: today.getFullYear() - int(r, 4, 12), showExp: true,
     });
 
     // сотрудники
@@ -194,6 +225,7 @@ export function buildSeed(anchor) {
       schedule: WEEK_DEFAULT(), serviceIds: [], takesAppointments: true, tags: s.tags,
       access: i === 0 ? 'manager' : 'staff',
       rating: (4.6 + r() * 0.4).toFixed(1),
+      photo: null, since: today.getFullYear() - int(r, 1, 11), showExp: true,
     }));
     if (co.id === 'c1') { emps[4].schedule[2].on = false; emps[1].schedule[6].on = false; }
     st.employees.push(...emps);
@@ -201,7 +233,7 @@ export function buildSeed(anchor) {
     // услуги
     const svcs = co.services.map((s, i) => ({
       id: co.id + '_s' + (i + 1), companyId: co.id, name: s[0], price: s[1], duration: s[2],
-      cat: s[3], color: CAT_COLOR[s[3]], active: true, buffer: 0, desc: '',
+      cat: s[3], color: CAT_COLOR[s[3]], active: true, buffer: 0, desc: '', photo: null,
       employeeIds: emps.filter(e => e.tags.includes(s[3])).map(e => e.id),
     }));
     svcs.forEach(s => { if (!s.employeeIds.length) s.employeeIds = emps.map(e => e.id); });
@@ -351,19 +383,32 @@ export function buildSeed(anchor) {
       });
     }
 
-    // ---- расходы за 90 дней ----
+    // ---- разовые расходы за 90 дней ----
     for (let d = 90; d >= 0; d--) {
       const day = new Date(today.getTime() - d * 86400000);
       EXPENSES.forEach((e, i) => {
-        const [name, base, freq] = e;
+        const [key, base, freq] = e;
         if (d % Math.round(30 / freq) !== i % Math.round(30 / freq)) return;
         st.expenses.push({
           id: co.id + '_ex' + d + '_' + i, companyId: co.id, type: 'expense',
           amount: Math.round(base * (0.8 + r() * 0.4) / (freq > 3 ? 4 : 1)),
-          cat: name, date: day.toISOString(), note: '',
+          cat: key, date: day.toISOString(), note: key === 'other_ex' ? 'Кофе и вода' : '',
         });
       });
     }
+
+    // ---- регулярные платежи ----
+    // Начинаем на полгода назад: тогда в любом периоде аналитики
+    // аренда и зарплата уже видны, а не появляются «с завтрашнего дня».
+    RECUR.forEach((x, i) => {
+      const [type, cat, amount, every, note] = x;
+      const from = new Date(today.getFullYear(), today.getMonth() - 6, Math.min(28, 1 + i * 4));
+      st.recurring.push({
+        id: co.id + '_rc' + i, companyId: co.id, type, cat,
+        amount: Math.round(amount * (co.density || 1)), note, every,
+        from: from.toISOString(), to: null, active: true, createdAt: from.toISOString(),
+      });
+    });
 
     // ---- отзывы ----
     const TXT = [
@@ -373,13 +418,32 @@ export function buildSeed(anchor) {
       'Немного задержали по времени, но результат отличный.', 'Лучшее место в городе.',
       'Приятная атмосфера и хорошая музыка.', 'Спасибо за внимание к деталям!',
     ];
-    for (let i = 0; i < 20; i++) {
-      const emp = pick(r, takers);
-      st.reviews.push({
-        id: co.id + '_rv' + i, companyId: co.id, clientId: pick(r, cls).id, employeeId: emp.id,
+    // Отзыв всегда привязан к конкретному визиту: иначе непонятно,
+    // за что оценка, и клиент может оценить один визит дважды.
+    const doneAppts = st.appointments.filter(a => a.companyId === co.id && a.status === 'done');
+    const rated = new Set();
+    for (let i = 0; i < 20 && doneAppts.length; i++) {
+      const a = pick(r, doneAppts);
+      if (rated.has(a.id)) continue;
+      rated.add(a.id);
+      const rec = {
+        id: co.id + '_rv' + i, companyId: co.id, apptId: a.id, clientId: a.clientId, employeeId: a.employeeId,
         rating: r() < .85 ? 5 : 4, text: pick(r, TXT),
-        date: new Date(today.getTime() - int(r, 1, 80) * 86400000).toISOString(),
-      });
+        createdAt: new Date(new Date(a.start).getTime() + 3 * 3600000).toISOString(),
+      };
+      st.reviews.push(rec);
+      a.reviewId = rec.id;
+    }
+    // рейтинг мастера — среднее по его отзывам, а не случайное число
+    takers.forEach(e => {
+      const own = st.reviews.filter(v => v.employeeId === e.id);
+      if (own.length) e.rating = (own.reduce((s, v) => s + v.rating, 0) / own.length).toFixed(1);
+    });
+    const coRv = st.reviews.filter(v => v.companyId === co.id);
+    if (coRv.length) {
+      const c = st.companies.find(x => x.id === co.id);
+      c.rating = +(coRv.reduce((s, v) => s + v.rating, 0) / coRv.length).toFixed(1);
+      c.reviewsCount = coRv.length;
     }
 
     // ---- рассылки ----
@@ -395,6 +459,21 @@ export function buildSeed(anchor) {
   });
 
   buildBackground(st, today);
+
+  // пара системных уведомлений, чтобы раздел не был пустым при первом входе
+  st.notices.push(
+    {
+      id: 'nt_seed1', kind: 'update', title: 'Календарь стал удобнее',
+      text: 'Появились режимы «День / Неделя / Месяц», отпуска и больничные на диапазон дат.',
+      segment: 'all', to: st.companies.length, sentAt: new Date(today.getTime() - 5 * 86400000).toISOString(),
+    },
+    {
+      id: 'nt_seed2', kind: 'maintenance', title: 'Плановые работы в ночь на воскресенье',
+      text: 'С 02:00 до 04:00 сервис может быть недоступен несколько минут.',
+      segment: 'active', to: st.companies.filter(c => c.status !== 'blocked').length,
+      sentAt: new Date(today.getTime() - 12 * 86400000).toISOString(),
+    },
+  );
   return st;
 }
 

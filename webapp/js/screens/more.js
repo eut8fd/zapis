@@ -1,14 +1,17 @@
 ﻿import {
   S, co, cid, emp, emps, staff, svc, svcs, client, clients, appts, apptTitle, apptColor, now, today,
   rangeStats, todayStats, dayAppts, clientStats, updateService, deleteService, createService,
-  updateEmployee, removeEmployee, createEmployee, addMoney, setPlan, blocks, removeBlock, addBroadcast,
-  broadcasts, reviews, lostClients, emit, toHM, toMin, nextFreeFor, workDay,
+  updateEmployee, removeEmployee, createEmployee, addMoney, removeMoney, setPlan, extendPlan, blocks, removeBlock, addBroadcast,
+  broadcasts, reviews, lostClients, emit, toHM, toMin, nextFreeFor, workDay, workWindow, scheduleConflicts,
   ROLES, PERMS, roleOf, roleName, setRole, cats, catName, addCat, renameCat, removeCat,
+  statsBetween, daysBetween, moneyOps, finCats, finCatName, finCatInfo, addFinCat, renameFinCat, removeFinCat,
+  recurring, addRecurring, updateRecurring, removeRecurring, REPEAT, plans, planById, planPrice, PERIODS,
 } from '../store.js';
 import {
   esc, money, moneyShort, hhmm, dateLabel, relPast, avatar, emptyState, sheet, toast, promptSheet,
   confirmSheet, demoNote, segmented, bars, sparkline, donut, progress, nMin, nAppt, nVisit, dayKey, startOfDay,
-  addDays, WD, WD_FULL, MONTHS, num, plural, wait, loadingBlock,
+  addDays, WD, WD_FULL, MONTHS, MON_SHORT, num, plural, wait, loadingBlock,
+  pickImage, photoField, IMG_MAX, monthGrid, dateFull,
 } from '../ui.js';
 import { icon, catIcon } from '../icons.js';
 import { route, go, render } from '../router.js';
@@ -29,6 +32,8 @@ const TILES = [
   ['o.finance', 'wallet', 'Финансы', 'Доходы и расходы', '#F79009'],
   ['o.broadcasts', 'megaphone', 'Рассылки', 'Вернуть клиентов', '#EC4899'],
   ['o.analytics', 'chart', 'Аналитика', 'Что растёт, что падает', '#0EA5E9'],
+  ['o.reviews', 'star', 'Отзывы', 'Оценки после визитов', '#F5A524'],
+  ['o.help', 'info', 'Обучение', 'Как всё устроено', '#12B76A'],
   ['o.subscription', 'crown', 'Подписка', 'Тариф и оплата', '#F5A524'],
   ['o.settings', 'gear', 'Настройки', 'Компания и профиль', '#7C8AA5'],
 ];
@@ -84,7 +89,8 @@ route('o.services', {
           ${byCat[cat].map(s => {
           const stat = s30.byService.find(x => x.name === s.name);
           return `<button class="svc press" style="width:100%" data-a="sv.open" data-id="${s.id}">
-              <div class="tint" style="background:${s.color}1f;color:${s.color}">${catIcon(s.cat, 18)}</div>
+              ${s.photo ? `<div class="svc-ph" style="background-image:url('${s.photo}')"></div>`
+              : `<div class="tint" style="background:${s.color}1f;color:${s.color}">${catIcon(s.cat, 18)}</div>`}
               <div class="grow" style="text-align:left">
                 <div class="b" style="font-size:14.5px">${esc(s.name)}</div>
                 <div class="tiny muted">${nMin(s.duration)} · ${s.employeeIds.length} ${plural(s.employeeIds.length, ['мастер', 'мастера', 'мастеров'])}${stat ? ' · ' + stat.count + ' за месяц' : ''}</div>
@@ -143,46 +149,76 @@ on('cat.del', async ds => {
 });
 
 on('sv.open', ds => {
-  const s = svc(ds.id);
-  const st = { emps: s.employeeIds.slice() };
-  const sh = sheet({
-    title: s.name,
-    body: `
+  const s0 = svc(ds.id);
+  const st = { emps: s0.employeeIds.slice(), buf: s0.buffer || 0 };
+  const d = { name: s0.name, price: String(s0.price), dur: String(s0.duration), desc: s0.desc || '' };
+  const sh = sheet({ title: s0.name, body: '' });
+  const capture = () => {
+    const g = id => { const el = sh.el.querySelector(id); return el ? el.value : null; };
+    const n = g('#_n'), p = g('#_p'), du = g('#_d'), de = g('#_desc');
+    if (n != null) d.name = n; if (p != null) d.price = p;
+    if (du != null) d.dur = du; if (de != null) d.desc = de;
+  };
+  const draw = () => {
+    const s = svc(ds.id);
+    sh.set({
+      title: s.name,
+      body: `
+      ${photoField({
+        src: s.photo, label: 'Фотография', actPick: 'sv.photo', actDel: 'sv.photoDel',
+        hint: 'Клиент видит её при выборе услуги.',
+      })}
       <div class="inp-row">
-        <div class="field"><label>Цена, ₸</label><input class="inp" id="_p" inputmode="numeric" value="${s.price}"></div>
-        <div class="field"><label>Время, мин</label><input class="inp" id="_d" inputmode="numeric" value="${s.duration}"></div>
+        <div class="field"><label>Цена, ₸</label><input class="inp" id="_p" inputmode="numeric" value="${esc(d.price)}"></div>
+        <div class="field"><label>Время, мин</label><input class="inp" id="_d" inputmode="numeric" value="${esc(d.dur)}"></div>
       </div>
-      <div class="field"><label>Название</label><input class="inp" id="_n" value="${esc(s.name)}"></div>
+      <div class="field"><label>Название</label><input class="inp" id="_n" value="${esc(d.name)}"></div>
       <div class="field"><label>Кто выполняет</label>
         <div class="pick">${staff().map(e => `<button class="o ${st.emps.includes(e.id) ? 'on' : ''}" data-a="sv.emp" data-id="${e.id}">${esc(e.name.split(' ')[0])}</button>`).join('')}</div></div>
       <div class="hr"></div>
       <div class="tiny muted b" style="margin-bottom:8px">ДОПОЛНИТЕЛЬНО</div>
-      <div class="field"><label>Описание</label><textarea class="inp" id="_desc" placeholder="Коротко о услуге для клиентов">${esc(s.desc || '')}</textarea></div>
+      <div class="field"><label>Описание</label><textarea class="inp" id="_desc" placeholder="Коротко о услуге для клиентов">${esc(d.desc)}</textarea></div>
       <div class="field"><label>Буфер после услуги</label>
-        <div class="pick">${[0, 5, 10, 15, 30].map(b => `<button class="o ${(s.buffer || 0) === b ? 'on' : ''}" data-a="sv.buf" data-b="${b}">${b ? b + ' мин' : 'нет'}</button>`).join('')}</div></div>`,
-    footer: `<div class="btns"><button class="btn dan" data-a="sv.del" data-id="${s.id}">Удалить</button><button class="btn p" data-a="sv.save" data-id="${s.id}">Сохранить</button></div>`,
-  });
-  window.__sv = { sh, st, buf: s.buffer || 0 };
-  on('sv.emp', (d2, el) => {
-    const i = st.emps.indexOf(d2.id);
-    if (i >= 0) st.emps.splice(i, 1); else st.emps.push(d2.id);
-    el.classList.toggle('on', st.emps.includes(d2.id));
-  });
-  on('sv.buf', (d2, el) => {
-    window.__sv.buf = +d2.b;
-    sh.el.querySelectorAll('[data-a="sv.buf"]').forEach(o => o.classList.toggle('on', +o.dataset.b === +d2.b));
-  });
+        <div class="pick">${[0, 5, 10, 15, 30].map(b => `<button class="o ${st.buf === b ? 'on' : ''}" data-a="sv.buf" data-b="${b}">${b ? b + ' мин' : 'нет'}</button>`).join('')}</div></div>`,
+      footer: `<div class="btns"><button class="btn dan" data-a="sv.del" data-id="${s.id}">Удалить</button><button class="btn p" data-a="sv.save" data-id="${s.id}">Сохранить</button></div>`,
+    });
+  };
+  window.__sv = { sh, st, d, draw, capture, id: ds.id };
+  draw();
+});
+on('sv.emp', (d2, el) => {
+  const { st } = window.__sv;
+  const i = st.emps.indexOf(d2.id);
+  if (i >= 0) st.emps.splice(i, 1); else st.emps.push(d2.id);
+  el.classList.toggle('on', st.emps.includes(d2.id));
+});
+on('sv.buf', (d2, el) => {
+  const { sh, st } = window.__sv;
+  st.buf = +d2.b;
+  sh.el.querySelectorAll('[data-a="sv.buf"]').forEach(o => o.classList.toggle('on', +o.dataset.b === +d2.b));
+});
+on('sv.photo', async () => {
+  const sv2 = window.__sv; sv2.capture();
+  const v = await pickImage(IMG_MAX.photo);
+  if (!v) return;
+  updateService(sv2.id, { photo: v }); sv2.draw(); toast('Фотография загружена');
+});
+on('sv.photoDel', () => {
+  const sv2 = window.__sv; sv2.capture();
+  updateService(sv2.id, { photo: null }); sv2.draw(); toast('Фотография удалена', 'dan');
 });
 on('sv.save', ds => {
-  const { sh, st, buf } = window.__sv;
+  const sv2 = window.__sv; sv2.capture();
+  const { st, d } = sv2;
+  if (!d.name.trim()) { toast('Введите название', 'dan'); return; }
   updateService(ds.id, {
-    name: sh.el.querySelector('#_n').value.trim(),
-    price: +sh.el.querySelector('#_p').value || 0,
-    duration: +sh.el.querySelector('#_d').value || 30,
-    desc: sh.el.querySelector('#_desc').value.trim(),
-    buffer: buf, employeeIds: st.emps,
+    name: d.name.trim(),
+    price: +d.price || 0,
+    duration: +d.dur || 30,
+    desc: d.desc.trim(),
+    buffer: st.buf, employeeIds: st.emps,
   });
-  sh.close(); toast('Услуга сохранена');
+  sv2.sh.close(); toast('Услуга сохранена');
 });
 on('sv.del', async ds => {
   const ok = await confirmSheet({ title: 'Удалить услугу?', text: 'Она исчезнет из страницы записи. Прошлые записи сохранятся.', ok: 'Удалить', danger: true });
@@ -265,9 +301,10 @@ route('o.employee', {
       ${avatar(e, 'xl')}
       <div style="font-size:22px;font-weight:780;letter-spacing:-.03em;margin-top:12px">${esc(e.name)}</div>
       <div class="sm muted">${esc(e.role)}</div>
-      <div class="row" style="justify-content:center;gap:6px;margin-top:8px">
+      <div class="row" style="justify-content:center;gap:6px;margin-top:8px;flex-wrap:wrap">
         <span class="bdg ${w ? 'ok' : ''}">${w ? 'сегодня ' + w.from + '–' + w.to : 'выходной'}</span>
         ${e.rating ? `<span class="bdg warn">${icon('star', 11, 2.4)} ${e.rating}</span>` : ''}
+        ${expBadge(e)}
       </div>
     </div>
     <div class="wrap sec"><div class="grid3">
@@ -283,6 +320,9 @@ route('o.employee', {
       <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="emp.svcs" data-id="${e.id}">
         <div class="ic" style="background:var(--ai-soft);color:var(--ai)">${icon('briefcase', 19)}</div>
         <div class="grow" style="text-align:left"><div class="tl">Услуги</div><div class="st">${e.serviceIds.length} из ${svcs().length}</div></div>${icon('fwd', 18)}</button>
+      <button class="lrow press" style="border-radius:16px;border:1px dashed var(--bd-2);width:100%" data-a="emp.newSvc" data-id="${e.id}">
+        <div class="ic" style="background:var(--p-soft);color:var(--p)">${icon('plus', 19)}</div>
+        <div class="grow" style="text-align:left"><div class="tl">Новая услуга</div><div class="st">Сразу закрепим за этим мастером</div></div>${icon('fwd', 18)}</button>
       <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="emp.cal" data-id="${e.id}">
         <div class="ic" style="background:var(--ok-soft);color:var(--ok)">${icon('clock', 19)}</div>
         <div class="grow" style="text-align:left"><div class="tl">Записи</div><div class="st">Календарь мастера</div></div>${icon('fwd', 18)}</button>
@@ -307,26 +347,101 @@ route('o.employee', {
   },
 });
 
+/** Стаж мастера — показываем, только если год указан (§68). */
+export function expBadge(e, forClient = false) {
+  if (!e || !e.since) return '';
+  if (forClient && e.showExp === false) return '';
+  const y = Math.max(0, now().getFullYear() - e.since);
+  if (!y) return `<span class="bdg">первый год</span>`;
+  return `<span class="bdg">${icon('history', 11, 2.4)} опыт ${y} ${plural(y, ['год', 'года', 'лет'])}</span>`;
+}
+
 on('emp.cal', ds => { go('o.cal'); setTimeout(() => { const b = document.querySelector(`[data-a="cal.emp"][data-id="${ds.id}"]`); if (b) b.click(); }, 60); });
+
+/* §72 — услуга, созданная из карточки мастера, сразу закрепляется за ним */
+on('emp.newSvc', ds => {
+  addServiceSheet({
+    only: [ds.id],
+    after: sv => { toast('Услуга добавлена мастеру'); rr(); },
+  });
+});
 on('emp.edit', ds => {
-  const e = emp(ds.id);
-  const s = sheet({
-    title: 'Сотрудник',
-    body: `<div class="field"><label>Имя</label><input class="inp" id="_n" value="${esc(e.name)}"></div>
-      <div class="field"><label>Должность</label><input class="inp" id="_r" value="${esc(e.role)}"></div>
-      <div class="field"><label>Телефон</label><input class="inp" id="_p" value="${esc(e.phone || '')}"></div>
+  const e0 = emp(ds.id);
+  // Черновик держим отдельно от модели: перерисовка формы (фото, тумблеры)
+  // иначе стирает введённое, а мусорные поля утекают в localStorage.
+  const d = { name: e0.name, role: e0.role, phone: e0.phone || '', since: e0.since || '' };
+  const s = sheet({ title: 'Сотрудник', body: '' });
+  const capture = () => {
+    const g = id => { const el = s.el.querySelector(id); return el ? el.value : null; };
+    const n = g('#_n'), r = g('#_r'), p = g('#_p'), y = g('#_y');
+    if (n != null) d.name = n; if (r != null) d.role = r;
+    if (p != null) d.phone = p; if (y != null) d.since = y;
+  };
+  const draw = () => {
+    const e = emp(ds.id);
+    const yr = /^\d{4}$/.test(String(d.since)) ? +d.since : null;
+    const years = yr ? Math.max(0, now().getFullYear() - yr) : 0;
+    s.set({
+      title: 'Сотрудник',
+      body: `
+      ${photoField({
+        src: e.photo, label: 'Фотография', actPick: 'emp.photo', actDel: 'emp.photoDel', round: true,
+        ic: 'user', hint: 'Заменит инициалы в календаре, команде и на странице записи.',
+      })}
+      <div class="field"><label>Имя</label><input class="inp" id="_n" value="${esc(d.name)}"></div>
+      <div class="field"><label>Должность</label><input class="inp" id="_r" value="${esc(d.role)}"></div>
+      <div class="field"><label>Телефон</label><input class="inp" id="_p" value="${esc(d.phone)}"></div>
+      <div class="field"><label>В профессии с какого года</label>
+        <input class="inp" id="_y" inputmode="numeric" placeholder="например, ${now().getFullYear() - 5}" value="${esc(d.since)}">
+        ${yr ? `<div class="tiny dim" style="margin-top:6px">Опыт — ${years} ${plural(years, ['год', 'года', 'лет'])}</div>` : ''}
+      </div>
+      <div class="lrow" style="border-radius:14px;border:1px solid var(--bd);margin-bottom:10px">
+        <div class="grow"><div class="tl">Показывать стаж клиентам</div><div class="st">На странице записи рядом с именем</div></div>
+        <button class="sw ${e.showExp !== false ? 'on' : ''}" data-a="emp.showExp" data-id="${e.id}"></button></div>
       <div class="lrow" style="border-radius:14px;border:1px solid var(--bd)">
         <div class="grow"><div class="tl">Принимает записи</div><div class="st">Появляется при онлайн-записи</div></div>
         <button class="sw ${e.takesAppointments ? 'on' : ''}" data-a="emp.takes" data-id="${e.id}"></button></div>`,
-    footer: `<button class="btn p" data-a="emp.save" data-id="${e.id}">Сохранить</button>`,
-  });
-  window.__em = s;
+      footer: `<button class="btn p" data-a="emp.save" data-id="${e.id}">Сохранить</button>`,
+    });
+  };
+  window.__em = { s, draw, capture, id: ds.id, d };
+  draw();
 });
-on('emp.takes', (ds, el) => { const e = emp(ds.id); updateEmployee(ds.id, { takesAppointments: !e.takesAppointments }); el.classList.toggle('on', emp(ds.id).takesAppointments); });
+on('emp.photo', async () => {
+  const em = window.__em; em.capture();
+  const v = await pickImage(IMG_MAX.avatar);
+  if (!v) return;
+  updateEmployee(em.id, { photo: v }); em.draw(); toast('Фотография загружена');
+});
+on('emp.photoDel', () => {
+  const em = window.__em; em.capture();
+  updateEmployee(em.id, { photo: null }); em.draw(); toast('Фотография удалена', 'dan');
+});
+on('emp.showExp', (ds, el) => {
+  const e = emp(ds.id);
+  if (window.__em) window.__em.capture();
+  updateEmployee(ds.id, { showExp: e.showExp === false });
+  el.classList.toggle('on', emp(ds.id).showExp !== false);
+});
+on('emp.takes', (ds, el) => {
+  const e = emp(ds.id);
+  if (window.__em) window.__em.capture();
+  updateEmployee(ds.id, { takesAppointments: !e.takesAppointments });
+  el.classList.toggle('on', emp(ds.id).takesAppointments);
+});
 on('emp.save', ds => {
-  const s = window.__em;
-  updateEmployee(ds.id, { name: s.el.querySelector('#_n').value.trim(), role: s.el.querySelector('#_r').value.trim(), phone: s.el.querySelector('#_p').value.trim() });
-  s.close(); toast('Сохранено');
+  const em = window.__em; em.capture();
+  const y = String(em.d.since || '').trim();
+  const year = /^\d{4}$/.test(y) ? +y : null;
+  if (y && !year) { toast('Год укажите четырьмя цифрами', 'dan'); return; }
+  if (year && (year < 1950 || year > now().getFullYear())) { toast('Проверьте год', 'dan'); return; }
+  updateEmployee(ds.id, {
+    name: em.d.name.trim() || emp(ds.id).name,
+    role: em.d.role.trim(),
+    phone: em.d.phone.trim(),
+    since: year,
+  });
+  em.s.close(); toast('Сохранено');
 });
 on('emp.fire', async ds => {
   const ok = await confirmSheet({ title: 'Удалить сотрудника?', text: 'Его будущие записи останутся, но он исчезнет из команды.', ok: 'Удалить', danger: true });
@@ -499,18 +614,98 @@ export function timePick(current, cb) {
 on('tp.p', ds => { const { s, cb } = window.__tp; s.close(); cb(ds.t); });
 
 /* =========================================================
+   Период: общий компонент для финансов и аналитики
+   (§60, §83, §84, §92) — пресеты плюс свой отрезок из календаря.
+   ========================================================= */
+const PRESETS = [
+  { v: 7, t: '7 дней' }, { v: 30, t: '30 дней' }, { v: 90, t: '90 дней' },
+  { v: 180, t: 'Полгода' }, { v: 365, t: 'Год' },
+];
+const GROUPS = [['day', 'По дням'], ['week', 'По неделям'], ['month', 'По месяцам']];
+
+/** Отрезок дат по состоянию панели. */
+function periodRange(st) {
+  if (st.from && st.to) return { start: startOfDay(st.from), end: startOfDay(st.to) };
+  const end = now();
+  return { start: new Date(startOfDay(end).getTime() - (st.preset - 1) * 86400000), end };
+}
+function periodLabel(st) {
+  if (st.from && st.to) {
+    const n = daysBetween(st.from, st.to);
+    return dateFull(st.from) + ' — ' + dateFull(st.to) + ' · ' + n + ' ' + plural(n, ['день', 'дня', 'дней']);
+  }
+  return 'за ' + (PRESETS.find(p => p.v === st.preset) || { t: st.preset + ' дней' }).t.toLowerCase();
+}
+function periodBar(st, act) {
+  const custom = !!(st.from && st.to);
+  return `<div class="chips" style="margin-bottom:10px">
+    ${PRESETS.map(p => `<button class="chip ${!custom && st.preset === p.v ? 'on' : ''}" data-a="${act}.p" data-v="${p.v}">${p.t}</button>`).join('')}
+    <button class="chip ${custom ? 'on' : ''}" data-a="${act}.custom">${icon('calendar', 13, 2.2)} ${custom ? dateFull(st.from) + '–' + dateFull(st.to) : 'Свой период'}</button>
+  </div>`;
+}
+function groupBar(st, act, current) {
+  return `<div class="chips" style="margin-bottom:12px">
+    ${GROUPS.map(g => `<button class="chip sm ${(st.group || 'auto') === g[0] ? 'on' : ''}" data-a="${act}.g" data-v="${g[0]}">${g[1]}</button>`).join('')}
+    ${st.group ? `<button class="chip sm" data-a="${act}.g" data-v="">Авто${current ? ' (' + (GROUPS.find(g => g[0] === current) || [, ''])[1].toLowerCase() + ')' : ''}</button>` : ''}
+  </div>`;
+}
+/** Шторка выбора своего отрезка: две границы на месячной сетке. */
+function periodPicker(st, after) {
+  const w = { pick: 'from', from: st.from || periodRange(st).start, to: st.to || startOfDay(now()), month: startOfDay(now()) };
+  const s = sheet({ title: 'Свой период', body: '' });
+  const draw = () => {
+    const n = daysBetween(w.from, w.to);
+    s.set({
+      title: w.pick === 'from' ? 'С какого дня?' : 'По какой день?',
+      body: `
+        <div class="inp-row" style="margin-bottom:14px">
+          <button class="card flat press" style="flex:1;padding:12px 14px;text-align:left;${w.pick === 'from' ? 'border-color:var(--p)' : ''}" data-a="pp.from">
+            <div class="tiny dim">С</div><div class="b">${dateFull(w.from)}</div></button>
+          <button class="card flat press" style="flex:1;padding:12px 14px;text-align:left;${w.pick === 'to' ? 'border-color:var(--p)' : ''}" data-a="pp.to">
+            <div class="tiny dim">По</div><div class="b">${dateFull(w.to)}</div></button>
+        </div>
+        ${monthGrid(w.month, {
+        selected: w.pick === 'from' ? w.from : w.to,
+        action: 'pp.pick', navAction: 'pp.month',
+        minDate: w.pick === 'to' ? w.from : null,
+        maxDate: startOfDay(now()),
+        showCounts: false,
+      })}
+        <div class="tiny dim center" style="margin-top:10px">Выбрано ${n} ${plural(n, ['день', 'дня', 'дней'])}</div>`,
+      footer: `<button class="btn p" data-a="pp.ok">Показать период</button>`,
+    });
+  };
+  on('pp.from', () => { w.pick = 'from'; w.month = startOfDay(w.from); draw(); });
+  on('pp.to', () => { w.pick = 'to'; w.month = startOfDay(w.to); draw(); });
+  on('pp.month', ds => { w.month = startOfDay(new Date(+ds.d)); draw(); });
+  on('pp.pick', ds => {
+    const v = startOfDay(new Date(+ds.d));
+    if (w.pick === 'from') { w.from = v; if (w.to < v) w.to = v; w.pick = 'to'; }
+    else w.to = v;
+    draw();
+  });
+  on('pp.ok', () => { st.from = w.from; st.to = w.to; s.close(); after(); });
+  draw();
+  return s;
+}
+
+/* =========================================================
    Финансы
    ========================================================= */
-const fin = { period: 30 };
+const fin = { preset: 30, from: null, to: null, group: null, tab: 'ops' };
 route('o.finance', {
   tab: 'o.more',
   render() {
-    const s = rangeStats(fin.period);
-    const ops = operations(fin.period);
+    const { start, end } = periodRange(fin);
+    const s = statsBetween(start, end, cid(), { group: fin.group || 'auto' });
+    const ops = moneyOps(start, end, cid());
+    const rec = recurring();
+    const maxCat = Math.max(1, ...s.byExpenseCat.map(x => x.sum));
+
     return `
     <div class="top"><button class="ico-btn" data-a="back">${icon('back', 19)}</button>
-      <div class="grow"><div class="top-t">Финансы</div><div class="top-sub">за ${fin.period} дней</div></div></div>
-    <div class="wrap" style="margin-bottom:14px">${segmented('fin.p', [{ v: 7, t: '7 дней' }, { v: 30, t: '30 дней' }, { v: 90, t: '90 дней' }], fin.period)}</div>
+      <div class="grow"><div class="top-t">Финансы</div><div class="top-sub">${periodLabel(fin)}</div></div></div>
+    <div class="wrap">${periodBar(fin, 'fin')}</div>
 
     <div class="wrap">
       <div class="hero" style="background:linear-gradient(135deg,#12B76A,#0E9F6E 60%,#059669)">
@@ -523,6 +718,13 @@ route('o.finance', {
       </div>
     </div>
 
+    <div class="wrap sec"><div class="grid2">
+      <div class="st-card"><div class="l">Выручка по факту</div><div class="v">${moneyShort(s.revenue)} ₸</div>
+        <div class="tiny dim">${s.count} ${plural(s.count, ['визит', 'визита', 'визитов'])}</div></div>
+      <div class="st-card"><div class="l">Ожидается</div><div class="v" style="color:var(--p)">${moneyShort(s.expected)} ₸</div>
+        <div class="tiny dim">${s.upcoming} ${plural(s.upcoming, ['запись', 'записи', 'записей'])} впереди</div></div>
+    </div></div>
+
     <div class="wrap sec"><div class="btns">
       <button class="btn ok" data-a="fin.add" data-t="income">${icon('plus', 18)}Доход</button>
       <button class="btn" data-a="fin.add" data-t="expense">${icon('minus', 18)}Расход</button>
@@ -530,86 +732,308 @@ route('o.finance', {
 
     <div class="wrap sec">
       <div class="card pad">
-        <div class="row between" style="margin-bottom:10px"><div class="b sm">Динамика выручки</div><div class="tiny dim">${fin.period} дн.</div></div>
-        ${sparkline(s.series.length > 30 ? aggregate(s.series, 15) : s.series, { h: 96 })}
+        <div class="row between" style="margin-bottom:10px"><div class="b sm">Динамика выручки</div>
+          <div class="tiny dim">${s.labels.length} ${s.group === 'day' ? 'дней' : s.group === 'week' ? 'недель' : 'месяцев'}</div></div>
+        ${groupBar(fin, 'fin', s.group)}
+        ${bars(s.series, { labels: s.labels.length <= 14 ? s.labels : [], height: 104 })}
+        ${s.expected ? `<div class="tiny dim" style="margin-top:8px">Показана фактическая выручка. Ожидаемая по будущим записям — ${money(s.expected)}.</div>` : ''}
+      </div>
+    </div>
+
+    ${s.byExpenseCat.length ? `<div class="wrap sec">
+      <div class="row between" style="margin-bottom:8px"><div class="sec-t">Расходы по категориям</div>
+        <button class="sec-a" data-a="fin.cats">Настроить ${icon('fwd', 13, 2.4)}</button></div>
+      <div class="card pad stack s">
+        ${s.byExpenseCat.slice(0, 8).map(x => `<div>
+          <div class="row between" style="margin-bottom:5px">
+            <span class="sm b nowrap">${esc(x.name)}</span>
+            <span class="tiny muted">${money(x.sum)}</span></div>
+          ${progress(x.sum / maxCat * 100, x.color)}
+        </div>`).join('')}
+      </div>
+    </div>` : ''}
+
+    <div class="sec">
+      <div class="sec-h"><div class="sec-t">Регулярные платежи</div>
+        <button class="sec-a" data-a="fin.recAdd">${icon('plus', 14)} Добавить</button></div>
+      <div class="wrap stack s">
+        ${rec.length ? rec.map(r => {
+      const info = finCatInfo(r.type, r.cat);
+      const ended = r.to && new Date(r.to) < now();
+      return `<button class="lrow press" style="border-radius:14px;border:1px solid var(--bd);width:100%;${r.active === false || ended ? 'opacity:.55' : ''}" data-a="fin.recOpen" data-id="${r.id}">
+          <div class="ic" style="background:${info.color}1f;color:${info.color}">${icon('refresh', 18)}</div>
+          <div class="grow" style="text-align:left"><div class="tl">${esc(info.t)}${r.note ? ' · ' + esc(r.note) : ''}</div>
+            <div class="st">${(REPEAT[r.every] || {}).t || r.every}${ended ? ' · закончился' : r.active === false ? ' · выключен' : ''}</div></div>
+          <div class="b sm" style="color:${r.type === 'income' ? 'var(--ok)' : 'var(--dan)'}">${r.type === 'income' ? '+' : '−'}${moneyShort(r.amount)} ₸</div>
+        </button>`;
+    }).join('') : `<div class="card pad center sm muted">Аренда, зарплата, подписки — добавьте один раз, и они будут учитываться сами</div>`}
       </div>
     </div>
 
     <div class="sec">
       <div class="sec-h"><div class="sec-t">Операции</div><div class="tiny dim">${ops.length}</div></div>
       <div class="wrap stack s">
-        ${ops.slice(0, 30).map(o => `<div class="lrow" style="border-radius:14px;border:1px solid var(--bd)">
-          <div class="ic" style="background:${o.type === 'income' ? 'var(--ok-soft);color:var(--ok)' : 'var(--dan-soft);color:var(--dan)'}">${icon(o.type === 'income' ? 'trendUp' : 'trendDown', 18)}</div>
-          <div class="grow"><div class="tl">${esc(o.cat)}</div><div class="st">${dateLabel(new Date(o.date), now())}${o.note ? ' · ' + esc(o.note) : ''}</div></div>
+        ${ops.slice(0, 40).map(o => {
+      const nm = o.catName || finCatName(o.type, o.cat);
+      const info = o.fromAppt ? { color: '#12B76A' } : finCatInfo(o.type, o.cat);
+      return `<div class="lrow" style="border-radius:14px;border:1px solid var(--bd)">
+          <div class="ic" style="background:${o.type === 'income' ? 'var(--ok-soft);color:var(--ok)' : 'var(--dan-soft);color:var(--dan)'}">${icon(o.recurringId ? 'refresh' : o.type === 'income' ? 'trendUp' : 'trendDown', 18)}</div>
+          <div class="grow"><div class="tl">${esc(nm)}</div>
+            <div class="st">${dateLabel(new Date(o.date), now())}${o.note ? ' · ' + esc(o.note) : ''}${o.recurringId ? ' · регулярный' : ''}</div></div>
           <div class="b sm" style="color:${o.type === 'income' ? 'var(--ok)' : 'var(--dan)'}">${o.type === 'income' ? '+' : '−'}${moneyShort(o.amount)} ₸</div>
-        </div>`).join('') || `<div class="card pad center sm muted">Операций нет</div>`}
+          ${!o.fromAppt && !o.recurringId ? `<button class="ico-btn flat" data-a="fin.del" data-id="${o.id}">${icon('trash', 16)}</button>` : ''}
+        </div>`;
+    }).join('') || `<div class="card pad center sm muted">Операций нет</div>`}
       </div>
     </div>`;
   },
 });
-function aggregate(arr, n) {
-  const size = Math.ceil(arr.length / n), out = [];
-  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size).reduce((a, b) => a + b, 0));
-  return out;
-}
-function operations(days) {
-  const from = new Date(startOfDay(now()).getTime() - (days - 1) * 86400000);
-  const out = [];
-  appts().filter(a => a.status === 'done' && new Date(a.start) >= from).forEach(a => {
-    const c = client(a.clientId);
-    out.push({ type: 'income', amount: a.price, cat: apptTitle(a), note: c ? c.name : '', date: a.start });
-  });
-  S.data.incomes.filter(i => i.companyId === cid() && new Date(i.date) >= from).forEach(i => out.push(i));
-  S.data.expenses.filter(i => i.companyId === cid() && new Date(i.date) >= from).forEach(i => out.push(i));
-  return out.sort((a, b) => new Date(b.date) - new Date(a.date));
-}
-on('fin.p', ds => { fin.period = +ds.v; rr(); });
+on('fin.p', ds => { fin.preset = +ds.v; fin.from = fin.to = null; rr(); });
+on('fin.custom', () => periodPicker(fin, rr));
+on('fin.g', ds => { fin.group = ds.v || null; rr(); });
+on('fin.del', async ds => {
+  const ok = await confirmSheet({ title: 'Удалить операцию?', text: 'Она исчезнет из расчёта прибыли.', ok: 'Удалить', danger: true });
+  if (!ok) return;
+  removeMoney(ds.id); toast('Операция удалена', 'dan');
+});
+
+/* Разовый доход или расход — с выбором категории и даты */
 on('fin.add', ds => {
-  const isInc = ds.t === 'income';
-  const CATS = isInc ? ['Продажа товара', 'Сертификат', 'Прочее'] : ['Аренда', 'Материалы', 'Зарплата', 'Реклама', 'Коммунальные', 'Прочее'];
-  const st = { cat: CATS[0] };
-  const s = sheet({
-    title: isInc ? 'Новый доход' : 'Новый расход',
-    body: `<div class="field"><label>Сумма, ₸</label><input class="inp" id="_a" inputmode="numeric" placeholder="0"></div>
-      <div class="field"><label>Категория</label><div class="pick">${CATS.map((c, i) => `<button class="o ${i === 0 ? 'on' : ''}" data-a="fa.cat" data-c="${esc(c)}">${c}</button>`).join('')}</div></div>
-      <div class="field"><label>Комментарий</label><input class="inp" id="_n" placeholder="Необязательно"></div>`,
-    footer: `<button class="btn ${isInc ? 'ok' : 'p'}" data-a="fa.ok" data-t="${ds.t}">Добавить</button>`,
-  });
-  window.__fa = { s, st };
-  on('fa.cat', (d2, el) => { st.cat = d2.c; s.el.querySelectorAll('[data-a="fa.cat"]').forEach(o => o.classList.toggle('on', o === el)); });
-  on('fa.ok', d2 => {
-    const a = +s.el.querySelector('#_a').value;
-    if (!a) { toast('Введите сумму', 'dan'); return; }
-    addMoney({ type: d2.t, amount: a, cat: st.cat, note: s.el.querySelector('#_n').value.trim() });
-    s.close(); toast(d2.t === 'income' ? 'Доход добавлен' : 'Расход добавлен');
-  });
-  setTimeout(() => s.el.querySelector('#_a').focus(), 250);
+  const type = ds.t;
+  const st = { cat: Object.keys(finCats(type))[0], date: startOfDay(now()), amount: '', note: '', picking: false, month: startOfDay(now()) };
+  const s = sheet({ title: '', body: '' });
+  const capture = () => {
+    const a = s.el.querySelector('#_a'), n = s.el.querySelector('#_n');
+    if (a) st.amount = a.value; if (n) st.note = n.value;
+  };
+  const draw = () => {
+    const list = finCats(type);
+    s.set({
+      title: st.picking ? 'Когда?' : (type === 'income' ? 'Новый доход' : 'Новый расход'),
+      back: st.picking ? () => { st.picking = false; draw(); } : null,
+      body: st.picking
+        ? monthGrid(st.month, { selected: st.date, action: 'fa.pick', navAction: 'fa.month', showCounts: false })
+        : `<div class="field"><label>Сумма, ₸</label><input class="inp" id="_a" inputmode="numeric" placeholder="0" value="${esc(st.amount)}"></div>
+      <div class="field"><label>Категория</label>
+        <div class="pick">
+          ${Object.entries(list).map(([k, v]) => `<button class="o ${st.cat === k ? 'on' : ''}" data-a="fa.cat" data-c="${k}"
+            style="${st.cat === k ? 'background:' + v.color + '1f;color:' + v.color + ';border-color:' + v.color : ''}">${esc(v.t)}</button>`).join('')}
+          <button class="o" data-a="fa.newCat" style="border-style:dashed">${icon('plus', 13)} Своя</button>
+        </div>
+      </div>
+      <div class="field"><label>Дата</label>
+        <button class="card flat press" style="width:100%;padding:12px 14px;text-align:left" data-a="fa.date">
+          <div class="b">${dateFull(st.date)}${dayKey(st.date) === dayKey(now()) ? ' · сегодня' : ''}</div></button></div>
+      <div class="field"><label>Комментарий</label><input class="inp" id="_n" placeholder="Необязательно" value="${esc(st.note)}"></div>
+      <button class="btn gh sm" style="width:100%" data-a="fa.toRec">${icon('refresh', 16)}Сделать регулярным</button>`,
+      footer: st.picking ? '' : `<button class="btn ${type === 'income' ? 'ok' : 'p'}" data-a="fa.ok" data-t="${type}">Добавить</button>`,
+    });
+  };
+  window.__fa = { s, st, draw, capture, type };
+  draw();
+  setTimeout(() => { const i = s.el.querySelector('#_a'); if (i) i.focus(); }, 250);
+});
+on('fa.cat', ds => { const f = window.__fa; f.capture(); f.st.cat = ds.c; f.draw(); });
+on('fa.newCat', async () => {
+  const f = window.__fa; f.capture();
+  const v = await promptSheet({ title: 'Новая категория', label: 'Название', placeholder: 'Например, Обучение' });
+  if (!v) { f.draw(); return; }
+  const key = addFinCat(f.type, v);
+  if (key) f.st.cat = key;
+  f.draw(); toast('Категория добавлена');
+});
+on('fa.date', () => { const f = window.__fa; f.capture(); f.st.picking = true; f.st.month = startOfDay(f.st.date); f.draw(); });
+on('fa.month', ds => { const f = window.__fa; f.st.month = startOfDay(new Date(+ds.d)); f.draw(); });
+on('fa.pick', ds => { const f = window.__fa; f.st.date = startOfDay(new Date(+ds.d)); f.st.picking = false; f.draw(); });
+on('fa.toRec', () => {
+  const f = window.__fa; f.capture();
+  f.s.close();
+  setTimeout(() => recurringSheet({ type: f.type, cat: f.st.cat, amount: f.st.amount, note: f.st.note }), 260);
+});
+on('fa.ok', ds => {
+  const f = window.__fa; f.capture();
+  const a = +f.st.amount;
+  if (!a) { toast('Введите сумму', 'dan'); return; }
+  addMoney({ type: ds.t, amount: a, cat: f.st.cat, note: f.st.note.trim(), date: f.st.date });
+  f.s.close(); toast(ds.t === 'income' ? 'Доход добавлен' : 'Расход добавлен');
+});
+
+/* Категории доходов и расходов (§85, §86) */
+on('fin.cats', () => {
+  const st = { type: 'expense' };
+  const s = sheet({ title: 'Категории', body: '' });
+  const draw = () => {
+    const list = finCats(st.type);
+    const own = (co().finCats || {})[st.type] || {};
+    s.set({
+      title: 'Категории',
+      body: `
+        <div style="margin-bottom:14px">${segmented('fc.type', [{ v: 'expense', t: 'Расходы' }, { v: 'income', t: 'Доходы' }], st.type)}</div>
+        <div class="stack s">${Object.entries(list).map(([k, v]) => {
+        const n = (st.type === 'income' ? S.data.incomes : S.data.expenses).filter(x => x.companyId === cid() && x.cat === k).length;
+        return `<div class="lrow" style="border-radius:14px;border:1px solid var(--bd)">
+            <div class="tint" style="background:${v.color}1f;color:${v.color}">${icon(st.type === 'income' ? 'trendUp' : 'trendDown', 18)}</div>
+            <div class="grow"><div class="tl">${esc(v.t)}</div>
+              <div class="st">${n} ${plural(n, ['операция', 'операции', 'операций'])}</div></div>
+            ${own[k] ? `<button class="ico-btn flat" data-a="fc.ren" data-k="${k}">${icon('pencil', 16)}</button>
+                        <button class="ico-btn flat" data-a="fc.del" data-k="${k}">${icon('trash', 16)}</button>` : '<span class="bdg">базовая</span>'}
+          </div>`;
+      }).join('')}</div>
+        <div class="tiny dim" style="margin-top:10px">Свои категории можно переименовать и удалить — операции при этом перейдут в «Прочее».</div>`,
+      footer: `<button class="btn p" data-a="fc.add">${icon('plus', 17)}Новая категория</button>`,
+    });
+  };
+  window.__fc = { s, st, draw };
+  draw();
+});
+on('fc.type', ds => { window.__fc.st.type = ds.v; window.__fc.draw(); });
+on('fc.add', async () => {
+  const f = window.__fc;
+  const v = await promptSheet({ title: 'Новая категория', label: 'Название', placeholder: 'Например, Обучение' });
+  if (!v) return;
+  addFinCat(f.st.type, v); f.draw(); toast('Категория добавлена');
+});
+on('fc.ren', async ds => {
+  const f = window.__fc;
+  const v = await promptSheet({ title: 'Переименовать', label: 'Название', value: finCatName(f.st.type, ds.k) });
+  if (!v) return;
+  renameFinCat(f.st.type, ds.k, v); f.draw(); toast('Переименовано');
+});
+on('fc.del', async ds => {
+  const f = window.__fc;
+  const ok = await confirmSheet({ title: 'Удалить категорию?', text: 'Операции этой категории перейдут в «Прочее». Суммы сохранятся.', ok: 'Удалить', danger: true });
+  if (!ok) return;
+  removeFinCat(f.st.type, ds.k); f.draw(); toast('Категория удалена', 'dan');
+});
+
+/* Регулярные платежи (§87–§90) */
+export function recurringSheet(pre = {}) {
+  const editing = pre.id ? recurring().find(r => r.id === pre.id) : null;
+  const st = {
+    type: editing ? editing.type : (pre.type || 'expense'),
+    cat: editing ? editing.cat : (pre.cat || Object.keys(finCats(pre.type || 'expense'))[0]),
+    amount: editing ? String(editing.amount) : String(pre.amount || ''),
+    note: editing ? editing.note : (pre.note || ''),
+    every: editing ? editing.every : 'month',
+    from: editing ? startOfDay(new Date(editing.from)) : startOfDay(now()),
+    to: editing && editing.to ? startOfDay(new Date(editing.to)) : null,
+    hasEnd: !!(editing && editing.to),
+    picking: null, month: startOfDay(now()),
+  };
+  const s = sheet({ title: '', body: '' });
+  const capture = () => {
+    const a = s.el.querySelector('#_ra'), n = s.el.querySelector('#_rn');
+    if (a) st.amount = a.value; if (n) st.note = n.value;
+  };
+  const draw = () => {
+    const list = finCats(st.type);
+    s.set({
+      title: st.picking ? (st.picking === 'from' ? 'Начиная с какого дня?' : 'До какого дня?') : (editing ? 'Регулярный платёж' : 'Новый регулярный платёж'),
+      back: st.picking ? () => { st.picking = null; draw(); } : null,
+      body: st.picking
+        ? monthGrid(st.month, {
+          selected: st.picking === 'from' ? st.from : (st.to || st.from),
+          action: 'rc.pick', navAction: 'rc.month',
+          minDate: st.picking === 'to' ? st.from : null, showCounts: false,
+        })
+        : `
+      <div style="margin-bottom:14px">${segmented('rc.type', [{ v: 'expense', t: 'Расход' }, { v: 'income', t: 'Доход' }], st.type)}</div>
+      <div class="field"><label>Сумма, ₸</label><input class="inp" id="_ra" inputmode="numeric" placeholder="0" value="${esc(st.amount)}"></div>
+      <div class="field"><label>Категория</label>
+        <div class="pick">${Object.entries(list).map(([k, v]) => `<button class="o ${st.cat === k ? 'on' : ''}" data-a="rc.cat" data-c="${k}"
+          style="${st.cat === k ? 'background:' + v.color + '1f;color:' + v.color + ';border-color:' + v.color : ''}">${esc(v.t)}</button>`).join('')}</div></div>
+      <div class="field"><label>Как часто</label>
+        <div class="pick">${Object.entries(REPEAT).map(([k, v]) => `<button class="o ${st.every === k ? 'on' : ''}" data-a="rc.every" data-k="${k}">${v.t}</button>`).join('')}</div></div>
+      <div class="field"><label>Начало</label>
+        <button class="card flat press" style="width:100%;padding:12px 14px;text-align:left" data-a="rc.from">
+          <div class="b">${dateFull(st.from)}</div></button></div>
+      <div class="lrow" style="border-radius:14px;border:1px solid var(--bd);margin-bottom:${st.hasEnd ? '10' : '14'}px">
+        <div class="grow"><div class="tl">Есть дата окончания</div><div class="st">Например, реклама на три месяца</div></div>
+        <button class="sw ${st.hasEnd ? 'on' : ''}" data-a="rc.hasEnd"></button></div>
+      ${st.hasEnd ? `<div class="field"><label>Окончание</label>
+        <button class="card flat press" style="width:100%;padding:12px 14px;text-align:left" data-a="rc.to">
+          <div class="b">${st.to ? dateFull(st.to) : 'Выберите дату'}</div></button></div>` : ''}
+      <div class="field"><label>Комментарий</label><input class="inp" id="_rn" placeholder="Необязательно" value="${esc(st.note)}"></div>
+      <div class="tiny dim">Платёж не создаёт записи заранее — он сам попадает в расчёт каждого периода.</div>`,
+      footer: st.picking ? '' : (editing
+        ? `<div class="btns"><button class="btn dan" data-a="rc.del" data-id="${editing.id}">Удалить</button>
+             <button class="btn p" data-a="rc.ok" data-id="${editing.id}">Сохранить</button></div>`
+        : `<button class="btn p" data-a="rc.ok">Добавить</button>`),
+    });
+  };
+  window.__rc = { s, st, draw, capture, editing };
+  draw();
+  return s;
+}
+on('fin.recAdd', () => recurringSheet({}));
+on('fin.recOpen', ds => recurringSheet({ id: ds.id }));
+on('rc.type', ds => {
+  const r = window.__rc; r.capture(); r.st.type = ds.v;
+  if (!finCats(ds.v)[r.st.cat]) r.st.cat = Object.keys(finCats(ds.v))[0];
+  r.draw();
+});
+on('rc.cat', ds => { const r = window.__rc; r.capture(); r.st.cat = ds.c; r.draw(); });
+on('rc.every', ds => { const r = window.__rc; r.capture(); r.st.every = ds.k; r.draw(); });
+on('rc.from', () => { const r = window.__rc; r.capture(); r.st.picking = 'from'; r.st.month = startOfDay(r.st.from); r.draw(); });
+on('rc.to', () => { const r = window.__rc; r.capture(); r.st.picking = 'to'; r.st.month = startOfDay(r.st.to || r.st.from); r.draw(); });
+on('rc.hasEnd', () => {
+  const r = window.__rc; r.capture();
+  r.st.hasEnd = !r.st.hasEnd;
+  if (!r.st.hasEnd) r.st.to = null;
+  r.draw();
+});
+on('rc.month', ds => { const r = window.__rc; r.st.month = startOfDay(new Date(+ds.d)); r.draw(); });
+on('rc.pick', ds => {
+  const r = window.__rc, v = startOfDay(new Date(+ds.d));
+  if (r.st.picking === 'from') { r.st.from = v; if (r.st.to && r.st.to < v) r.st.to = v; }
+  else { r.st.to = v; r.st.hasEnd = true; }
+  r.st.picking = null; r.draw();
+});
+on('rc.del', async ds => {
+  const ok = await confirmSheet({ title: 'Удалить регулярный платёж?', text: 'Он перестанет учитываться во всех периодах.', ok: 'Удалить', danger: true });
+  if (!ok) return;
+  removeRecurring(ds.id); window.__rc.s.close(); toast('Платёж удалён', 'dan');
+});
+on('rc.ok', ds => {
+  const r = window.__rc; r.capture();
+  const a = +r.st.amount;
+  if (!a) { toast('Введите сумму', 'dan'); return; }
+  if (r.st.hasEnd && !r.st.to) { toast('Выберите дату окончания', 'dan'); return; }
+  const patch = {
+    type: r.st.type, amount: a, cat: r.st.cat, note: r.st.note.trim(), every: r.st.every,
+    from: r.st.from.toISOString(), to: r.st.hasEnd && r.st.to ? r.st.to.toISOString() : null,
+  };
+  if (ds.id) { updateRecurring(ds.id, patch); toast('Платёж обновлён'); }
+  else { addRecurring({ ...patch, from: r.st.from, to: patch.to }); toast('Регулярный платёж добавлен'); }
+  r.s.close();
 });
 
 /* =========================================================
    Аналитика
    ========================================================= */
-const an = { period: 30 };
+const an = { preset: 30, from: null, to: null, group: null };
 route('o.analytics', {
   tab: 'o.more',
   render() {
-    const s = rangeStats(an.period);
-    const series = s.series.length > 14 ? aggregate(s.series, 14) : s.series;
-    const labels = s.series.length > 14 ? [] : s.labels;
+    const { start, end } = periodRange(an);
+    const s = statsBetween(start, end, cid(), { group: an.group || 'auto' });
     const maxSvc = Math.max(1, ...s.byService.map(x => x.count));
     return `
     <div class="top"><button class="ico-btn" data-a="back">${icon('back', 19)}</button>
-      <div class="grow"><div class="top-t">Аналитика</div><div class="top-sub">за ${an.period} дней</div></div></div>
-    <div class="wrap" style="margin-bottom:14px">${segmented('an.p', [{ v: 7, t: '7 дней' }, { v: 30, t: '30 дней' }, { v: 90, t: '90 дней' }], an.period)}</div>
+      <div class="grow"><div class="top-t">Аналитика</div><div class="top-sub">${periodLabel(an)}</div></div></div>
+    <div class="wrap">${periodBar(an, 'an')}</div>
 
     <div class="wrap">
       <div class="card pad">
         <div class="row between"><div>
-          <div class="tiny muted b">ВЫРУЧКА</div>
+          <div class="tiny muted b">ВЫРУЧКА ПО ФАКТУ</div>
           <div style="font-size:26px;font-weight:780;letter-spacing:-.03em;margin-top:2px">${money(s.revenue)}</div>
+          ${s.expected ? `<div class="tiny" style="color:var(--p);font-weight:650;margin-top:2px">+ ${money(s.expected)} ожидается по будущим записям</div>` : ''}
         </div>
         <span class="bdg ${s.deltaRev >= 0 ? 'ok' : 'dan'}">${s.deltaRev >= 0 ? '↑' : '↓'} ${Math.abs(s.deltaRev)}%</span></div>
-        <div style="margin-top:12px">${bars(series, { labels: labels.length <= 14 ? labels : [], height: 110 })}</div>
+        <div style="margin-top:12px">${groupBar(an, 'an', s.group)}</div>
+        <div>${bars(s.series, { labels: s.labels.length <= 14 ? s.labels : [], height: 110 })}</div>
+        <div class="tiny dim" style="margin-top:6px">Сравнение с предыдущим таким же периодом: ${money(s.prevRevenue)}</div>
       </div>
     </div>
 
@@ -657,7 +1081,74 @@ route('o.analytics', {
     </div>`;
   },
 });
-on('an.p', ds => { an.period = +ds.v; rr(); });
+on('an.p', ds => { an.preset = +ds.v; an.from = an.to = null; rr(); });
+on('an.custom', () => periodPicker(an, rr));
+on('an.g', ds => { an.group = ds.v || null; rr(); });
+
+/* =========================================================
+   Отзывы (§80, §81)
+   Наружу не публикуются: это внутренний инструмент качества.
+   ========================================================= */
+const rvf = { emp: null, stars: 0 };
+route('o.reviews', {
+  tab: 'o.more',
+  render() {
+    let list = reviews().slice().sort((a, b) => new Date(b.createdAt || b.date) - new Date(a.createdAt || a.date));
+    const total = list.length;
+    const avg = total ? (list.reduce((s, r) => s + r.rating, 0) / total).toFixed(1) : '—';
+    const dist = [5, 4, 3, 2, 1].map(n => ({ n, c: list.filter(r => r.rating === n).length }));
+    if (rvf.emp) list = list.filter(r => r.employeeId === rvf.emp);
+    if (rvf.stars) list = list.filter(r => r.rating === rvf.stars);
+
+    return `
+    <div class="top"><button class="ico-btn" data-a="back">${icon('back', 19)}</button>
+      <div class="grow"><div class="top-t">Отзывы</div><div class="top-sub">${total} ${plural(total, ['оценка', 'оценки', 'оценок'])}</div></div></div>
+
+    ${!total ? `<div class="wrap">${emptyState({ ic: 'star', title: 'Отзывов пока нет', text: 'Клиент может оценить визит сразу после его завершения — предложение появляется у него в «Моих записях».' })}</div>` : `
+    <div class="wrap">
+      <div class="card pad row" style="gap:18px;align-items:center">
+        <div class="center" style="flex:none">
+          <div style="font-size:38px;font-weight:800;letter-spacing:-.04em;line-height:1">${avg}</div>
+          <div class="row" style="gap:2px;color:#F5A524;margin-top:4px">${[1, 2, 3, 4, 5].map(n => icon('star', 13, 2.4)).join('')}</div>
+          <div class="tiny dim" style="margin-top:4px">${total} ${plural(total, ['отзыв', 'отзыва', 'отзывов'])}</div>
+        </div>
+        <div class="grow stack" style="gap:5px">
+          ${dist.map(d => `<div class="row" style="gap:8px;align-items:center">
+            <span class="tiny dim" style="width:10px">${d.n}</span>
+            <div class="grow">${progress(d.c / Math.max(1, total) * 100, '#F5A524')}</div>
+            <span class="tiny dim" style="width:22px;text-align:right">${d.c}</span>
+          </div>`).join('')}
+        </div>
+      </div>
+    </div>
+
+    <div class="chips" style="margin-top:14px">
+      <button class="chip ${!rvf.emp && !rvf.stars ? 'on' : ''}" data-a="rvf.all">Все</button>
+      ${[5, 4, 3, 2, 1].filter(n => dist.find(d => d.n === n).c).map(n => `<button class="chip ${rvf.stars === n ? 'on' : ''}" data-a="rvf.stars" data-n="${n}">${n} ${icon('star', 11, 2.4)}</button>`).join('')}
+      ${staff().map(e => `<button class="chip ${rvf.emp === e.id ? 'on' : ''}" data-a="rvf.emp" data-id="${e.id}">${esc(e.name.split(' ')[0])}</button>`).join('')}
+    </div>
+
+    <div class="wrap stack s" style="margin-top:12px">
+      ${list.length ? list.slice(0, 40).map(r => {
+      const cl = client(r.clientId), e = emp(r.employeeId), a = r.apptId ? appts().find(x => x.id === r.apptId) : null;
+      return `<div class="card pad">
+          <div class="row" style="gap:10px;align-items:center;margin-bottom:8px">
+            ${avatar(cl || { initials: '?' }, 's')}
+            <div class="grow"><div class="b sm">${esc(cl ? cl.name : 'Клиент')}</div>
+              <div class="tiny muted">${esc(e ? e.name.split(' ')[0] : '')}${a ? ' · ' + esc(apptTitle(a)) : ''}</div></div>
+            <div class="row" style="gap:1px;color:#F5A524;flex:none">${Array.from({ length: r.rating }, () => icon('star', 13, 2.4)).join('')}</div>
+          </div>
+          ${r.text ? `<div class="sm" style="line-height:1.5;color:var(--tx-2)">${esc(r.text)}</div>` : '<div class="tiny dim">Без комментария</div>'}
+          <div class="tiny dim" style="margin-top:8px">${relPast(new Date(r.createdAt || r.date), now())}</div>
+        </div>`;
+    }).join('') : `<div class="card pad center sm muted">По этому фильтру отзывов нет</div>`}
+    </div>
+    <div class="wrap sec"><div class="tiny dim center">Отзывы видны только вам: на странице записи они не публикуются.</div></div>`}`;
+  },
+});
+on('rvf.all', () => { rvf.emp = null; rvf.stars = 0; rr(); });
+on('rvf.stars', ds => { rvf.stars = rvf.stars === +ds.n ? 0 : +ds.n; rr(); });
+on('rvf.emp', ds => { rvf.emp = rvf.emp === ds.id ? null : ds.id; rr(); });
 
 /* =========================================================
    Рассылки
@@ -869,13 +1360,20 @@ route('o.settings', {
       <div class="grow"><div class="top-t">Настройки</div></div></div>
 
     <div class="wrap sec" style="margin-top:4px">
-      <div class="card pad row" style="gap:14px">
-        <div class="av l av-sq" style="background:${c.color === '#0D1220' ? 'var(--tx)' : c.color}">${esc(c.initials)}</div>
-        <div class="grow"><div class="b" style="font-size:16px">${esc(c.name)}</div>
-          <div class="sm muted">${esc(c.cat)} · ${esc(c.city)}</div></div>
-        <button class="ico-btn" data-a="set.company">${icon('pencil', 17)}</button>
+      <div class="card" style="padding:0;overflow:hidden">
+        ${c.cover ? `<div class="cover" style="background-image:url('${c.cover}')"></div>` : ''}
+        <div class="pad row" style="gap:14px">
+          ${avatar({ initials: c.initials, color: c.color === '#0D1220' ? '#2B3340' : c.color, photo: c.logo }, 'l', 'av-sq')}
+          <div class="grow"><div class="b" style="font-size:16px">${esc(c.name)}</div>
+            <div class="sm muted">${esc(c.cat)} · ${esc(c.city)}</div></div>
+          <button class="ico-btn" data-a="set.company">${icon('pencil', 17)}</button>
+        </div>
       </div>
     </div>
+
+    <div class="wrap sec"><div class="stack s">
+      ${row('image', 'Фото и логотип', c.logo || c.cover ? 'Показываются на странице записи' : 'Пока не загружены', 'set.photos')}
+    </div></div>
 
     <div class="wrap sec"><div class="stack s">
       ${row('clock', 'Часы работы', 'Когда принимаете клиентов', 'set.hours')}
@@ -931,6 +1429,43 @@ on('set.companySave', () => {
   c.initials = c.name.split(' ').filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase();
   emit(); s.close(); toast('Сохранено');
 });
+
+/* Фото и логотип компании (§32, §33) */
+on('set.photos', () => {
+  const s = sheet({ title: 'Фото и логотип', body: '' });
+  const draw = () => {
+    const c = co();
+    s.set({
+      title: 'Фото и логотип',
+      body: `
+        ${photoField({
+        src: c.logo, label: 'Логотип', actPick: 'ph.logo', actDel: 'ph.logoDel', round: false,
+        hint: 'Квадратный. Показывается в шапке кабинета и на странице записи.',
+      })}
+        ${photoField({
+        src: c.cover, label: 'Фото салона', actPick: 'ph.cover', actDel: 'ph.coverDel',
+        hint: 'Широкое фото интерьера — станет обложкой страницы записи.',
+      })}
+        <div class="tiny dim">Изображения хранятся прямо в браузере и уменьшаются автоматически,
+        поэтому даже большая фотография с телефона не замедлит приложение.</div>`,
+    });
+  };
+  window.__ph = { s, draw };
+  draw();
+});
+on('ph.logo', async () => {
+  const v = await pickImage(IMG_MAX.logo);
+  if (!v) return;
+  co().logo = v; emit(); window.__ph.draw(); toast('Логотип загружен');
+});
+on('ph.logoDel', () => { co().logo = null; emit(); window.__ph.draw(); toast('Логотип удалён', 'dan'); });
+on('ph.cover', async () => {
+  const v = await pickImage(IMG_MAX.photo);
+  if (!v) return;
+  co().cover = v; emit(); window.__ph.draw(); toast('Фото загружено');
+});
+on('ph.coverDel', () => { co().cover = null; emit(); window.__ph.draw(); toast('Фото удалено', 'dan'); });
+
 on('set.hours', () => {
   const s = sheet({ title: 'Часы работы', body: '' });
   const draw = () => {
@@ -956,6 +1491,7 @@ on('set.hours', () => {
           </div>` : ''}
         </div>`;
       }).join('')}</div>
+      ${conflictsCard()}
       <div class="tiny dim" style="margin-top:10px">
         У каждого дня своё время — сокращённые суббота и воскресенье настраиваются здесь.
         Индивидуальный график мастера задаётся в его карточке и не может выходить за эти рамки.
@@ -966,6 +1502,50 @@ on('set.hours', () => {
   window.__ch = { s, draw };
   draw();
 });
+/* §37 — часы салона главнее личного графика: если мастер выставлен шире,
+   лишнее время всё равно не будет доступно для записи. Молча резать нельзя,
+   иначе владелец не поймёт, куда делись слоты, — поэтому предупреждаем. */
+function conflictsCard() {
+  const list = scheduleConflicts();
+  if (!list.length) return '';
+  const byEmp = {};
+  list.forEach(x => { (byEmp[x.emp.id] = byEmp[x.emp.id] || { e: x.emp, days: [] }).days.push(x); });
+  const rows = Object.values(byEmp).slice(0, 6);
+  return `<div class="card pad" style="margin-top:14px;background:var(--warn-soft);border-color:transparent">
+    <div class="row" style="gap:8px;color:var(--warn);margin-bottom:8px">${icon('alert', 18)}
+      <b class="sm">График шире, чем часы салона</b></div>
+    <div class="stack" style="gap:6px">
+      ${rows.map(r => `<div class="sm" style="color:var(--tx-2)">
+        <b>${esc(r.e.name.split(' ')[0])}</b> — ${r.days.map(d => WD[d.day] + (d.kind === 'closed' ? ' (салон закрыт)' : ' ' + d.empFrom + '–' + d.empTo)).join(', ')}
+      </div>`).join('')}
+    </div>
+    <div class="tiny" style="margin-top:8px;color:var(--tx-2)">
+      Записи принимаются только внутри часов салона. Поправьте график мастера или расширьте часы.
+    </div>
+    <button class="btn xs gh" style="margin-top:10px;width:auto" data-a="ch.fix">${icon('check', 14)}Подогнать графики под салон</button>
+  </div>`;
+}
+on('ch.fix', async () => {
+  const list = scheduleConflicts();
+  const ok = await confirmSheet({
+    title: 'Подогнать графики?',
+    text: `У ${Object.keys(list.reduce((m, x) => (m[x.emp.id] = 1, m), {})).length} мастеров время выйдет ровно в рамки салона. Выходные и перерывы останутся как есть.`,
+    ok: 'Подогнать',
+  });
+  if (!ok) return;
+  const c = co();
+  emps().forEach(e => {
+    for (let d = 0; d < 7; d++) {
+      const w = e.schedule && e.schedule[d]; const ch = c.hours[d];
+      if (!w || !w.on) continue;
+      if (!ch || !ch.on) { w.on = false; continue; }
+      if (toMin(w.from) < toMin(ch.from)) w.from = ch.from;
+      if (toMin(w.to) > toMin(ch.to)) w.to = ch.to;
+    }
+  });
+  emit(); window.__ch.draw(); toast('Графики подогнаны под часы салона');
+});
+
 on('ch.day', ds => {
   const c = co(); c.hours[ds.d].on = !c.hours[ds.d].on; emit();
   window.__ch.draw();

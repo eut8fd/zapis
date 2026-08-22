@@ -3,12 +3,13 @@
 import {
   S, co, cid, emp, emps, staff, svc, svcs, client, clients, appt, appts, apptTitle, apptColor, apptEnd,
   now, today, slotsFor, slotFree, toMin, toHM, createAppointment, cancelAppointment, completeAppointment,
-  moveAppointment, createClient, createService, addBlock, addAbsence, ABSENCE, clientStats, updateClient,
-  nextFreeFor, workDay, cats, addCat,
+  moveAppointment, createClient, createService, updateService, addBlock, addAbsence, ABSENCE, clientStats, updateClient,
+  nextFreeFor, workDay, workWindow, cats, addCat, addReview, reviewFor,
 } from './store.js';
 import {
   sheet, toast, confirmSheet, esc, money, hhmm, dateLabel, dateFull, nMin, avatar, WD, dayKey,
   startOfDay, addDays, emptyState, promptSheet, wait, loadingBlock, relPast, plural, monthGrid,
+  pickImage, photoField, IMG_MAX,
 } from './ui.js';
 import { icon, catIcon } from './icons.js';
 import { on } from './bus.js';
@@ -379,7 +380,8 @@ export function blockFlow(pre = {}) {
 
   const draw = () => {
     const e = emp(st.empId);
-    const w = e ? workDay(e, st.date) : null;
+    // окно с учётом часов салона — блокировать время, когда салон закрыт, незачем
+    const w = e ? workWindow(e, st.date) : null;
     const dayFrom = w ? toMin(w.from) : 9 * 60, dayTo = w ? toMin(w.to) : 20 * 60;
     if (st.allDay) { st.from = dayFrom; st.to = dayTo; }
     const endMin = st.custom || st.allDay ? st.to : st.from + st.len;
@@ -546,12 +548,14 @@ export function addClientSheet(after) {
 
 export function addServiceSheet(pre = {}) {
   const st = {
-    emps: staff().map(e => e.id),
+    // pre.only — услуга создаётся из карточки мастера и закрепляется за ним (§72)
+    emps: pre.only && pre.only.length ? pre.only.slice() : staff().map(e => e.id),
     cat: pre.cat || Object.keys(cats())[0] || 'nails',
     dur: pre.duration || 60,
     custom: false,
     name: pre.name || '',
     price: pre.price || '',
+    photo: null,
   };
   const s = sheet({ title: 'Новая услуга', body: '' });
 
@@ -593,7 +597,12 @@ export function addServiceSheet(pre = {}) {
       <div class="field"><label>Кто выполняет</label>
         <div class="pick">${staff().map(e => `<button class="o ${st.emps.includes(e.id) ? 'on' : ''}" data-a="as.emp" data-id="${e.id}">${esc(e.name.split(' ')[0])}</button>`).join('')}</div>
       </div>
-      <div class="tiny dim">Описание, фото и буферное время можно настроить после создания.</div>`,
+
+      ${photoField({
+        src: st.photo, label: 'Фотография услуги', actPick: 'as.photo', actDel: 'as.photoDel',
+        hint: 'Клиент увидит её при выборе услуги. Необязательно.',
+      })}
+      <div class="tiny dim">Описание и буферное время можно настроить после создания.</div>`,
       footer: `<button class="btn p" data-a="as.ok">Создать услугу</button>`,
     });
   };
@@ -615,6 +624,13 @@ export function addServiceSheet(pre = {}) {
     if (key) st.cat = key;
     draw(); toast('Категория добавлена');
   });
+  on('as.photo', async () => {
+    capture();
+    const v = await pickImage(IMG_MAX.photo);
+    if (!v) { draw(); return; }
+    st.photo = v; draw(); toast('Фотография добавлена');
+  });
+  on('as.photoDel', () => { capture(); st.photo = null; draw(); });
   on('as.ok', () => {
     capture();
     const n = (st.name || '').trim();
@@ -622,6 +638,7 @@ export function addServiceSheet(pre = {}) {
     if (!n) { toast('Введите название', 'dan'); return; }
     if (st.dur < 5) { toast('Укажите длительность', 'dan'); return; }
     const sv = createService({ name: n, price, duration: st.dur, employeeIds: st.emps, cat: st.cat });
+    if (st.photo) updateService(sv.id, { photo: st.photo });
     s.close(); toast('Услуга добавлена');
     if (pre.after) pre.after(sv);
   });
@@ -630,6 +647,54 @@ export function addServiceSheet(pre = {}) {
   setTimeout(() => { const i = s.el.querySelector('#_n'); if (i) i.focus(); }, 250);
   return s;
 }
+
+/* =========================================================
+   Оценка визита клиентом (§80, §81)
+   Результат остаётся внутри системы: на страницу записи
+   отзывы не выводятся, их видит только бизнес.
+   ========================================================= */
+export function reviewSheet(apptId, opts = {}) {
+  const a = appt(apptId); if (!a) return;
+  if (reviewFor(apptId)) { toast('Вы уже оценили этот визит'); return; }
+  const e = emp(a.employeeId);
+  const st = { rating: 0, text: '' };
+  const s = sheet({ title: 'Как всё прошло?', body: '' });
+
+  const LABELS = ['', 'Плохо', 'Так себе', 'Нормально', 'Хорошо', 'Отлично'];
+  const capture = () => { const t = s.el.querySelector('#_rv'); if (t) st.text = t.value; };
+
+  const draw = () => {
+    s.set({
+      title: 'Как всё прошло?',
+      body: `
+        <div class="card flat" style="padding:12px 14px;margin-bottom:16px;display:flex;gap:12px;align-items:center">
+          ${avatar(e, 'm')}
+          <div class="grow"><div class="b sm">${esc(apptTitle(a))}</div>
+            <div class="tiny muted">${esc(e ? e.name : '')} · ${dateLabel(new Date(a.start), now())}</div></div>
+        </div>
+        <div class="center" style="margin-bottom:6px">
+          <div class="stars">${[1, 2, 3, 4, 5].map(n => `<button class="star ${st.rating >= n ? 'on' : ''}" data-a="rv.set" data-n="${n}">${icon('star', 34, 1.6)}</button>`).join('')}</div>
+          <div class="sm ${st.rating ? 'b' : 'dim'}" style="margin-top:8px;height:20px">${st.rating ? LABELS[st.rating] : 'Нажмите на звёзды'}</div>
+        </div>
+        <div class="field"><label>Комментарий (необязательно)</label>
+          <textarea class="inp" id="_rv" placeholder="Что понравилось или что стоит улучшить">${esc(st.text)}</textarea></div>
+        <div class="tiny dim">Оценку видит только салон — публично она нигде не показывается.</div>`,
+      footer: `<button class="btn p" data-a="rv.ok" ${st.rating ? '' : 'disabled'}>Отправить отзыв</button>`,
+    });
+  };
+  on('rv.set', ds => { capture(); st.rating = +ds.n; haptic('select'); draw(); });
+  on('rv.ok', () => {
+    capture();
+    if (!st.rating) { toast('Поставьте оценку', 'dan'); return; }
+    addReview({ apptId, rating: st.rating, text: st.text, companyId: a.companyId });
+    s.close();
+    toast('Спасибо за отзыв!');
+    if (opts.after) opts.after();
+  });
+  draw();
+  return s;
+}
+on('rv.open', ds => reviewSheet(ds.id));
 
 /* =========================================================
    Голосовая AI-заметка

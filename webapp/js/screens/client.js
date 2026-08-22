@@ -1,7 +1,7 @@
 ﻿import {
   S, co, cid, emp, emps, staff, svc, svcs, client, clients, appt, appts, apptTitle, apptColor, apptEnd,
   now, today, slotsFor, nextFreeFor, createAppointment, cancelAppointment, clientStats, clientAppts,
-  reviews, toHM, moveAppointment, updateClient, emit,
+  reviews, toHM, moveAppointment, updateClient, emit, reviewFor, pendingReviews,
 } from '../store.js';
 import {
   esc, money, moneyShort, hhmm, dateLabel, dateFull, relPast, avatar, emptyState, sheet, toast,
@@ -13,10 +13,18 @@ import { route, go, render, resetStack } from '../router.js';
 import { on } from '../bus.js';
 import { haptic, openLink, tgClose, copy } from '../tg.js';
 import { BOT_USERNAME } from '../config.js';
-import { dateStrip } from '../flows.js';
+import { dateStrip, reviewSheet } from '../flows.js';
 
 const rr = () => render(false);
 const my = () => client(S.session.clientId) || clients()[0];
+
+/** Стаж мастера для клиента — только если владелец разрешил показ (§68). */
+function expLine(e) {
+  if (!e || !e.since || e.showExp === false) return '';
+  const y = Math.max(0, now().getFullYear() - e.since);
+  if (!y) return '';
+  return `<div class="tiny dim nowrap">опыт ${y} ${plural(y, ['год', 'года', 'лет'])}</div>`;
+}
 
 /* =========================================================
    Страница компании (клиент)
@@ -31,9 +39,11 @@ route('cl.company', {
     const st = me ? clientStats(me.id) : { next: null, visits: 0 };
 
     return `
-    <div class="pub-hero" style="background:linear-gradient(160deg,${c.color === '#0D1220' ? '#2B3340' : c.color} 0%,#6D5BF6 100%)">
+    ${c.cover ? `<div class="cover" style="background-image:url('${c.cover}');border-radius:0 0 6px 6px"></div>` : ''}
+    <div class="pub-hero" style="background:linear-gradient(160deg,${c.color === '#0D1220' ? '#2B3340' : c.color} 0%,#6D5BF6 100%)${c.cover ? ';margin-top:-14px;border-radius:22px 22px 28px 28px;padding-top:18px' : ''}">
       <div class="row between">
-        <div class="av l av-sq" style="background:rgba(255,255,255,.22);backdrop-filter:blur(6px)">${esc(c.initials)}</div>
+        ${c.logo ? `<div class="av l av-sq av-photo" style="background-image:url('${c.logo}')"></div>`
+        : `<div class="av l av-sq" style="background:rgba(255,255,255,.22);backdrop-filter:blur(6px)">${esc(c.initials)}</div>`}
         <button class="ico-btn flat" style="color:#fff" data-a="cl.share">${icon('share', 19)}</button>
       </div>
       <div class="nm">${esc(c.name)}</div>
@@ -66,7 +76,8 @@ route('cl.company', {
         <button class="sec-a" data-a="cl.start">Все ${svcs().length} ${icon('fwd', 14, 2.4)}</button></div>
       <div class="wrap stack s">
         ${list.map(s => `<button class="svc press" style="width:100%" data-a="cl.startSvc" data-id="${s.id}">
-          <div class="tint" style="background:${s.color}1f;color:${s.color}">${catIcon(s.cat, 18)}</div>
+          ${s.photo ? `<div class="svc-ph" style="background-image:url('${s.photo}')"></div>`
+        : `<div class="tint" style="background:${s.color}1f;color:${s.color}">${catIcon(s.cat, 18)}</div>`}
           <div class="grow" style="text-align:left"><div class="b" style="font-size:14.5px">${esc(s.name)}</div>
             <div class="tiny muted">${nMin(s.duration)}</div></div>
           <div class="pr">${money(s.price)}</div>
@@ -83,6 +94,7 @@ route('cl.company', {
             ${avatar(e, 'l', '')}
             <div class="b sm" style="margin-top:8px">${esc(e.name.split(' ')[0])}</div>
             <div class="tiny muted nowrap">${esc(e.role)}</div>
+            ${expLine(e)}
             <div class="tiny" style="color:var(--ok);font-weight:650;margin-top:4px">${nf ? (dayKey(nf.date) === dayKey(now()) ? 'сегодня ' : dayKey(nf.date) === dayKey(addDays(today(), 1)) ? 'завтра ' : nf.date.getDate() + ' ' + MONTHS[nf.date.getMonth()].slice(0, 3) + ' ') + nf.slot.t : 'нет мест'}</div>
           </button>`;
     }).join('')}
@@ -195,10 +207,11 @@ function step1() {
       <div class="sec-h"><div class="sec-t" style="font-size:13px;color:var(--tx-3);text-transform:uppercase;letter-spacing:.05em">${CATN[cat] || 'Услуги'}</div></div>
       <div class="wrap stack s">
         ${byCat[cat].map(s => `<button class="svc press" style="width:100%" data-a="bk.svc" data-id="${s.id}">
-          <div class="tint" style="background:${s.color}1f;color:${s.color}">${catIcon(s.cat, 18)}</div>
+          ${s.photo ? `<div class="svc-ph" style="background-image:url('${s.photo}')"></div>`
+        : `<div class="tint" style="background:${s.color}1f;color:${s.color}">${catIcon(s.cat, 18)}</div>`}
           <div class="grow" style="text-align:left">
             <div class="b" style="font-size:14.5px">${esc(s.name)}</div>
-            <div class="tiny muted">${nMin(s.duration)}</div>
+            <div class="tiny muted">${nMin(s.duration)}${s.desc ? ' · ' + esc(s.desc.slice(0, 40)) : ''}</div>
           </div>
           <div class="pr">${money(s.price)}</div>
           <span class="chev">${icon('fwd', 17, 2)}</span>
@@ -221,7 +234,7 @@ function step2() {
     return `<button class="lrow press" style="border-radius:18px;border:1px solid var(--bd);width:100%;padding:13px 14px" data-a="bk.emp" data-id="${e.id}">
           ${avatar(e, 'm')}
           <div class="grow" style="text-align:left">
-            <div class="tl">${esc(e.name)}</div><div class="st">${esc(e.role)}</div>
+            <div class="tl">${esc(e.name)}</div><div class="st">${esc(e.role)}${e.since && e.showExp !== false ? ' · опыт ' + Math.max(0, now().getFullYear() - e.since) + ' ' + plural(Math.max(0, now().getFullYear() - e.since), ['год', 'года', 'лет']) : ''}</div>
             ${nf ? `<div class="tiny" style="color:var(--ok);font-weight:650;margin-top:3px">${icon('clock', 11, 2.4)} ближайшее — ${dateLabel(nf.date, now()).toLowerCase()}, ${nf.slot.t}</div>` : '<div class="tiny dim" style="margin-top:3px">нет свободного времени</div>'}
           </div>
 
@@ -387,9 +400,20 @@ route('cl.my', {
     const all = clientAppts(me.id);
     const up = all.filter(a => a.status === 'planned' && new Date(a.start) > now()).sort((a, b) => new Date(a.start) - new Date(b.start));
     const past = all.filter(a => !(a.status === 'planned' && new Date(a.start) > now()));
+    const wait2 = pendingReviews(me.id)[0];
     return `
     <div class="top"><div class="grow"><div class="top-t">Мои записи</div><div class="top-sub">${esc(co().name)}</div></div>
       <button class="ico-btn p" data-a="cl.start">${icon('plus', 19)}</button></div>
+
+    ${wait2 ? `<div class="wrap" style="margin-top:6px">
+      <button class="card press" style="width:100%;padding:14px;display:flex;gap:12px;align-items:center;text-align:left;border-color:#F5A524"
+        data-a="rv.open" data-id="${wait2.id}">
+        <div class="tint" style="background:rgba(245,165,36,.14);color:#F5A524;width:44px;height:44px">${icon('star', 21)}</div>
+        <div class="grow"><div class="b">Как прошёл визит?</div>
+          <div class="sm muted nowrap">${esc(apptTitle(wait2))} · ${relPast(new Date(wait2.start), now())}</div></div>
+        ${icon('fwd', 18)}
+      </button>
+    </div>` : ''}
 
     ${up.length ? `<div class="sec" style="margin-top:6px">
       <div class="sec-h"><div class="sec-t">Предстоящие</div></div>
@@ -405,6 +429,7 @@ route('cl.my', {
 function card(a, active) {
   const e = emp(a.employeeId), d = new Date(a.start);
   const st = a.status;
+  const rv = st === 'done' ? reviewFor(a.id) : null;
   return `<div class="card" style="padding:0;${active ? 'border-color:var(--p)' : 'opacity:.9'}">
     <button class="press" style="width:100%;padding:14px;display:flex;gap:12px;align-items:center" data-a="cl.appt" data-id="${a.id}">
       <div class="col center" style="width:46px;flex:none">
@@ -426,9 +451,14 @@ function card(a, active) {
       <div style="width:1px;align-self:stretch;background:var(--bd)"></div>
       <button class="press" style="flex:1;padding:12px;display:flex;align-items:center;justify-content:center;gap:7px;font-size:13.5px;font-weight:650;color:var(--dan)"
         data-a="cl.cancel" data-id="${a.id}">${icon('xCircle', 16)}Отменить</button>
-    </div>` : st === 'done' ? `<div style="border-top:1px solid var(--bd)">
-      <button class="press" style="width:100%;padding:12px;display:flex;align-items:center;justify-content:center;gap:7px;font-size:13.5px;font-weight:650;color:var(--p)"
-        data-a="cl.again" data-id="${a.id}">${icon('refresh', 16)}Записаться снова</button>
+    </div>` : st === 'done' ? `<div class="row" style="gap:0;border-top:1px solid var(--bd)">
+      ${rv ? `<div class="row" style="flex:1;padding:12px;justify-content:center;gap:5px;color:#F5A524;font-size:13px;font-weight:650">
+          ${icon('star', 15, 2.4)}${rv.rating}.0 — спасибо за отзыв</div>`
+      : `<button class="press" style="flex:1;padding:12px;display:flex;align-items:center;justify-content:center;gap:7px;font-size:13.5px;font-weight:650;color:#F5A524"
+          data-a="rv.open" data-id="${a.id}">${icon('star', 16)}Оценить</button>`}
+      <div style="width:1px;align-self:stretch;background:var(--bd)"></div>
+      <button class="press" style="flex:1;padding:12px;display:flex;align-items:center;justify-content:center;gap:7px;font-size:13.5px;font-weight:650;color:var(--p)"
+        data-a="cl.again" data-id="${a.id}">${icon('refresh', 16)}Ещё раз</button>
     </div>` : ''}
   </div>`;
 }
@@ -457,10 +487,19 @@ export function openMyAppt(id) {
     footer: can ? `<div class="btns">
         <button class="btn dan" data-a="cl.cancel" data-id="${a.id}">Отменить</button>
         <button class="btn p" data-a="cl.move" data-id="${a.id}">Перенести</button>
-      </div>` : `<button class="btn p" data-a="cl.again" data-id="${a.id}">Записаться снова</button>`,
+      </div>`
+      : a.status === 'done' && !reviewFor(a.id) ? `<div class="btns">
+        <button class="btn gh" data-a="cl.rate" data-id="${a.id}">${icon('star', 17)}Оценить</button>
+        <button class="btn p" data-a="cl.again" data-id="${a.id}">Записаться снова</button>
+      </div>`
+        : `<button class="btn p" data-a="cl.again" data-id="${a.id}">Записаться снова</button>`,
   });
   window.__ma = s;
 }
+on('cl.rate', ds => {
+  if (window.__ma) { window.__ma.close(); window.__ma = null; }
+  setTimeout(() => reviewSheet(ds.id, { after: rr }), 280);
+});
 on('cl.cancel', async ds => {
   const a = appt(ds.id); if (!a) return;
   const e = emp(a.employeeId), d = new Date(a.start);
