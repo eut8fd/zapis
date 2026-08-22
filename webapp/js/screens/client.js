@@ -1,7 +1,7 @@
 ﻿import {
   S, co, cid, emp, emps, staff, svc, svcs, client, clients, appt, appts, apptTitle, apptColor, apptEnd,
   now, today, slotsFor, nextFreeFor, createAppointment, cancelAppointment, clientStats, clientAppts,
-  reviews, toHM, moveAppointment, updateClient, emit, reviewFor, pendingReviews,
+  reviews, toHM, moveAppointment, updateClient, emit, reviewFor,
 } from '../store.js';
 import {
   esc, money, moneyShort, hhmm, dateLabel, dateFull, relPast, avatar, emptyState, sheet, toast,
@@ -454,73 +454,120 @@ on('cl.done', () => resetStack('cl.company'));
 /* =========================================================
    Мои записи
    ========================================================= */
+/* Фильтр истории: на десятке визитов список превращается в стену
+   одинаковых карточек, и найти нужный визит глазами тяжело. */
+const myf = { f: 'all', limit: 8 };
+const HIST_FILTERS = [
+  ['all', 'Все'],
+  ['done', 'Выполненные'],
+  ['cancelled', 'Отменённые'],
+];
+
 route('cl.my', {
   tab: 'cl.my',
   render() {
     const me = my();
     const all = clientAppts(me.id);
-    const up = all.filter(a => a.status === 'planned' && new Date(a.start) > now()).sort((a, b) => new Date(a.start) - new Date(b.start));
+    const up = all.filter(a => a.status === 'planned' && new Date(a.start) > now())
+      .sort((a, b) => new Date(a.start) - new Date(b.start));
     const past = all.filter(a => !(a.status === 'planned' && new Date(a.start) > now()));
-    const wait2 = pendingReviews(me.id)[0];
+
+    const count = {
+      all: past.length,
+      done: past.filter(a => a.status === 'done').length,
+      cancelled: past.filter(a => a.status === 'cancelled').length,
+    };
+    const list = myf.f === 'all' ? past : past.filter(a => a.status === myf.f);
+    const shown = list.slice(0, myf.limit);
+
     return `
     <div class="top"><div class="grow"><div class="top-t">Мои записи</div><div class="top-sub">${esc(co().name)}</div></div>
       <button class="ico-btn p" data-a="cl.start">${icon('plus', 19)}</button></div>
 
-    ${wait2 ? `<div class="wrap" style="margin-top:6px">
-      <button class="card press" style="width:100%;padding:14px;display:flex;gap:12px;align-items:center;text-align:left;border-color:#F5A524"
-        data-a="rv.open" data-id="${wait2.id}">
-        <div class="tint" style="background:rgba(245,165,36,.14);color:#F5A524;width:44px;height:44px">${icon('star', 21)}</div>
-        <div class="grow"><div class="b">Как прошёл визит?</div>
-          <div class="sm muted nowrap">${esc(apptTitle(wait2))} · ${relPast(new Date(wait2.start), now())}</div></div>
-        ${icon('fwd', 18)}
-      </button>
-    </div>` : ''}
-
     ${up.length ? `<div class="sec" style="margin-top:6px">
-      <div class="sec-h"><div class="sec-t">Предстоящие</div></div>
-      <div class="wrap stack s">${up.map(a => card(a, true)).join('')}</div>
+      <div class="sec-h"><div class="sec-t">Предстоящие</div>
+        ${up.length > 1 ? `<span class="tiny dim">${up.length}</span>` : ''}</div>
+      <div class="wrap stack">${up.map((a, i) => upcomingCard(a, i === 0)).join('')}</div>
     </div>` : `<div class="wrap">${emptyState({ ic: 'calendar', title: 'Пока нет записей', text: 'Выберите услугу и удобное время — это займёт полминуты.', action: 'Записаться', act: 'cl.start' })}</div>`}
 
     ${past.length ? `<div class="sec">
-      <div class="sec-h"><div class="sec-t">История</div></div>
-      <div class="wrap stack s">${past.slice(0, 12).map(a => card(a, false)).join('')}</div>
+      <div class="sec-h"><div class="sec-t">История</div><span class="tiny dim">${count.all}</span></div>
+      ${count.done && count.cancelled ? `<div class="chips" style="margin-bottom:12px">
+        ${HIST_FILTERS.filter(f => count[f[0]]).map(f => `<button class="chip ${myf.f === f[0] ? 'on' : ''}" data-a="my.f" data-v="${f[0]}">${f[1]} · ${count[f[0]]}</button>`).join('')}
+      </div>` : ''}
+      <div class="wrap stack s">${shown.map(a => historyCard(a)).join('')}</div>
+      ${list.length > shown.length ? `<div class="wrap" style="margin-top:10px">
+        <button class="btn gh sm" data-a="my.more">Показать ещё ${Math.min(8, list.length - shown.length)}</button></div>` : ''}
     </div>` : ''}`;
   },
 });
-function card(a, active) {
+on('my.f', ds => { myf.f = ds.v; myf.limit = 8; rr(); });
+on('my.more', () => { myf.limit += 8; rr(); });
+
+/** Сколько осталось до визита — человеческим языком. */
+function timeLeft(d) {
+  const n = now();
+  const days = Math.round((startOfDay(d) - startOfDay(n)) / 86400000);
+  if (days > 1) return 'через ' + days + ' ' + plural(days, ['день', 'дня', 'дней']);
+  if (days === 1) return 'завтра';
+  const min = Math.round((d - n) / 60000);
+  if (min > 90) return 'через ' + Math.round(min / 60) + ' ' + plural(Math.round(min / 60), ['час', 'часа', 'часов']);
+  if (min > 0) return 'через ' + min + ' мин';
+  return 'скоро';
+}
+
+/* Ближайшая запись — главное на экране, поэтому у неё цветная шапка
+   с датой и обратным отсчётом. Остальные предстоящие тише. */
+function upcomingCard(a, first) {
+  const e = emp(a.employeeId), d = new Date(a.start), end = apptEnd(a);
+  return `<div class="card upc ${first ? 'upc-first' : ''}">
+    <div class="upc-head">
+      <span>${dateLabel(d, now())}, ${hhmm(d)} — ${hhmm(end)}</span>
+      <span class="upc-left">${timeLeft(d)}</span>
+    </div>
+    <button class="press upc-body" data-a="cl.appt" data-id="${a.id}">
+      <div class="row" style="gap:12px">
+        ${avatar(e, 'm')}
+        <div class="grow">
+          <div class="upc-t nowrap">${esc(apptTitle(a))}</div>
+          <div class="tiny muted nowrap">${esc(e ? e.name : '')} · ${nMin(a.duration)}</div>
+        </div>
+        <div class="b">${money(a.price)}</div>
+      </div>
+    </button>
+    <div class="upc-acts">
+      <button class="press" data-a="cl.move" data-id="${a.id}">${icon('history', 16)}Перенести</button>
+      <button class="press dan" data-a="cl.cancel" data-id="${a.id}">${icon('xCircle', 16)}Отменить</button>
+    </div>
+  </div>`;
+}
+
+/* История: одна строка на визит. Бейдж «выполнена» убран — он был
+   у каждой второй карточки и не нёс информации; отличается только отмена. */
+function historyCard(a) {
   const e = emp(a.employeeId), d = new Date(a.start);
-  const st = a.status;
-  const rv = st === 'done' ? reviewFor(a.id) : null;
-  return `<div class="card" style="padding:0;${active ? 'border-color:var(--p)' : 'opacity:.9'}">
-    <button class="press" style="width:100%;padding:14px;display:flex;gap:12px;align-items:center" data-a="cl.appt" data-id="${a.id}">
-      <div class="col center" style="width:46px;flex:none">
-        <div style="font-size:19px;font-weight:750;letter-spacing:-.03em">${d.getDate()}</div>
+  const cancelled = a.status === 'cancelled';
+  const rv = a.status === 'done' ? reviewFor(a.id) : null;
+  return `<div class="card hist ${cancelled ? 'hist-off' : ''}">
+    <button class="press hist-main" data-a="cl.appt" data-id="${a.id}">
+      <div class="hist-d">
+        <div class="n">${d.getDate()}</div>
         <div class="tiny dim">${MONTHS[d.getMonth()].slice(0, 3)}</div>
       </div>
-      <div style="width:1px;align-self:stretch;background:var(--bd)"></div>
+      <div class="hist-sep"></div>
       <div class="grow">
-        <div class="b sm">${hhmm(d)} · ${esc(apptTitle(a))}</div>
-        <div class="tiny muted">${esc(e ? e.name : '')}</div>
-        ${st === 'cancelled' ? '<span class="bdg dan" style="margin-top:4px">отменена</span>'
-      : st === 'done' ? '<span class="bdg ok" style="margin-top:4px">выполнена</span>' : ''}
+        <div class="b sm nowrap">${esc(apptTitle(a))}</div>
+        <div class="tiny muted nowrap">${hhmm(d)} · ${esc(e ? e.name : '')}</div>
+        ${cancelled ? '<span class="bdg dan" style="margin-top:5px">отменена</span>' : ''}
       </div>
       <div class="b sm">${moneyShort(a.price)} ₸</div>
     </button>
-    ${active ? `<div class="row" style="gap:0;border-top:1px solid var(--bd)">
-      <button class="press" style="flex:1;padding:12px;display:flex;align-items:center;justify-content:center;gap:7px;font-size:13.5px;font-weight:650;color:var(--p)"
-        data-a="cl.move" data-id="${a.id}">${icon('history', 16)}Перенести</button>
-      <div style="width:1px;align-self:stretch;background:var(--bd)"></div>
-      <button class="press" style="flex:1;padding:12px;display:flex;align-items:center;justify-content:center;gap:7px;font-size:13.5px;font-weight:650;color:var(--dan)"
-        data-a="cl.cancel" data-id="${a.id}">${icon('xCircle', 16)}Отменить</button>
-    </div>` : st === 'done' ? `<div class="row" style="gap:0;border-top:1px solid var(--bd)">
-      ${rv ? `<div class="row" style="flex:1;padding:12px;justify-content:center;gap:5px;color:#F5A524;font-size:13px;font-weight:650">
-          ${icon('star', 15, 2.4)}${rv.rating}.0 — спасибо за отзыв</div>`
-      : `<button class="press" style="flex:1;padding:12px;display:flex;align-items:center;justify-content:center;gap:7px;font-size:13.5px;font-weight:650;color:#F5A524"
-          data-a="rv.open" data-id="${a.id}">${icon('star', 16)}Оценить</button>`}
-      <div style="width:1px;align-self:stretch;background:var(--bd)"></div>
-      <button class="press" style="flex:1;padding:12px;display:flex;align-items:center;justify-content:center;gap:7px;font-size:13.5px;font-weight:650;color:var(--p)"
-        data-a="cl.again" data-id="${a.id}">${icon('refresh', 16)}Ещё раз</button>
-    </div>` : ''}
+    <div class="hist-acts">
+      ${cancelled ? '' : rv
+      ? `<div class="rated">${[1, 2, 3, 4, 5].map(n => `<span style="opacity:${n <= rv.rating ? 1 : .25}">${icon('star', 13, 2.4)}</span>`).join('')}</div>`
+      : `<button class="press star-btn" data-a="rv.open" data-id="${a.id}">${icon('star', 16)}Оценить</button>`}
+      <button class="press" data-a="cl.again" data-id="${a.id}">${icon('refresh', 16)}Ещё раз</button>
+    </div>
   </div>`;
 }
 

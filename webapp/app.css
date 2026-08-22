@@ -176,6 +176,44 @@ svg{display:inline-block;vertical-align:middle;flex:none}
 .ph-row .grow{display:flex;flex-direction:column;align-items:flex-start}
 .ph-row .btn.xs{width:auto}
 
+/* ---------- мои записи (клиент) ---------- */
+/* Ближайший визит — цветная шапка с датой и обратным отсчётом. */
+.upc{padding:0}
+.upc-first{border-color:var(--p);box-shadow:0 0 0 1px var(--p),var(--sh-2)}
+.upc-head{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:10px 14px;background:var(--sf-3);color:var(--tx-2);
+  font-size:13px;font-weight:650
+}
+.upc-first .upc-head{background:var(--p-soft);color:var(--p)}
+.upc-left{font-weight:600;opacity:.75;font-size:12px;white-space:nowrap}
+.upc-body{display:block;width:100%;padding:13px 14px;text-align:left}
+.upc-t{font-size:15px;font-weight:700;letter-spacing:-.02em}
+.upc-acts{display:flex;border-top:1px solid var(--bd)}
+.upc-acts button{
+  flex:1;display:flex;align-items:center;justify-content:center;gap:7px;
+  padding:12px;font-size:13.5px;font-weight:650;color:var(--p)
+}
+.upc-acts button+button{border-left:1px solid var(--bd)}
+.upc-acts button.dan{color:var(--dan)}
+
+/* История: одна плотная строка на визит. */
+.hist{padding:0}
+.hist-off{opacity:.62}
+.hist-main{display:flex;align-items:center;gap:12px;width:100%;padding:12px 14px;text-align:left}
+.hist-d{width:38px;flex:none;text-align:center}
+.hist-d .n{font-size:18px;font-weight:750;letter-spacing:-.03em;line-height:1.1}
+.hist-sep{width:1px;align-self:stretch;background:var(--bd)}
+.hist-acts{display:flex;border-top:1px solid var(--bd)}
+.hist-acts button,.hist-acts .rated{
+  flex:1;display:flex;align-items:center;justify-content:center;gap:6px;
+  padding:11px;font-size:13px;font-weight:650;color:var(--p)
+}
+.hist-acts button+button,.hist-acts .rated+button{border-left:1px solid var(--bd)}
+.hist-acts .star-btn{color:#F5A524}
+.hist-acts .rated{gap:2px;color:#F5A524}
+.hist-acts .rated svg{fill:#F5A524}
+
 /* ---------- оценка визита ---------- */
 .stars{display:inline-flex;gap:6px}
 .star{color:var(--tx-3);transition:transform .14s var(--e),color .14s;padding:2px}
