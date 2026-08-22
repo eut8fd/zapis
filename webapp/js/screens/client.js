@@ -5,7 +5,7 @@
 } from '../store.js';
 import {
   esc, money, moneyShort, hhmm, dateLabel, dateFull, relPast, avatar, emptyState, sheet, toast,
-  confirmSheet, demoNote, promptSheet, nMin, plural, dayKey, startOfDay, addDays, WD, WD_FULL, MONTHS, wait, loadingBlock,
+  confirmSheet, promptSheet, nMin, plural, dayKey, startOfDay, addDays, WD, WD_FULL, MONTHS, wait, loadingBlock,
   monthGrid, MONTH_NAMES,
 } from '../ui.js';
 import { icon, catIcon } from '../icons.js';
@@ -637,11 +637,14 @@ route('cl.profile', {
       <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="tab" data-r="cl.my">
         <div class="ic">${icon('history', 18)}</div>
         <div class="grow" style="text-align:left"><div class="tl">История визитов</div><div class="st">${st.visits} записей</div></div>${icon('fwd', 17)}</button>
-      <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="cl.notif">
-        <div class="ic">${icon('bell', 18)}</div>
-        <div class="grow" style="text-align:left"><div class="tl">Напоминания</div><div class="st">Включены</div></div>${icon('fwd', 17)}</button>
+    </div></div>
 
-    </div></div>`;
+    <div class="wrap sec">
+      <div class="card pad row" style="gap:10px;background:var(--p-soft);border-color:transparent">
+        <span style="color:var(--p)">${icon('bell', 19)}</span>
+        <div class="sm" style="color:var(--tx-2)">Напомним о визите за 24 часа и за 2 часа — сообщением в этот чат</div>
+      </div>
+    </div>`;
   },
 });
 on('cl.editMe', async () => {
@@ -649,6 +652,4 @@ on('cl.editMe', async () => {
   const v = await promptSheet({ title: 'Моё имя', label: 'Как к вам обращаться?', value: me.name });
   if (v) { updateClient(me.id, { name: v, initials: v.split(' ').filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() }); toast('Сохранено'); }
 });
-on('cl.notif', () => demoNote('Напоминания',
-  'Бот напомнит о визите за 24 часа и за 2 часа — сообщением в этот чат. Отключить можно в любой момент.',
-  'В демо это работает для записей, сделанных прямо в чате бота: записи из приложения хранятся только в этом браузере.'));
+
