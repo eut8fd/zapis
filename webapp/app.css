@@ -176,6 +176,22 @@ svg{display:inline-block;vertical-align:middle;flex:none}
 .ph-row .grow{display:flex;flex-direction:column;align-items:flex-start}
 .ph-row .btn.xs{width:auto}
 
+/* ---------- выбор фирменного цвета ---------- */
+.col-pick{display:flex;flex-wrap:wrap;gap:10px}
+.col-dot{
+  width:34px;height:34px;border-radius:var(--r-full);flex:none;
+  box-shadow:inset 0 0 0 1px rgba(16,24,40,.12);
+  transition:transform .14s var(--e),box-shadow .14s
+}
+.col-dot:active{transform:scale(.9)}
+.col-dot.on{box-shadow:0 0 0 2px var(--sf),0 0 0 4px currentColor;color:var(--tx-2)}
+.col-prev{
+  margin-top:12px;border-radius:var(--r-m);padding:16px 14px;color:#fff;
+  display:flex;flex-direction:column;gap:2px
+}
+.col-prev span{font-size:17px;font-weight:750;letter-spacing:-.02em}
+.col-prev i{font-style:normal;font-size:11.5px;opacity:.8}
+
 /* ---------- мои записи (клиент) ---------- */
 /* Ближайший визит — цветная шапка с датой и обратным отсчётом. */
 .upc{padding:0}

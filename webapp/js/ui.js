@@ -64,6 +64,51 @@ export function avatar(p, size = 'm', cls = '') {
   return `<div class="av ${size} ${cls}" style="${st}">${esc(p && p.initials || '?')}</div>`;
 }
 
+/* ---------------- Фирменный цвет ----------------
+   Баннер строится из одного цвета компании: второй тон градиента —
+   тот же оттенок, слегка повёрнутый и притемнённый. Раньше второй
+   цвет был жёстко фиолетовым, и любой выбор превращался в сине-
+   фиолетовое пятно.
+-------------------------------------------------- */
+function hexToRgb(hex) {
+  const h = String(hex || '').replace('#', '');
+  const v = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
+  const n = parseInt(v, 16);
+  return Number.isNaN(n) ? [76, 111, 255] : [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+  const l = (mx + mn) / 2;
+  if (mx === mn) return [0, 0, l];
+  const d = mx - mn;
+  const sat = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+  const h = mx === r ? ((g - b) / d + (g < b ? 6 : 0))
+    : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return [h * 60, sat, l];
+}
+function hslToHex(h, s, l) {
+  h = ((h % 360) + 360) % 360;
+  const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs((h / 60) % 2 - 1)), m = l - c / 2;
+  const [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x]
+    : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+  const to = v => Math.round((v + m) * 255).toString(16).padStart(2, '0');
+  return '#' + to(r) + to(g) + to(b);
+}
+
+/** Соседний тон того же цвета — для второй точки градиента. */
+export function shiftColor(hex, dHue = 8, dLight = -0.10, dSat = -0.08) {
+  const [h, s, l] = rgbToHsl(...hexToRgb(hex));
+  // у почти чёрного цвета крутить нечего — его нужно, наоборот, подсветить
+  const light = l < 0.22 ? Math.min(0.42, l + 0.16) : Math.max(0.12, Math.min(0.92, l + dLight));
+  return hslToHex(h + dHue, Math.max(0, Math.min(1, s + dSat)), light);
+}
+
+/** Градиент баннера из фирменного цвета компании. */
+export function brandGradient(hex, deg = 160) {
+  return `linear-gradient(${deg}deg,${hex} 0%,${shiftColor(hex)} 100%)`;
+}
+
 /* ---------------- Изображения ----------------
    Картинки лежат в localStorage вместе с остальными данными, а его
    квота ~5 МБ на весь домен. Поэтому любое фото ужимается до

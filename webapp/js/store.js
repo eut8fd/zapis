@@ -629,6 +629,30 @@ export function extendPlan(companyId, planId = null) {
 }
 export function setCompanyStatus(companyId, status) { const c = co(companyId); if (c) { c.status = status; emit(); } }
 
+/* ---------- фирменный цвет компании ----------
+   Цвет виден клиенту на странице записи, поэтому меняется владельцем
+   в настройках, а не правкой данных.
+--------------------------------------------- */
+export const BRAND_COLORS = [
+  { v: '#4C6FFF', t: 'Синий' },
+  { v: '#6D5BF6', t: 'Индиго' },
+  { v: '#8B5CF6', t: 'Фиолетовый' },
+  { v: '#EC4899', t: 'Розовый' },
+  { v: '#F04462', t: 'Красный' },
+  { v: '#F79009', t: 'Оранжевый' },
+  { v: '#12B76A', t: 'Зелёный' },
+  { v: '#06AED4', t: 'Бирюзовый' },
+  { v: '#0EA5E9', t: 'Голубой' },
+  { v: '#2B3340', t: 'Графит' },
+];
+
+export function setCompanyColor(color, companyId = cid()) {
+  const c = co(companyId);
+  if (!c || !color) return;
+  c.color = color;
+  emit();
+}
+
 /* ---------- категории услуг ----------
    Базовые категории фиксированы, но компания может завести свои:
    они живут в company.cats и подхватываются везде, где выбирается категория.

@@ -51,7 +51,7 @@ const CO = [
     clients: 80, past: 130, future: 42, density: 1,
   },
   {
-    id: 'c2', name: 'BLADE Barbershop', short: 'BLADE', cat: 'Барбершоп', color: '#0D1220',
+    id: 'c2', name: 'BLADE Barbershop', short: 'BLADE', cat: 'Барбершоп', color: '#2B3340',
     city: 'Алматы', addr: 'пр. Абая 44, 1 этаж', phone: '+7 727 311 44 44', rating: 4.8, reviews: 156,
     plan: 'START', planDays: 6, slug: 'blade', tgLink: 'blade_barber', seed: 2002,
     about: 'Классический барбершоп: стрижки, бороды, королевское бритьё.',

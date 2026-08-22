@@ -6,7 +6,7 @@
 import {
   esc, money, moneyShort, hhmm, dateLabel, dateFull, relPast, avatar, emptyState, sheet, toast,
   confirmSheet, promptSheet, nMin, plural, dayKey, startOfDay, addDays, WD, WD_FULL, MONTHS, wait, loadingBlock,
-  monthGrid, MONTH_NAMES,
+  monthGrid, MONTH_NAMES, brandGradient,
 } from '../ui.js';
 import { icon, catIcon } from '../icons.js';
 import { route, go, render, resetStack } from '../router.js';
@@ -45,14 +45,14 @@ route('cl.company', {
     const team = staff();
     const st = me ? clientStats(me.id) : { next: null, visits: 0 };
 
-    const col = c.color === '#0D1220' ? '#2B3340' : c.color;
+    const col = c.color;
     const today = c.hours[now().getDay()] || {};
     // Фото салона — фон самой шапки, а не отдельная полоса сверху:
     // два разных блока подряд читались как склейка. Градиент поверх фото
     // нужен, чтобы белый текст оставался читаемым на любом снимке.
     const heroBg = c.cover
       ? `background-image:linear-gradient(170deg,rgba(12,16,32,.30) 0%,rgba(12,16,32,.78) 100%),url('${c.cover}')`
-      : `background-image:linear-gradient(160deg,${col} 0%,#6D5BF6 100%)`;
+      : `background-image:${brandGradient(col)}`;
 
     return `
     <div class="pub-hero ${c.cover ? 'has-cover' : ''}" style="${heroBg}">
@@ -143,7 +143,7 @@ on('cl.share', async () => {
   sheet({
     title: 'Поделиться салоном',
     body: `<div class="center" style="padding:4px 0 12px">
-        ${avatar({ initials: c.initials, color: c.color === '#0D1220' ? '#2B3340' : c.color }, 'xl', 'av-sq')}
+        ${avatar({ initials: c.initials, color: c.color, photo: c.logo }, 'xl', 'av-sq')}
         <div class="b" style="font-size:17px;margin-top:12px">${esc(c.name)}</div>
         <div class="sm muted">${esc(c.cat)} · ${esc(c.city)}</div>
       </div>

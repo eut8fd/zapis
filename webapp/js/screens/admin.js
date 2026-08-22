@@ -122,7 +122,7 @@ function companyRow(c) {
   const days = Math.ceil((new Date(c.planUntil) - now()) / 86400000);
   const blocked = c.status === 'blocked';
   return `<button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="nav" data-r="sa.company" data-id="${c.id}">
-    <div class="av m av-sq" style="background:${c.color === '#0D1220' ? 'var(--tx)' : c.color}">${esc(c.initials)}</div>
+    ${avatar({ initials: c.initials, color: c.color, photo: c.logo }, 'm', 'av-sq')}
     <div class="grow" style="text-align:left">
       <div class="tl">${esc(c.name)}</div>
       <div class="st">${esc(c.cat)} · ${esc(c.city)}</div>
@@ -183,7 +183,7 @@ route('sa.company', {
       <button class="ico-btn" data-a="sa.enter" data-id="${c.id}">${icon('logout', 18)}</button></div>
 
     <div class="center wrap">
-      <div class="av xl av-sq" style="margin:0 auto;background:${c.color === '#0D1220' ? 'var(--tx)' : c.color}">${esc(c.initials)}</div>
+      ${avatar({ initials: c.initials, color: c.color, photo: c.logo }, 'xl', 'av-sq')}
       <div style="font-size:21px;font-weight:780;letter-spacing:-.03em;margin-top:12px">${esc(c.name)}</div>
       <div class="sm muted">${esc(c.cat)} · ${esc(c.city)}</div>
       <div class="row" style="justify-content:center;gap:6px;margin-top:8px">

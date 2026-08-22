@@ -53,7 +53,7 @@ function body() {
   <div class="tiny muted b" style="margin-bottom:8px">КОМПАНИЯ</div>
   <div class="stack s" style="margin-bottom:18px">
     ${cs.map(c => `<button class="lrow press" style="border-radius:14px;border:1.5px solid ${S.session.companyId === c.id ? 'var(--p)' : 'var(--bd)'};width:100%;${S.session.companyId === c.id ? 'background:var(--p-soft)' : ''}" data-a="dev.co" data-id="${c.id}">
-      <div class="av s av-sq" style="background:${c.color === '#0D1220' ? 'var(--tx)' : c.color}">${esc(c.initials)}</div>
+      ${avatar({ initials: c.initials, color: c.color, photo: c.logo }, 's', 'av-sq')}
       <div class="grow" style="text-align:left"><div class="tl">${esc(c.name)}</div>
         <div class="st">${emps(c.id).length} сотр. · ${clients(c.id).length} клиентов · ${c.plan}</div></div>
       ${S.session.companyId === c.id ? `<span style="color:var(--p)">${icon('checkCircle', 19)}</span>` : ''}

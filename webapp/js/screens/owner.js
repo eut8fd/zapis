@@ -48,7 +48,7 @@ route('o.home', {
 
     return `
     <div class="top">
-      ${avatar({ initials: c.initials, color: c.color === '#0D1220' ? '#2B3340' : c.color, photo: c.logo }, 'm', 'av-sq')}
+      ${avatar({ initials: c.initials, color: c.color, photo: c.logo }, 'm', 'av-sq')}
       <div class="grow">
         <div class="top-t nowrap" style="font-size:17px">${esc(c.name)}</div>
         <div class="top-sub">${greet(now().getHours())}, ${esc(u.name.split(' ')[0])}</div>
@@ -152,7 +152,7 @@ on('o.share', () => {
   sheet({
     title: 'Страница записи',
     body: `<div class="center" style="padding:6px 0 14px">
-        ${avatar({ initials: c.initials, color: c.color === '#0D1220' ? '#2B3340' : c.color }, 'xl', 'av-sq')}
+        ${avatar({ initials: c.initials, color: c.color, photo: c.logo }, 'xl', 'av-sq')}
         <div class="b" style="font-size:17px;margin-top:12px">${esc(c.name)}</div>
         <div class="sm muted">Клиенты записываются по этой ссылке за 30 секунд</div>
       </div>

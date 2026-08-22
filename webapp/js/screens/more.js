@@ -6,13 +6,13 @@
   ROLES, PERMS, roleOf, roleName, setRole, cats, catName, addCat, renameCat, removeCat,
   statsBetween, daysBetween, moneyOps, finCats, finCatName, finCatInfo, addFinCat, renameFinCat, removeFinCat,
   recurring, addRecurring, updateRecurring, removeRecurring, REPEAT, plans, planById, planPrice, PERIODS,
-  setupSteps, markSetup, resetTips, tipSeen, markTip, appt,
+  setupSteps, markSetup, resetTips, tipSeen, markTip, appt, BRAND_COLORS, setCompanyColor,
 } from '../store.js';
 import {
   esc, money, moneyShort, hhmm, dateLabel, relPast, avatar, emptyState, sheet, toast, promptSheet,
   confirmSheet, demoNote, segmented, bars, sparkline, donut, progress, nMin, nAppt, nVisit, dayKey, startOfDay,
   addDays, WD, WD_FULL, MONTHS, MON_SHORT, num, plural, wait, loadingBlock,
-  pickImage, photoField, IMG_MAX, monthGrid, dateFull,
+  pickImage, photoField, IMG_MAX, monthGrid, dateFull, brandGradient,
 } from '../ui.js';
 import { icon, catIcon } from '../icons.js';
 import { route, go, render } from '../router.js';
@@ -1545,7 +1545,7 @@ route('o.settings', {
       <div class="card" style="padding:0;overflow:hidden">
         ${c.cover ? `<div class="cover" style="background-image:url('${c.cover}')"></div>` : ''}
         <div class="pad row" style="gap:14px">
-          ${avatar({ initials: c.initials, color: c.color === '#0D1220' ? '#2B3340' : c.color, photo: c.logo }, 'l', 'av-sq')}
+          ${avatar({ initials: c.initials, color: c.color, photo: c.logo }, 'l', 'av-sq')}
           <div class="grow"><div class="b" style="font-size:16px">${esc(c.name)}</div>
             <div class="sm muted">${esc(c.cat)} · ${esc(c.city)}</div></div>
           <button class="ico-btn" data-a="set.company">${icon('pencil', 17)}</button>
@@ -1589,27 +1589,60 @@ const row = (ic, t, s, a, extra = '') => `<button class="lrow press" style="bord
 
 on('set.theme', async ds => { S.theme = ds.v; const m = await import('../main.js'); m.applyTheme(); emit(); });
 on('set.company', () => {
-  const c = co();
-  const s = sheet({
-    title: 'О компании',
-    body: `<div class="field"><label>Название</label><input class="inp" id="_n" value="${esc(c.name)}"></div>
-      <div class="field"><label>Категория</label><input class="inp" id="_c" value="${esc(c.cat)}"></div>
-      <div class="field"><label>Адрес</label><input class="inp" id="_a" value="${esc(c.addr)}"></div>
-      <div class="field"><label>Телефон</label><input class="inp" id="_p" value="${esc(c.phone)}"></div>
-      <div class="field"><label>Описание</label><textarea class="inp" id="_d">${esc(c.about || '')}</textarea></div>`,
-    footer: `<button class="btn p" data-a="set.companySave">Сохранить</button>`,
-  });
-  window.__sc = s;
+  const c0 = co();
+  // черновик отдельно от модели: выбор цвета перерисовывает форму,
+  // а введённое название при этом теряться не должно
+  const d = { name: c0.name, cat: c0.cat, addr: c0.addr, phone: c0.phone, about: c0.about || '' };
+  const s = sheet({ title: 'О компании', body: '' });
+  const capture = () => {
+    const g = q => { const el = s.el.querySelector(q); return el ? el.value : null; };
+    const n = g('#_n'), cat = g('#_c'), a = g('#_a'), p = g('#_p'), ab = g('#_d');
+    if (n != null) d.name = n; if (cat != null) d.cat = cat; if (a != null) d.addr = a;
+    if (p != null) d.phone = p; if (ab != null) d.about = ab;
+  };
+  const draw = () => {
+    const c = co();
+    s.set({
+      title: 'О компании',
+      body: `<div class="field"><label>Название</label><input class="inp" id="_n" value="${esc(d.name)}"></div>
+      <div class="field"><label>Категория</label><input class="inp" id="_c" value="${esc(d.cat)}"></div>
+      <div class="field"><label>Адрес</label><input class="inp" id="_a" value="${esc(d.addr)}"></div>
+      <div class="field"><label>Телефон</label><input class="inp" id="_p" value="${esc(d.phone)}"></div>
+      <div class="field"><label>Описание</label><textarea class="inp" id="_d">${esc(d.about)}</textarea></div>
+
+      <div class="field"><label>Фирменный цвет</label>
+        <div class="col-pick">
+          ${BRAND_COLORS.map(x => `<button class="col-dot ${c.color === x.v ? 'on' : ''}" title="${esc(x.t)}"
+            style="background:${x.v}" data-a="set.color" data-v="${x.v}"></button>`).join('')}
+        </div>
+        <div class="col-prev" style="background:${brandGradient(c.color)}">
+          <span>${esc(d.name || c.name)}</span>
+          <i>так выглядит страница записи</i>
+        </div>
+        <div class="tiny dim" style="margin-top:8px">Цвет виден клиентам на странице записи${c.cover ? '. Сейчас поверх него стоит фото салона — цвет остаётся на кнопке и плашке' : ''}.</div>
+      </div>`,
+      footer: `<button class="btn p" data-a="set.companySave">Сохранить</button>`,
+    });
+  };
+  window.__sc = { s, d, draw, capture };
+  draw();
+});
+on('set.color', ds => {
+  const sc = window.__sc;
+  sc.capture();
+  setCompanyColor(ds.v);
+  sc.draw();
 });
 on('set.companySave', () => {
-  const s = window.__sc, c = co();
-  c.name = s.el.querySelector('#_n').value.trim() || c.name;
-  c.cat = s.el.querySelector('#_c').value.trim();
-  c.addr = s.el.querySelector('#_a').value.trim();
-  c.phone = s.el.querySelector('#_p').value.trim();
-  c.about = s.el.querySelector('#_d').value.trim();
+  const sc = window.__sc; sc.capture();
+  const c = co(), d = sc.d;
+  c.name = d.name.trim() || c.name;
+  c.cat = d.cat.trim();
+  c.addr = d.addr.trim();
+  c.phone = d.phone.trim();
+  c.about = d.about.trim();
   c.initials = c.name.split(' ').filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase();
-  emit(); s.close(); toast('Сохранено');
+  emit(); sc.s.close(); toast('Сохранено');
 });
 
 /* Фото и логотип компании (§32, §33) */
