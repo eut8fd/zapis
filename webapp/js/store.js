@@ -26,9 +26,23 @@ export function setShift(ms) { S.shift = ms; emit(); }
 export function shiftBy(ms) { S.shift += ms; emit(); }
 
 /* ---------- persist ---------- */
+let quotaWarned = false;
 export function save() {
-  try { localStorage.setItem(KEY, JSON.stringify({ v: VER, anchor: S.anchor, shift: S.shift, theme: S.theme, aiMode: S.aiMode, onboarded: S.onboarded, session: S.session, data: S.data, aiChat: S.aiChat, seenTips: S.seenTips })); }
-  catch (e) { console.warn('save failed', e); }
+  try {
+    localStorage.setItem(KEY, JSON.stringify({ v: VER, anchor: S.anchor, shift: S.shift, theme: S.theme, aiMode: S.aiMode, onboarded: S.onboarded, session: S.session, data: S.data, aiChat: S.aiChat, seenTips: S.seenTips }));
+    quotaWarned = false;
+  } catch (e) {
+    console.warn('save failed', e);
+    // Молчать нельзя: изменения останутся только на экране и пропадут
+    // при перезагрузке. Чаще всего виноваты фотографии — о них и говорим.
+    const quota = e && (e.name === 'QuotaExceededError' || e.code === 22);
+    if (!quotaWarned) {
+      quotaWarned = true;
+      import('./ui.js').then(u => u.toast(
+        quota ? 'Не хватает места в браузере — удалите часть фотографий' : 'Не удалось сохранить изменения', 'dan'
+      )).catch(() => { });
+    }
+  }
 }
 
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
@@ -445,7 +459,9 @@ export function finCats(type, companyId = cid()) {
   return { ...BASE_FIN[type], ...own };
 }
 export function finCatInfo(type, key, companyId = cid()) {
-  return finCats(type, companyId)[key] || { t: key || 'Прочее', color: '#7C8AA5' };
+  // на удалённую категорию могли остаться ссылки — показываем «Прочее»,
+  // а не технический ключ вроде f1x2y3
+  return finCats(type, companyId)[key] || { t: 'Прочее', color: '#7C8AA5' };
 }
 export function finCatName(type, key, companyId = cid()) { return finCatInfo(type, key, companyId).t; }
 

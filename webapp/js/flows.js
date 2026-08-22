@@ -13,7 +13,7 @@ import {
 } from './ui.js';
 import { icon, catIcon } from './icons.js';
 import { on } from './bus.js';
-import { go } from './router.js';
+import { go, current } from './router.js';
 import { haptic, openLink, copy } from './tg.js';
 import { parseNote, demoVoice } from './ai-engine.js';
 
@@ -24,9 +24,13 @@ import { parseNote, demoVoice } from './ai-engine.js';
    ========================================================= */
 export function tipOnce(key, { title, text, ic = 'info', delay = 700 } = {}) {
   if (tipSeen(key)) return;
+  const from = current().r;
   setTimeout(() => {
-    // экран мог смениться, пока ждали — подсказка не должна догонять
-    if (tipSeen(key)) return;
+    // За время задержки человек мог уйти на другой экран — тогда подсказка
+    // догонит его не там, где она про что-то объясняет. Проверяем маршрут,
+    // а не только отметку: отметку мог снять сброс подсказок.
+    if (tipSeen(key) || current().r !== from) return;
+    if (document.querySelector('.tip')) return;      // одна подсказка за раз
     tipCard({ title, text, ic, onClose: () => markTip(key) });
   }, delay);
 }
