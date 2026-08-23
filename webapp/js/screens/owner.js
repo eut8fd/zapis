@@ -462,35 +462,42 @@ function monthView(d, empId) {
   const lead = (new Date(y, m, 1).getDay() + 6) % 7;
   const team = empId ? [emp(empId)].filter(Boolean) : staff();
 
-  const cells = [];
-  for (let i = 0; i < lead; i++) cells.push('<div class="mv-cell mv-empty"></div>');
+  // Сначала собираем месяц целиком: густота заливки считается относительно
+  // самого плотного дня. Абсолютные проценты загрузки для этого не годятся —
+  // у салона они держатся около 15%, и все дни красились бы одинаково.
+  const days = [];
   for (let n = 1; n <= daysIn; n++) {
     const day = new Date(y, m, n);
     const list = dayAppts(day, { employeeId: empId });
-    const busy = list.reduce((s, a) => s + a.duration, 0);
     let work = 0;
     team.forEach(e => { const w = workDay(e, day); if (w) work += toMin(w.to) - toMin(w.from); });
-    const load = work ? Math.min(100, Math.round(busy / work * 100)) : 0;
-    const off = !work;
-    const away = team.some(e => absenceOn(day, e.id).length);
-    const isT = dayKey(day) === dayKey(now());
-    const weekend = day.getDay() === 0 || day.getDay() === 6;
-    const loadLabel = load > 70 ? 'плотная загрузка' : load > 40 ? 'средняя загрузка' : 'свободная загрузка';
-    cells.push(`<button class="mv-cell ${isT ? 'today' : ''} ${off ? 'off' : ''} ${weekend ? 'weekend' : ''}" data-a="cal.dayMenu" data-d="${day.getTime()}"
-      aria-label="${n} ${MONTHS[m]}, ${nAppt(list.length)}, ${off ? 'выходной' : loadLabel}">
-      <span class="d">${n}</span>
-      ${list.length ? `<span class="cnt">${list.length} <small>зап.</small></span>` : off ? '<span class="cnt dim">вых.</span>' : '<span class="cnt dim">—</span>'}
-      ${away ? '<i class="away"></i>' : ''}
-      <i class="bar" style="width:${load}%;background:${load > 70 ? 'var(--ok)' : load > 40 ? 'var(--warn)' : 'var(--p)'}"></i>
+    days.push({
+      n, day, count: list.length, off: !work,
+      away: team.some(e => absenceOn(day, e.id).length),
+    });
+  }
+  const peak = Math.max(1, ...days.map(x => x.count));
+
+  const cells = [];
+  for (let i = 0; i < lead; i++) cells.push('<div class="mv-cell mv-empty"></div>');
+  for (const x of days) {
+    const share = x.count / peak;
+    const lv = !x.count ? 0 : share > 0.75 ? 3 : share > 0.4 ? 2 : 1;
+    const label = ['записей нет', 'спокойный день', 'обычный день', 'плотный день'][lv];
+    const isT = dayKey(x.day) === dayKey(now());
+    const weekend = x.day.getDay() === 0 || x.day.getDay() === 6;
+    cells.push(`<button class="mv-cell lv${lv} ${isT ? 'today' : ''} ${x.off ? 'off' : ''} ${weekend ? 'weekend' : ''}" data-a="cal.dayMenu" data-d="${x.day.getTime()}"
+      aria-label="${x.n} ${MONTHS[m]}, ${nAppt(x.count)}, ${x.off ? 'салон закрыт' : label}">
+      <span class="d">${x.n}</span>
+      ${x.count ? `<span class="cnt">${x.count}</span>` : x.off ? '<span class="cnt dim">вых.</span>' : '<span class="cnt dim"></span>'}
+      ${x.away ? '<i class="away" title="отсутствие мастера"></i>' : ''}
     </button>`);
   }
   return `<div class="wrap cal-month"><div class="mv-grid-wd">${['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ', 'ВС'].map(w => `<span>${w}</span>`).join('')}</div>
     <div class="mv-grid">${cells.join('')}</div>
-    <div class="mc-legend mv-legend">
-      <span><i style="background:var(--p)"></i>свободно</span>
-      <span><i style="background:var(--warn)"></i>средне</span>
-      <span><i style="background:var(--ok)"></i>плотно</span>
-      <span><i style="background:#06AED4"></i>отсутствие</span>
+    <div class="mv-legend">
+      <span class="mv-scale">Записей меньше<i class="lv1"></i><i class="lv2"></i><i class="lv3"></i>больше</span>
+      <span class="mv-away"><i></i>отсутствие мастера</span>
     </div>
   </div>`;
 }
