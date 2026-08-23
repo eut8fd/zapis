@@ -248,6 +248,7 @@ export function sheet(opts) {
   const api = {
     el, mask,
     set(o) {
+      const changingView = api._o && (o.title !== api._o.title || !!o.back !== !!api._o.back);
       const h = el.querySelector('.sheet-h'), b = el.querySelector('.sheet-b'), f = el.querySelector('.sheet-f');
       h.innerHTML = (o.back ? `<button class="ico-btn flat" data-sheet-back>${icon('back', 20)}</button>` : '') +
         `<div class="t">${esc(o.title || '')}</div>` +
@@ -260,13 +261,19 @@ export function sheet(opts) {
       b.scrollTop = 0;
       if (o.mount) o.mount(el);
       api._o = o;
+      if (changingView && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        el.classList.remove('swapping');
+        void el.offsetWidth;
+        el.classList.add('swapping');
+        setTimeout(() => el.classList.remove('swapping'), 320);
+      }
     },
     close() {
       if (api._closed) return; api._closed = true;
       el.classList.remove('in'); mask.classList.remove('in');
       sheetStack = sheetStack.filter(s => s !== api);
       unlockScroll();
-      setTimeout(() => { el.remove(); mask.remove(); }, 300);
+      setTimeout(() => { el.remove(); mask.remove(); }, 440);
       if (api._o && api._o.onClose) api._o.onClose();
     }
   };
@@ -275,8 +282,8 @@ export function sheet(opts) {
   let sy = 0, dy = 0, drag = false;
   const grab = el.querySelector('.grab');
   const startDrag = e => { drag = true; sy = e.touches[0].clientY; dy = 0; el.style.transition = 'none'; };
-  const moveDrag = e => { if (!drag) return; dy = Math.max(0, e.touches[0].clientY - sy); el.style.transform = `translateY(${dy}px)`; };
-  const endDrag = () => { if (!drag) return; drag = false; el.style.transition = ''; el.style.transform = ''; if (dy > 90) api.close(); };
+  const moveDrag = e => { if (!drag) return; dy = Math.max(0, e.touches[0].clientY - sy); el.style.setProperty('--sheet-drag', dy + 'px'); };
+  const endDrag = () => { if (!drag) return; drag = false; el.style.transition = ''; el.style.removeProperty('--sheet-drag'); if (dy > 90) api.close(); };
   [grab, el.querySelector('.sheet-h')].forEach(n => {
     n.addEventListener('touchstart', startDrag, { passive: true });
     n.addEventListener('touchmove', moveDrag, { passive: true });

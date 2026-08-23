@@ -8,6 +8,8 @@ export function route(name, def) { routes[name] = def; }
 
 let stack = [];
 let rendering = false;
+let navMotion = 'replace';
+let tabPulse = null;
 
 export const current = () => stack[stack.length - 1] || { r: 'o.home', p: {} };
 
@@ -27,16 +29,18 @@ function fromHash() {
 export function go(r, p = {}, opts = {}) {
   if (!routes[r]) { console.warn('no route', r); return; }
   haptic('light');
+  tabPulse = opts.tabPulse ? r : null;
+  navMotion = opts.root ? 'tab' : opts.replace ? 'replace' : 'forward';
   if (opts.replace || !stack.length) stack[Math.max(0, stack.length - 1)] = { r, p };
   else if (opts.root) stack = [{ r, p }];
   else stack.push({ r, p });
   syncHash(); render(true);
 }
 export function back() {
-  if (stack.length > 1) { stack.pop(); haptic('light'); syncHash(); render(true); }
+  if (stack.length > 1) { navMotion = 'back'; stack.pop(); haptic('light'); syncHash(); render(true); }
 }
 export function canBack() { return stack.length > 1; }
-export function resetStack(r, p = {}) { stack = [{ r, p }]; syncHash(); render(true); }
+export function resetStack(r, p = {}) { navMotion = 'replace'; stack = [{ r, p }]; syncHash(); render(true); }
 
 let ignoreHash = false;
 function syncHash() { ignoreHash = true; location.hash = toHash(current()); setTimeout(() => ignoreHash = false, 20); }
@@ -44,8 +48,8 @@ window.addEventListener('hashchange', () => {
   if (ignoreHash) return;
   const e = fromHash();
   if (!e) return;
-  if (stack.length > 1 && stack[stack.length - 2].r === e.r) stack.pop();
-  else stack.push(e);
+  if (stack.length > 1 && stack[stack.length - 2].r === e.r) { navMotion = 'back'; stack.pop(); }
+  else { navMotion = 'forward'; stack.push(e); }
   render(true);
 });
 
@@ -83,7 +87,7 @@ function tabbar() {
   const def = routes[cur.r] || {};
   const active = def.tab || cur.r;
   return `<nav class="tabbar">${tabs.map(t => `
-    <button class="tab ${active === t.r ? 'on' : ''}" data-a="tab" data-r="${t.r}">
+    <button class="tab ${active === t.r ? 'on' : ''} ${active === t.r && tabPulse === t.r ? 'tab-pulse' : ''}" data-a="tab" data-r="${t.r}">
       ${icon(t.i, 23, active === t.r ? 2.1 : 1.8)}<span class="lb">${esc(t.t)}</span>
     </button>`).join('')}</nav>`;
 }
@@ -96,16 +100,28 @@ export function render(fresh = false) {
   const def = routes[e.r];
   const app = $('#app');
   const noTab = def.noTab || !tabsFor(S.session.role).length;
-  document.body.dataset.tab = noTab ? '0' : '1';
   let html = '';
   try { html = def.render(e.p) || ''; }
   catch (err) { console.error('render error', e.r, err); html = `<div class="wrap"><div class="empty"><div class="t">Что-то пошло не так</div><div class="s">${esc(err.message)}</div></div></div>`; }
-  app.innerHTML = `<div class="screen ${noTab ? 'no-tab' : ''} ${def.fab ? 'has-fab' : ''}" id="screen">${html}</div>` +
-    (noTab ? '' : tabbar()) + (def.fab ? def.fab() : '');
-  if (fresh) window.scrollTo(0, 0);
-  if (def.mount) { try { def.mount(e.p, $('#screen')); } catch (err) { console.error(err); } }
-  setBackButton(canBack() ? back : null);
-  rendering = false;
+  const motion = navMotion;
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const animate = fresh && !reduced && !!$('#screen', app);
+
+  const paint = () => {
+    document.body.dataset.tab = noTab ? '0' : '1';
+    // Telegram WebView по-разному реализует View Transitions: на части
+    // устройств снимки мерцают и меняют размер fixed-кнопок. Однослойная
+    // CSS-анимация предсказуема и не накладывает старый интерфейс на новый.
+    const enter = animate ? ` nav-enter nav-${motion}` : '';
+    app.innerHTML = `<div class="screen ${noTab ? 'no-tab' : ''} ${def.fab ? 'has-fab' : ''}${enter}" id="screen">${html}</div>` +
+      (noTab ? '' : tabbar()) + (def.fab ? def.fab() : '');
+    tabPulse = null;
+    if (fresh) window.scrollTo(0, 0);
+    if (def.mount) { try { def.mount(e.p, $('#screen')); } catch (err) { console.error(err); } }
+    setBackButton(canBack() ? back : null);
+    rendering = false;
+  };
+  paint();
 }
 
 /* ---------- инициализация ---------- */

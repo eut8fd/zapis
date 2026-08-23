@@ -45,26 +45,42 @@ export function openApptSheet(id) {
   const isPast = en < now();
   const S_ = { planned: ['p', 'Запланирована'], done: ['ok', 'Выполнена'], cancelled: ['dan', 'Отменена'] }[a.status];
   const ai = c && c.ai;
+  const review = a.status === 'done' ? reviewFor(a.id) : null;
+  const reviewBlock = a.status === 'done' ? (review ? `
+    <div class="appt-review received">
+      <div class="appt-review-head">
+        <div class="appt-review-icon">${icon('star', 18, 2)}</div>
+        <div class="grow"><b>Отзыв получен</b><span>${review.rating} из 5${review.createdAt ? ' · ' + relPast(new Date(review.createdAt), now()) : ''}</span></div>
+        <div class="appt-review-stars" aria-label="Оценка ${review.rating} из 5">
+          ${Array.from({ length: 5 }, (_, i) => `<i class="${i < review.rating ? 'on' : ''}">${icon('star', 14, 2)}</i>`).join('')}
+        </div>
+      </div>
+      ${review.text ? `<div class="appt-review-text">«${esc(review.text)}»</div>` : ''}
+    </div>` : `
+    <div class="appt-review pending">
+      <div class="appt-review-icon">${icon('star', 18, 2)}</div>
+      <div class="grow"><b>Отзыв пока не оставлен</b><span>Клиент ещё не оценил этот визит</span></div>
+    </div>`) : '';
 
   const body = `
-    <div class="row" style="gap:14px;margin-bottom:14px">
+    <div class="row appt-person">
       ${avatar(c, 'l')}
       <div class="grow">
-        <div style="font-size:19px;font-weight:750;letter-spacing:-.02em">${esc(c ? c.name : 'Клиент')}</div>
+        <div class="appt-person-name">${esc(c ? c.name : 'Клиент')}</div>
         <div class="sm muted">${esc(c && c.phone || '')}</div>
       </div>
       <span class="bdg ${S_[0]}">${S_[1]}</span>
     </div>
 
-    <div class="card flat" style="padding:14px;margin-bottom:12px">
-      <div class="row between"><span class="sm muted">Когда</span><b>${dateLabel(st, now())}, ${hhmm(st)}–${hhmm(en)}</b></div>
-      <div class="hr"></div>
-      <div class="row between" style="align-items:flex-start"><span class="sm muted" style="flex:none">Услуга</span><b style="max-width:64%;text-align:right;line-height:1.3">${esc(apptTitle(a))}</b></div>
-      <div class="hr"></div>
-      <div class="row between"><span class="sm muted">Мастер</span><b>${esc(e ? e.name : '—')}</b></div>
-      <div class="hr"></div>
-      <div class="row between"><span class="sm muted">Стоимость</span><b style="font-size:17px">${money(a.price)}</b></div>
+    <div class="appt-info">
+      <div class="appt-info-row"><span>Когда</span><b>${dateLabel(st, now())}, ${hhmm(st)}–${hhmm(en)}</b></div>
+      <div class="appt-info-row"><span>Длительность</span><b>${nMin(a.duration)}</b></div>
+      <div class="appt-info-row"><span>Услуга</span><b>${esc(apptTitle(a))}</b></div>
+      <div class="appt-info-row"><span>Мастер</span><b>${esc(e ? e.name : '—')}</b></div>
+      <div class="appt-info-row total"><span>Стоимость</span><b>${money(a.price)}</b></div>
     </div>
+
+    ${reviewBlock}
 
     ${a.note ? `<div class="card flat" style="padding:12px 14px;margin-bottom:12px">
       <div class="tiny muted b" style="margin-bottom:3px">Заметка к записи</div>
@@ -80,11 +96,11 @@ export function openApptSheet(id) {
       </div>
     </div>` : ''}
 
-    <div class="acts" style="margin-bottom:6px">
+    <div class="acts appt-actions">
       <button class="act" data-a="ap.call" data-id="${a.id}">${icon('phone', 20)}Позвонить</button>
       <button class="act" data-a="ap.msg" data-id="${a.id}">${icon('msg', 20)}Написать</button>
       <button class="act" data-a="ap.open" data-id="${a.id}">${icon('user', 20)}Клиент</button>
-      ${a.status !== 'cancelled' ? `<button class="act" data-a="ap.cancel" data-id="${a.id}" style="color:var(--dan)">${icon('xCircle', 20)}Отменить</button>` : ''}
+      ${a.status === 'planned' ? `<button class="act" data-a="ap.cancel" data-id="${a.id}" style="color:var(--dan)">${icon('xCircle', 20)}Отменить</button>` : ''}
     </div>`;
 
   const footer = a.status === 'planned'
@@ -95,7 +111,7 @@ export function openApptSheet(id) {
     : a.status === 'done'
       ? `<div class="btns">
            <button class="btn gh" data-a="ap.voice" data-id="${a.id}">${icon('mic', 18)}Заметка</button>
-           <button class="btn p" data-a="ap.repeat" data-id="${a.id}">${icon('refresh', 18)}Повторить</button>
+           <button class="btn p" data-a="ap.repeat" data-id="${a.id}">${icon('refresh', 18)}Повторить запись</button>
          </div>`
       : `<button class="btn p" data-a="ap.repeat" data-id="${a.id}">${icon('refresh', 18)}Записать снова</button>`;
 
@@ -128,9 +144,11 @@ on('ap.done', async ds => {
 });
 
 on('ap.cancel', async ds => {
+  const a = appt(ds.id);
+  if (!a || a.status !== 'planned') { toast('Выполненную запись нельзя отменить', 'dan'); return; }
   const ok = await confirmSheet({ title: 'Отменить запись?', text: 'Слот снова станет свободным, клиент получит уведомление.', ok: 'Отменить запись', cancel: 'Оставить', danger: true });
   if (!ok) return;
-  cancelAppointment(ds.id, S.session.role);
+  if (!cancelAppointment(ds.id, S.session.role)) { toast('Эту запись уже нельзя отменить', 'dan'); return; }
   document.querySelectorAll('.sheet [data-sheet-close]').forEach(b => b.click());
   toast('Запись отменена', 'dan');
 });
@@ -388,7 +406,7 @@ export function blockFlow(pre = {}) {
     date: pre.date ? startOfDay(pre.date) : today(),
     from: pre.startMin != null ? pre.startMin : 13 * 60,
     len: 60,
-    kind: pre.kind || 'break',
+    kind: pre.kind || 'busy',
     allDay: false,
     custom: false,          // §52 — произвольное время вместо готовых вариантов
     to: (pre.startMin != null ? pre.startMin : 13 * 60) + 60,

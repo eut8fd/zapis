@@ -2,7 +2,7 @@ import {
   S, co, cid, emp, emps, staff, svc, svcs, client, clients, appt, appts, apptTitle, apptColor,
   now, today, todayStats, rangeStats, nextAppt, dayAppts, blocks, me, toHM, toMin, workDay, workWindow, companyHours,
   clientStats, emit, freeGaps, removeBlock, ABSENCE, absenceOn,
-  markSetup, setupSteps, tipSeen, markTip,
+  markSetup, setupSteps, tipSeen, markTip, daysBetween,
 } from '../store.js';
 import {
   esc, money, moneyShort, hhmm, dateLabel, dateFull, nMin, nAppt, avatar, greet, WD, WD_FULL, MONTHS,
@@ -186,7 +186,29 @@ on('o.preview', () => {
 /* =========================================================
    Календарь
    ========================================================= */
-const cal = { date: null, empId: null, view: 'day' };
+const cal = { date: null, empId: null, view: 'day', motion: '', rangeFrom: null, rangeTo: null, returnContext: null };
+
+function calendarRange() {
+  const from = startOfDay(cal.rangeFrom || cal.date || today());
+  const to = startOfDay(cal.rangeTo || from);
+  return from <= to ? { from, to } : { from: to, to: from };
+}
+
+function rangeDays(from, to) {
+  const count = daysBetween(from, to);
+  return Array.from({ length: count }, (_, i) => addDays(from, i));
+}
+
+function rangeTitle(from, to) {
+  if (dayKey(from) === dayKey(to)) return `${from.getDate()} ${MONTHS[from.getMonth()]} ${from.getFullYear()}`;
+  if (from.getFullYear() === to.getFullYear() && from.getMonth() === to.getMonth()) {
+    return `${from.getDate()}–${to.getDate()} ${MONTHS[to.getMonth()]} ${to.getFullYear()}`;
+  }
+  if (from.getFullYear() === to.getFullYear()) {
+    return `${from.getDate()} ${MON_SHORT[from.getMonth()]} – ${to.getDate()} ${MON_SHORT[to.getMonth()]} ${to.getFullYear()}`;
+  }
+  return `${from.getDate()} ${MON_SHORT[from.getMonth()]} ${from.getFullYear()} – ${to.getDate()} ${MON_SHORT[to.getMonth()]} ${to.getFullYear()}`;
+}
 
 route('o.cal', {
   tab: 'o.cal',
@@ -208,45 +230,82 @@ export function calendarScreen({ scope = 'company', fixedEmp = null } = {}) {
   // молча показывал бы пустой день. Сбрасываем, если мастера здесь больше нет.
   else if (cal.empId && !staff().some(e => e.id === cal.empId)) cal.empId = null;
   const d = cal.date;
-  const isToday = dayKey(d) === dayKey(now());
   const list = staff();
   const empId = fixedEmp || cal.empId;
+  const motion = cal.motion;
+  cal.motion = '';
 
   // §44 — в режиме недели показываем диапазон, а не одно число
   const wkStart = addDays(d, -((d.getDay() + 6) % 7)), wkEnd = addDays(wkStart, 6);
-  const title = cal.view === 'month'
+  const custom = calendarRange();
+  const isToday = cal.view === 'range'
+    ? today() >= custom.from && today() <= custom.to
+    : cal.view === 'week'
+      ? today() >= wkStart && today() <= wkEnd
+      : cal.view === 'month'
+        ? d.getMonth() === today().getMonth() && d.getFullYear() === today().getFullYear()
+        : dayKey(d) === dayKey(now());
+  const title = cal.view === 'range'
+    ? rangeTitle(custom.from, custom.to)
+    : cal.view === 'month'
     ? MONTH_NAMES[d.getMonth()] + ' ' + d.getFullYear()
     : cal.view === 'week'
       ? (wkStart.getMonth() === wkEnd.getMonth()
         ? wkStart.getDate() + '–' + wkEnd.getDate() + ' ' + MONTHS[wkEnd.getMonth()]
         : wkStart.getDate() + ' ' + MON_SHORT[wkStart.getMonth()] + ' – ' + wkEnd.getDate() + ' ' + MON_SHORT[wkEnd.getMonth()])
       : d.getDate() + ' ' + MONTHS[d.getMonth()] + ' ' + d.getFullYear();
-  const sub = cal.view === 'day' ? (isToday ? 'сегодня' : WD_FULL[d.getDay()]) : '';
+  const sub = cal.view === 'range'
+    ? `${daysBetween(custom.from, custom.to)} ${plural(daysBetween(custom.from, custom.to), ['день', 'дня', 'дней'])}`
+    : cal.view === 'day' ? (isToday ? 'сегодня' : WD_FULL[d.getDay()]) : '';
+  const returnLabel = cal.returnContext
+    ? cal.returnContext.view === 'range'
+      ? `К периоду ${rangeTitle(custom.from, custom.to)}`
+      : cal.returnContext.view === 'week'
+        ? (() => {
+          const start = addDays(cal.returnContext.date, -((cal.returnContext.date.getDay() + 6) % 7));
+          return `К неделе ${rangeTitle(start, addDays(start, 6))}`;
+        })()
+        : `К месяцу ${MONTH_NAMES[cal.returnContext.date.getMonth()]} ${cal.returnContext.date.getFullYear()}`
+    : '';
+  const headerSub = returnLabel || sub;
+  const periodAction = cal.view === 'range' || !cal.rangeFrom || !cal.rangeTo ? 'cal.custom' : 'cal.view';
 
   return `
-  <div class="top blur">
-    <button class="ico-btn ${isToday && cal.view === 'day' ? '' : 'p'}" data-a="cal.today">${icon('calendar', 18)}</button>
-    <button class="grow center" data-a="cal.pickDate" style="padding:0 4px">
-      <div class="top-t center" style="font-size:16.5px">${title} ${icon('down', 14, 2.4)}</div>
-      ${sub ? `<div class="top-sub center">${sub}</div>` : ''}
+  <div class="top blur cal-top">
+    ${cal.returnContext ? `<button class="ico-btn flat cal-context-back" data-a="cal.return" aria-label="${esc(returnLabel)}">${icon('back', 18)}</button>` : ''}
+    <button class="cal-title" data-a="${cal.view === 'range' ? 'cal.custom' : 'cal.pickDate'}">
+      <span>${title} ${icon('down', 13, 2.4)}</span>
+      <small class="${headerSub ? '' : 'cal-sub-empty'}" ${headerSub ? '' : 'aria-hidden="true"'}>${headerSub || '&nbsp;'}</small>
     </button>
-    <button class="ico-btn" data-a="cal.prev">${icon('back', 18)}</button>
-    <button class="ico-btn" data-a="cal.next">${icon('fwd', 18)}</button>
+    <div class="cal-nav">
+      <button class="cal-today ${isToday ? 'is-current' : ''}" data-a="cal.today">Сегодня</button>
+      <button class="ico-btn flat cal-arrow" data-a="cal.prev" aria-label="Предыдущий период">${icon('back', 18)}</button>
+      <button class="ico-btn flat cal-arrow" data-a="cal.next" aria-label="Следующий период">${icon('fwd', 18)}</button>
+    </div>
   </div>
 
-  <div class="wrap" style="margin-bottom:12px">${segmented('cal.view',
-    [{ v: 'day', t: 'День' }, { v: 'week', t: 'Неделя' }, { v: 'month', t: 'Месяц' }], cal.view)}</div>
+  <div class="wrap cal-view-switch">
+    <div class="seg cal-view-seg">
+      <button data-a="cal.view" data-v="day" class="${cal.view === 'day' ? 'on' : ''}">День</button>
+      <button data-a="cal.view" data-v="week" class="${cal.view === 'week' ? 'on' : ''}">Неделя</button>
+      <button data-a="cal.view" data-v="month" class="${cal.view === 'month' ? 'on' : ''}">Месяц</button>
+      <button data-a="${periodAction}" data-v="range" class="${cal.view === 'range' ? 'on' : ''}">Период</button>
+    </div>
+  </div>
 
-  ${!fixedEmp && list.length > 1 ? `<div class="chips" style="margin-bottom:12px">
-    <button class="chip ${!empId ? 'on' : ''}" data-a="cal.emp" data-id="">Все мастера</button>
-    ${list.map(e => `<button class="chip ${empId === e.id ? 'on' : ''}" data-a="cal.emp" data-id="${e.id}"
-      style="${empId === e.id ? 'background:' + e.color + ';border-color:transparent;color:#fff' : ''}">
+  ${!fixedEmp && list.length > 1 ? `<div class="chips cal-staff">
+    <button class="chip cal-person ${!empId ? 'on' : ''}" data-a="cal.emp" data-id="">Все</button>
+    ${list.map(e => `<button class="chip cal-person ${empId === e.id ? 'on' : ''}" data-a="cal.emp" data-id="${e.id}" style="--emp-color:${e.color}">
       <i style="width:7px;height:7px;border-radius:50%;background:${e.color};display:inline-block"></i>${esc(e.name.split(' ')[0])}</button>`).join('')}
   </div>` : ''}
 
-  ${periodStats(d, empId)}
-
-  ${cal.view === 'day' ? dayView(d, empId) : cal.view === 'week' ? weekView(d, empId) : monthView(d, empId)}`;
+  <div class="cal-content ${motion ? 'cal-motion-' + motion : ''}">
+    ${periodStats(d, empId)}
+    ${cal.view === 'day' ? dayView(d, empId)
+      : cal.view === 'week' ? weekView(d, empId)
+        : cal.view === 'month' ? monthView(d, empId)
+          : rangeView(custom.from, custom.to, empId)}
+  </div>`;
 }
 
 /* §58 — показатели прямо в календаре: сколько записей, загрузка,
@@ -259,6 +318,9 @@ function periodStats(d, empId) {
   } else if (cal.view === 'month') {
     const n = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
     days = Array.from({ length: n }, (_, i) => new Date(d.getFullYear(), d.getMonth(), i + 1));
+  } else if (cal.view === 'range') {
+    const custom = calendarRange();
+    days = rangeDays(custom.from, custom.to);
   }
   const team = empId ? [emp(empId)].filter(Boolean) : staff();
   let cnt = 0, rev = 0, busyMin = 0, workMin = 0, gaps = 0;
@@ -272,12 +334,12 @@ function periodStats(d, empId) {
   });
   const load = workMin ? Math.round(busyMin / workMin * 100) : 0;
   const loadColor = load > 70 ? 'var(--ok)' : load > 40 ? 'var(--warn)' : 'var(--tx-2)';
-  return `<div class="wrap" style="margin-bottom:12px">
-    <div class="card flat" style="padding:11px 13px;display:flex;gap:12px;justify-content:space-between">
-      <div><div class="tiny dim">Записей</div><div class="b" style="font-size:16px">${cnt}</div></div>
-      <div><div class="tiny dim">Загрузка</div><div class="b" style="font-size:16px;color:${loadColor}">${load}%</div></div>
-      <div><div class="tiny dim">Свободно окон</div><div class="b" style="font-size:16px">${gaps}</div></div>
-      <div style="text-align:right"><div class="tiny dim">Ожидается</div><div class="b" style="font-size:16px">${moneyShort(rev)} ₸</div></div>
+  return `<div class="wrap cal-summary-wrap">
+    <div class="cal-summary">
+      <div class="cal-stat"><span>Записи</span><strong>${cnt}</strong></div>
+      <div class="cal-stat cal-load"><span>Загрузка</span><strong style="color:${loadColor}">${load}%</strong><i><b style="width:${Math.min(100, load)}%;background:${loadColor}"></b></i></div>
+      <div class="cal-stat"><span>Окна</span><strong>${gaps}</strong></div>
+      <div class="cal-stat"><span>Доход</span><strong>${moneyShort(rev)} ₸</strong></div>
     </div>
   </div>`;
 }
@@ -372,8 +434,8 @@ function weekView(d, empId) {
     const day = addDays(start, i);
     const list = dayAppts(day, { employeeId: empId });
     const isT = dayKey(day) === dayKey(now());
-    cells.push(`<button class="wcol ${isT ? 'today' : ''}" data-a="cal.day" data-d="${day.getTime()}">
-      <div class="w">${WD[day.getDay()]}</div><div class="n">${day.getDate()}</div>
+    cells.push(`<button class="wcol ${isT ? 'today' : ''}" data-a="cal.dayMenu" data-d="${day.getTime()}">
+      <div class="w">${WD[day.getDay()]}</div><div class="n">${day.getDate()}</div><div class="wcount">${nAppt(list.length)}</div>
       ${list.slice(0, 4).map(a => {
       const e = emp(a.employeeId);
       return `<div class="ev" style="background:${e ? e.color : apptColor(a)}">${hhmm(new Date(a.start))}</div>`;
@@ -404,40 +466,226 @@ function monthView(d, empId) {
     const off = !work;
     const away = team.some(e => absenceOn(day, e.id).length);
     const isT = dayKey(day) === dayKey(now());
-    cells.push(`<button class="mv-cell ${isT ? 'today' : ''} ${off ? 'off' : ''}" data-a="cal.day" data-d="${day.getTime()}">
+    const weekend = day.getDay() === 0 || day.getDay() === 6;
+    const loadLabel = load > 70 ? 'плотная загрузка' : load > 40 ? 'средняя загрузка' : 'свободная загрузка';
+    cells.push(`<button class="mv-cell ${isT ? 'today' : ''} ${off ? 'off' : ''} ${weekend ? 'weekend' : ''}" data-a="cal.dayMenu" data-d="${day.getTime()}"
+      aria-label="${n} ${MONTHS[m]}, ${nAppt(list.length)}, ${off ? 'выходной' : loadLabel}">
       <span class="d">${n}</span>
-      ${list.length ? `<span class="cnt">${list.length}</span>` : off ? '<span class="cnt dim">вых</span>' : ''}
+      ${list.length ? `<span class="cnt">${list.length} <small>зап.</small></span>` : off ? '<span class="cnt dim">вых.</span>' : '<span class="cnt dim">—</span>'}
       ${away ? '<i class="away"></i>' : ''}
       <i class="bar" style="width:${load}%;background:${load > 70 ? 'var(--ok)' : load > 40 ? 'var(--warn)' : 'var(--p)'}"></i>
     </button>`);
   }
-  return `<div class="wrap"><div class="mv-grid-wd">${['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ', 'ВС'].map(w => `<span>${w}</span>`).join('')}</div>
+  return `<div class="wrap cal-month"><div class="mv-grid-wd">${['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ', 'ВС'].map(w => `<span>${w}</span>`).join('')}</div>
     <div class="mv-grid">${cells.join('')}</div>
-    <div class="mc-legend" style="margin-top:10px">
-      <span><i style="background:var(--ok)"></i>плотный день</span>
-      <span><i style="background:var(--p)"></i>есть места</span>
+    <div class="mc-legend mv-legend">
+      <span><i style="background:var(--p)"></i>свободно</span>
+      <span><i style="background:var(--warn)"></i>средне</span>
+      <span><i style="background:var(--ok)"></i>плотно</span>
       <span><i style="background:#06AED4"></i>отсутствие</span>
     </div>
   </div>`;
 }
 
-on('cal.view', ds => { cal.view = ds.v; rr(); });
-on('cal.emp', ds => { cal.empId = ds.id || null; rr(); });
-on('cal.today', () => { cal.date = today(); rr(); });
+function rangeView(from, to, empId) {
+  const days = rangeDays(from, to);
+  const groups = days.map(day => {
+    const list = dayAppts(day, { employeeId: empId });
+    return { day, list, revenue: list.reduce((sum, a) => sum + a.price, 0) };
+  }).filter(group => group.list.length);
+
+  if (!groups.length) {
+    return `<div class="wrap">${emptyState({
+      ic: 'calendar',
+      title: 'В этом периоде записей нет',
+      text: `${dateFull(from)} — ${dateFull(to)}. Выберите другой период или создайте запись.`,
+      action: 'Добавить запись',
+      act: 'cal.add',
+    })}</div>`;
+  }
+
+  return `<div class="wrap cal-range-list">
+    <div class="cal-range-note">${groups.length} ${plural(groups.length, ['день', 'дня', 'дней'])} с записями</div>
+    ${groups.map(({ day, list, revenue }) => `
+      <section class="cal-range-day">
+        <button class="cal-range-head" data-a="cal.dayMenu" data-d="${day.getTime()}">
+          <span><b>${day.getDate()} ${MONTHS[day.getMonth()]}</b><small>${WD_FULL[day.getDay()]}</small></span>
+          <span class="cal-range-total"><b>${nAppt(list.length)}</b><small>${moneyShort(revenue)} ₸</small></span>
+          ${icon('fwd', 15, 2.2)}
+        </button>
+        <div class="stack s">${list.map(a => apptRow(a, { showEmp: !empId })).join('')}</div>
+      </section>`).join('')}
+  </div>`;
+}
+
+on('cal.view', ds => { cal.view = ds.v; cal.returnContext = null; cal.motion = 'switch'; rr(); });
+on('cal.emp', ds => { cal.empId = ds.id || null; cal.motion = 'switch'; rr(); });
+on('cal.today', () => {
+  cal.date = today();
+  if (cal.view === 'range') cal.view = 'day';
+  cal.returnContext = null;
+  cal.motion = 'today';
+  rr();
+});
 on('cal.prev', () => {
-  cal.date = cal.view === 'month'
+  if (cal.view === 'range') {
+    const { from, to } = calendarRange();
+    const shift = -daysBetween(from, to);
+    cal.rangeFrom = addDays(from, shift);
+    cal.rangeTo = addDays(to, shift);
+    cal.date = cal.rangeFrom;
+  } else cal.date = cal.view === 'month'
     ? new Date(cal.date.getFullYear(), cal.date.getMonth() - 1, 1)
     : addDays(cal.date, cal.view === 'week' ? -7 : -1);
+  cal.motion = 'prev';
   rr();
 });
 on('cal.next', () => {
-  cal.date = cal.view === 'month'
+  if (cal.view === 'range') {
+    const { from, to } = calendarRange();
+    const shift = daysBetween(from, to);
+    cal.rangeFrom = addDays(from, shift);
+    cal.rangeTo = addDays(to, shift);
+    cal.date = cal.rangeFrom;
+  } else cal.date = cal.view === 'month'
     ? new Date(cal.date.getFullYear(), cal.date.getMonth() + 1, 1)
     : addDays(cal.date, cal.view === 'week' ? 7 : 1);
+  cal.motion = 'next';
   rr();
 });
-on('cal.day', ds => { cal.date = startOfDay(new Date(+ds.d)); cal.view = 'day'; rr(); });
-on('cal.add', () => newApptFlow({ date: cal.date, employeeId: cal.empId }));
+on('cal.return', () => {
+  if (!cal.returnContext) return;
+  const ctx = cal.returnContext;
+  cal.returnContext = null;
+  cal.view = ctx.view;
+  cal.date = startOfDay(ctx.date);
+  cal.motion = 'switch';
+  window.scrollTo(0, 0);
+  rr();
+});
+
+on('cal.dayMenu', ds => {
+  const date = startOfDay(new Date(+ds.d));
+  const list = dayAppts(date, { employeeId: cal.empId });
+  const revenue = list.reduce((sum, a) => sum + a.price, 0);
+  const origin = { view: cal.view, date: startOfDay(cal.date) };
+  const actions = [
+    ['calendarPlus', 'Создать запись', 'Клиент, услуга и время', 'cal.dayAdd', '#4C6FFF'],
+    ['lock', 'Заблокировать время', 'Личные дела или занятый слот', 'cal.dayBlock', '#F79009'],
+    ['coffee', 'Добавить перерыв', 'Обед или пауза в расписании', 'cal.dayBreak', '#8B5CF6'],
+    ['gift', 'Отметить отсутствие', 'Выходной, отпуск или больничный', 'cal.dayAway', '#06AED4'],
+  ];
+  const sh = sheet({
+    title: `${date.getDate()} ${MONTHS[date.getMonth()]} · ${WD_FULL[date.getDay()]}`,
+    body: `<div class="cal-day-overview">
+      <div><span>Записи</span><b>${list.length}</b></div>
+      <div><span>Доход</span><b>${moneyShort(revenue)} ₸</b></div>
+    </div>
+    <div class="stack s cal-day-actions">${actions.map(a => `<button class="lrow press" data-a="${a[3]}">
+      <div class="ic" style="background:${a[4]}1f;color:${a[4]}">${icon(a[0], 19)}</div>
+      <div class="grow"><div class="tl">${a[1]}</div><div class="st">${a[2]}</div></div>${icon('fwd', 17)}
+    </button>`).join('')}</div>`,
+    footer: `<button class="btn p" data-a="cal.dayOpen">Открыть расписание дня</button>`,
+  });
+  window.__calDay = { sh, date, origin };
+});
+
+on('cal.dayOpen', () => {
+  const x = window.__calDay;
+  if (!x) return;
+  cal.returnContext = x.origin.view === 'day' ? null : x.origin;
+  cal.date = x.date;
+  cal.view = 'day';
+  cal.motion = 'switch';
+  x.sh.close();
+  setTimeout(() => { window.scrollTo(0, 0); rr(); }, 260);
+});
+on('cal.dayAdd', () => {
+  const x = window.__calDay;
+  if (!x) return;
+  x.sh.close();
+  setTimeout(() => newApptFlow({ date: x.date, employeeId: cal.empId }), 260);
+});
+on('cal.dayBlock', () => {
+  const x = window.__calDay;
+  if (!x) return;
+  x.sh.close();
+  setTimeout(() => blockFlow({ date: x.date, empId: cal.empId, kind: 'busy' }), 260);
+});
+on('cal.dayBreak', () => {
+  const x = window.__calDay;
+  if (!x) return;
+  x.sh.close();
+  setTimeout(() => blockFlow({ date: x.date, empId: cal.empId, kind: 'break' }), 260);
+});
+on('cal.dayAway', () => {
+  const x = window.__calDay;
+  if (!x) return;
+  x.sh.close();
+  setTimeout(() => absenceFlow({ date: x.date, empId: cal.empId }), 260);
+});
+on('cal.add', () => {
+  const date = cal.view === 'range' ? calendarRange().from : cal.date;
+  newApptFlow({ date, employeeId: cal.empId });
+});
+
+on('cal.custom', () => {
+  const base = startOfDay(cal.date || today());
+  const weekStart = addDays(base, -((base.getDay() + 6) % 7));
+  const monthStart = new Date(base.getFullYear(), base.getMonth(), 1);
+  const initial = cal.rangeFrom && cal.rangeTo
+    ? calendarRange()
+    : cal.view === 'week'
+      ? { from: weekStart, to: addDays(weekStart, 6) }
+      : cal.view === 'month'
+        ? { from: monthStart, to: new Date(base.getFullYear(), base.getMonth() + 1, 0) }
+        : { from: base, to: base };
+  const pick = { side: 'from', from: initial.from, to: initial.to, month: initial.from };
+  const sh = sheet({ title: 'Свой период', body: '' });
+  const draw = () => {
+    sh.set({
+      title: pick.side === 'from' ? 'С какого дня?' : 'По какой день?',
+      body: `<div class="inp-row cal-range-picks">
+        <button class="card flat press ${pick.side === 'from' ? 'on' : ''}" data-a="cr.from">
+          <div class="tiny dim">С</div><div class="b">${dateFull(pick.from)}</div>
+        </button>
+        <button class="card flat press ${pick.side === 'to' ? 'on' : ''}" data-a="cr.to">
+          <div class="tiny dim">По</div><div class="b">${dateFull(pick.to)}</div>
+        </button>
+      </div>
+      ${monthGrid(pick.month, {
+        selected: pick.side === 'from' ? pick.from : pick.to,
+        action: 'cr.pick', navAction: 'cr.month',
+        minDate: pick.side === 'to' ? pick.from : null,
+        showCounts: false,
+      })}`,
+      footer: `<button class="btn p" data-a="cr.ok">Показать период</button>`,
+    });
+  };
+  on('cr.from', () => { pick.side = 'from'; pick.month = pick.from; draw(); });
+  on('cr.to', () => { pick.side = 'to'; pick.month = pick.to; draw(); });
+  on('cr.month', ds => { pick.month = startOfDay(new Date(+ds.d)); draw(); });
+  on('cr.pick', ds => {
+    const value = startOfDay(new Date(+ds.d));
+    if (pick.side === 'from') {
+      pick.from = value;
+      if (pick.to < value) pick.to = value;
+      pick.side = 'to';
+      pick.month = pick.to;
+    } else pick.to = value;
+    draw();
+  });
+  on('cr.ok', () => {
+    cal.rangeFrom = pick.from;
+    cal.rangeTo = pick.to;
+    cal.date = pick.from;
+    cal.view = 'range';
+    cal.motion = 'switch';
+    sh.close();
+    rr();
+  });
+  draw();
+});
 
 /* §43 — тап по дате открывает календарь: можно уйти на любой день */
 on('cal.pickDate', () => {
@@ -456,9 +704,9 @@ on('cal.pickDate', () => {
     </div>`,
   });
   on('cd.month', d2 => { view = startOfDay(new Date(+d2.d)); draw(); });
-  on('cd.pick', d2 => { cal.date = startOfDay(new Date(+d2.d)); sh.close(); rr(); });
-  on('cd.today', () => { cal.date = today(); sh.close(); rr(); });
-  on('cd.week', () => { cal.date = today(); cal.view = 'week'; sh.close(); rr(); });
+  on('cd.pick', d2 => { cal.date = startOfDay(new Date(+d2.d)); cal.motion = 'switch'; sh.close(); rr(); });
+  on('cd.today', () => { cal.date = today(); cal.motion = 'today'; sh.close(); rr(); });
+  on('cd.week', () => { cal.date = today(); cal.view = 'week'; cal.motion = 'switch'; sh.close(); rr(); });
   draw();
 });
 
@@ -482,7 +730,7 @@ on('cal.slot', ds => {
   window.__cs = s2;
 });
 on('cal.slotAdd', ds => { window.__cs && window.__cs.close(); setTimeout(() => newApptFlow({ date: cal.date, employeeId: cal.empId, startMin: +ds.m }), 260); });
-on('cal.slotBlock', ds => { window.__cs && window.__cs.close(); setTimeout(() => blockFlow({ date: cal.date, empId: cal.empId, startMin: +ds.m }), 260); });
+on('cal.slotBlock', ds => { window.__cs && window.__cs.close(); setTimeout(() => blockFlow({ date: cal.date, empId: cal.empId, startMin: +ds.m, kind: 'busy' }), 260); });
 on('cal.slotBreak', ds => { window.__cs && window.__cs.close(); setTimeout(() => blockFlow({ date: cal.date, empId: cal.empId, startMin: +ds.m, kind: 'break' }), 260); });
 on('cal.slotAway', () => { window.__cs && window.__cs.close(); setTimeout(() => absenceFlow({ date: cal.date, empId: cal.empId }), 260); });
 

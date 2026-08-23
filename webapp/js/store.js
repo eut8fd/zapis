@@ -284,9 +284,10 @@ export function createAppointment({ clientId, employeeId, serviceIds, start, not
   return a;
 }
 export function cancelAppointment(id, by = 'owner') {
-  const a = appt(id); if (!a) return;
+  const a = appt(id); if (!a || a.status !== 'planned') return false;
   a.status = 'cancelled'; a.cancelledBy = by; a.cancelledAt = now().toISOString();
   emit();
+  return true;
 }
 export function completeAppointment(id) {
   const a = appt(id); if (!a) return;

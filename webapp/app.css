@@ -23,6 +23,8 @@
   --safe-t:env(safe-area-inset-top,0px);
   --ff:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
   --e:cubic-bezier(.22,.61,.36,1);
+  --e-nav:cubic-bezier(.2,.78,.22,1);
+  --e-sheet:cubic-bezier(.2,.84,.24,1);
 }
 [data-theme="dark"]{
   --p:#6D8BFF; --p-2:#5A7BFF; --p-soft:rgba(109,139,255,.16); --p-glow:rgba(109,139,255,.28);
@@ -51,6 +53,8 @@ body{
 button,input,select,textarea{font:inherit;color:inherit}
 button{background:none;border:0;padding:0;cursor:pointer;text-align:left;color:inherit}
 a{color:inherit;text-decoration:none}
+:where(button,a,[role="button"]):focus{outline:none}
+:where(button,a,[role="button"]):focus-visible{outline:2px solid var(--p);outline-offset:-3px}
 /* inline-block, чтобы иконка внутри строки текста не уезжала на отдельную строку */
 svg{display:inline-block;vertical-align:middle;flex:none}
 /* элементы-контролы центрируем явно */
@@ -68,11 +72,18 @@ svg{display:inline-block;vertical-align:middle;flex:none}
 #app{min-height:100%;display:flex;flex-direction:column}
 .screen{
   flex:1;padding:calc(var(--safe-t) + 8px) 0 calc(var(--tab-h) + var(--safe-b) + 24px);
-  animation:scr .26s var(--e);
+  background:var(--bg);
 }
 .screen.no-tab{padding-bottom:calc(var(--safe-b) + 28px)}
 .screen.has-fab{padding-bottom:calc(var(--tab-h) + var(--safe-b) + 100px)}
 @keyframes scr{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.screen.nav-enter.nav-forward{animation:nav-in-forward .36s var(--e-nav) both}
+.screen.nav-enter.nav-back{animation:nav-in-back .34s var(--e-nav) both}
+.screen.nav-enter.nav-tab,.screen.nav-enter.nav-replace{animation:nav-in-replace .32s var(--e-nav) both}
+@keyframes nav-in-forward{from{opacity:0;transform:translate3d(24px,0,0) scale(.992)}to{opacity:1;transform:none}}
+@keyframes nav-in-back{from{opacity:0;transform:translate3d(-20px,0,0) scale(.992)}to{opacity:1;transform:none}}
+@keyframes nav-in-replace{from{opacity:0;transform:translate3d(0,10px,0) scale(.994)}to{opacity:1;transform:none}}
+
 .wrap{padding:0 16px}
 .sec{margin-top:22px}
 .sec-h{display:flex;align-items:center;justify-content:space-between;padding:0 16px 10px}
@@ -119,7 +130,7 @@ svg{display:inline-block;vertical-align:middle;flex:none}
 .tab{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--tx-3);transition:color .18s}
 .tab .lb{font-size:10.5px;font-weight:600;letter-spacing:.01em}
 .tab.on{color:var(--p)}
-.tab.on svg{animation:tabpop .3s var(--e)}
+.tab.on.tab-pulse svg{animation:tabpop .3s var(--e)}
 @keyframes tabpop{0%{transform:scale(.8)}60%{transform:scale(1.12)}100%{transform:scale(1)}}
 
 /* ---------- fab ---------- */
@@ -127,7 +138,7 @@ svg{display:inline-block;vertical-align:middle;flex:none}
   position:fixed;right:16px;bottom:calc(var(--tab-h) + var(--safe-b) + 16px);z-index:41;
   width:54px;height:54px;border-radius:19px;display:grid;place-items:center;color:#fff;
   background:linear-gradient(135deg,var(--p),var(--p-2));box-shadow:0 12px 26px -8px var(--p-glow),0 2px 6px rgba(0,0,0,.14);
-  transition:transform .18s var(--e);animation:pop .3s var(--e)
+  transition:transform .18s var(--e)
 }
 .fab:active{transform:scale(.9) rotate(45deg)}
 @keyframes pop{0%{transform:scale(.6);opacity:0}100%{transform:scale(1);opacity:1}}
@@ -184,7 +195,7 @@ svg{display:inline-block;vertical-align:middle;flex:none}
   transition:transform .14s var(--e),box-shadow .14s
 }
 .col-dot:active{transform:scale(.9)}
-.col-dot.on{box-shadow:0 0 0 2px var(--sf),0 0 0 4px currentColor;color:var(--tx-2)}
+.col-dot.on{box-shadow:inset 0 0 0 3px var(--sf),inset 0 0 0 5px currentColor;color:var(--tx-2)}
 .col-prev{
   margin-top:12px;border-radius:var(--r-m);padding:16px 14px;color:#fff;
   display:flex;flex-direction:column;gap:2px
@@ -195,7 +206,7 @@ svg{display:inline-block;vertical-align:middle;flex:none}
 /* ---------- мои записи (клиент) ---------- */
 /* Ближайший визит — цветная шапка с датой и обратным отсчётом. */
 .upc{padding:0}
-.upc-first{border-color:var(--p);box-shadow:0 0 0 1px var(--p),var(--sh-2)}
+.upc-first{border-color:transparent;box-shadow:inset 0 0 0 2px var(--p),var(--sh-2)}
 .upc-head{
   display:flex;align-items:center;justify-content:space-between;gap:8px;
   padding:10px 14px;background:var(--sf-3);color:var(--tx-2);
@@ -267,6 +278,29 @@ svg{display:inline-block;vertical-align:middle;flex:none}
 .act{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;padding:12px 4px;border-radius:var(--r-m);background:var(--sf-2);color:var(--tx-2);font-size:11.5px;font-weight:600;transition:transform .14s var(--e)}
 .act:active{transform:scale(.94)}
 .act svg{color:var(--tx)}
+
+/* ---------- карточка записи ---------- */
+.appt-person{gap:13px;margin-bottom:14px}
+.appt-person-name{font-size:18px;font-weight:750;letter-spacing:-.02em;line-height:1.25}
+.appt-info{margin-bottom:12px;padding:4px 14px;background:var(--sf-2);border:1px solid var(--bd);border-radius:18px}
+.appt-info-row{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:10px 0;border-bottom:1px solid var(--bd)}
+.appt-info-row:last-child{border-bottom:0}
+.appt-info-row>span{flex:none;color:var(--tx-3);font-size:12.5px}
+.appt-info-row>b{max-width:68%;font-size:13.5px;text-align:right;line-height:1.35}
+.appt-info-row.total>b{font-size:16px;letter-spacing:-.02em}
+.appt-review{display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:12px 13px;border-radius:16px;border:1px solid var(--bd)}
+.appt-review.received{display:block;background:color-mix(in srgb,var(--warn-soft) 55%,var(--sf));border-color:color-mix(in srgb,var(--warn) 24%,transparent)}
+.appt-review.pending{background:var(--sf-2)}
+.appt-review-head{display:flex;align-items:center;gap:10px}
+.appt-review-icon{width:34px;height:34px;flex:none;border-radius:11px;display:grid;place-items:center;background:var(--warn-soft);color:var(--warn)}
+.appt-review b{display:block;font-size:13.5px}
+.appt-review span{display:block;margin-top:1px;font-size:11.5px;color:var(--tx-3)}
+.appt-review-stars{display:flex;gap:1px;flex:none;color:var(--bd-2)}
+.appt-review-stars i{display:block;height:14px}
+.appt-review-stars i.on{color:var(--warn)}
+.appt-review-stars i.on svg{fill:currentColor}
+.appt-review-text{margin-top:10px;padding-top:9px;border-top:1px solid color-mix(in srgb,var(--warn) 18%,transparent);font-size:13px;line-height:1.45;color:var(--tx-2)}
+.appt-actions{margin-bottom:4px}
 
 /* ---------- chips ---------- */
 .chips{
@@ -345,6 +379,44 @@ svg{display:inline-block;vertical-align:middle;flex:none}
 .appt.cancelled .n{text-decoration:line-through;opacity:.6}
 
 /* ---------- calendar ---------- */
+.cal-top{gap:10px;padding-bottom:10px}
+.cal-title{min-width:0;flex:1;display:flex;flex-direction:column;align-items:flex-start;padding:3px 0;text-align:left}
+.cal-title>span{max-width:100%;font-size:18px;font-weight:760;letter-spacing:-.025em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* capitalize поднимал каждое слово: «10 Дней», «К Периоду 3–12 Августа».
+   Заглавной должна быть только первая буква подписи. */
+.cal-title small{display:block;max-width:100%;font-size:11.5px;color:var(--tx-3);font-weight:600;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cal-title small::first-letter{text-transform:uppercase}
+.cal-title .cal-sub-empty{visibility:hidden}
+.cal-context-back{width:34px;height:34px;flex:none;margin-left:-4px}
+.cal-nav{display:flex;align-items:center;gap:3px;flex:none}
+.cal-arrow{width:34px;height:34px;background:var(--sf-2);border-color:transparent;box-shadow:none}
+.cal-today{height:32px;padding:0 11px;border-radius:11px;color:var(--p);background:var(--p-soft);font-size:12px;font-weight:700;text-align:center;opacity:1;transform:none;animation:cal-today-in .24s var(--e-nav) both}
+.cal-today.is-current{visibility:hidden;pointer-events:none;opacity:0;transform:translateY(-4px) scale(.96);animation:none}
+@keyframes cal-today-in{from{opacity:0;transform:translateY(-4px) scale(.96)}to{opacity:1;transform:none}}
+.cal-view-switch{margin-bottom:10px}
+.cal-view-switch .seg{padding:3px;border-radius:14px}
+.cal-view-switch .seg button{height:34px;border-radius:11px}
+.cal-view-seg button{min-width:0;padding:0 5px}
+.cal-staff{margin-bottom:11px;padding-top:1px;padding-bottom:2px}
+.cal-person{height:32px;background:transparent;box-shadow:none}
+.cal-person.on{background:var(--sf);color:var(--tx);border-color:var(--emp-color,var(--bd-2));box-shadow:var(--sh-1)}
+.cal-summary-wrap{margin-bottom:14px}
+.cal-summary{display:grid;grid-template-columns:repeat(4,1fr);background:var(--sf);border:1px solid var(--bd);border-radius:18px;padding:12px 4px;box-shadow:var(--sh-1)}
+.cal-stat{min-width:0;padding:0 9px;border-right:1px solid var(--bd)}
+.cal-stat:last-child{border-right:0}
+.cal-stat span{display:block;color:var(--tx-3);font-size:10.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cal-stat strong{display:block;font-size:16px;font-weight:760;letter-spacing:-.02em;margin-top:2px;white-space:nowrap}
+.cal-load>i{display:block;height:3px;margin-top:4px;border-radius:3px;background:var(--sf-3);overflow:hidden}
+.cal-load>i b{display:block;height:100%;border-radius:inherit}
+.cal-content{transform-origin:50% 0}
+.cal-content.cal-motion-switch{animation:cal-content-switch .24s var(--e-nav) both}
+.cal-content.cal-motion-prev{animation:cal-content-prev .26s var(--e-nav) both}
+.cal-content.cal-motion-next{animation:cal-content-next .26s var(--e-nav) both}
+.cal-content.cal-motion-today{animation:cal-content-today .26s var(--e-nav) both}
+@keyframes cal-content-switch{from{opacity:0;transform:translateY(7px) scale(.995)}to{opacity:1;transform:none}}
+@keyframes cal-content-prev{from{opacity:0;transform:translateX(-12px)}to{opacity:1;transform:none}}
+@keyframes cal-content-next{from{opacity:0;transform:translateX(12px)}to{opacity:1;transform:none}}
+@keyframes cal-content-today{from{opacity:0;transform:scale(.985)}to{opacity:1;transform:none}}
 .cal-head{display:flex;align-items:center;justify-content:space-between;padding:6px 16px 12px;gap:10px}
 .cal-date{font-size:16px;font-weight:700;letter-spacing:-.02em;text-align:center;flex:1}
 .cal-date small{display:block;font-size:11.5px;color:var(--tx-3);font-weight:600}
@@ -379,33 +451,60 @@ svg{display:inline-block;vertical-align:middle;flex:none}
 .tl-now{position:absolute;left:42px;right:16px;height:2px;background:var(--dan);z-index:5;pointer-events:none}
 .tl-now::before{content:"";position:absolute;left:-5px;top:-3px;width:8px;height:8px;border-radius:50%;background:var(--dan)}
 
-/* week grid */
-.wgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;padding:0 12px}
-.wcol{background:var(--sf);border:1px solid var(--bd);border-radius:14px;padding:7px 4px;min-height:120px;text-align:center}
+/* week grid: карточки не сжимаются до нечитаемых семи колонок */
+.wgrid{display:flex;gap:8px;padding:1px 16px 8px;overflow-x:auto;scroll-snap-type:x proximity}
+.wcol{flex:0 0 88px;background:var(--sf);border:1px solid var(--bd);border-radius:16px;padding:9px 7px;min-height:132px;text-align:left;scroll-snap-align:start;box-shadow:var(--sh-1)}
 .wcol .w{font-size:10px;font-weight:700;color:var(--tx-3);text-transform:uppercase}
-.wcol .n{font-size:14px;font-weight:750;margin:2px 0 6px}
-.wcol .ev{font-size:9.5px;font-weight:700;color:#fff;background:var(--p);border-radius:6px;padding:3px 2px;margin-bottom:3px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.wcol.today{outline:2px solid var(--p);outline-offset:-1px}
+.wcol .n{font-size:20px;font-weight:760;margin:0;letter-spacing:-.03em}
+.wcol .wcount{font-size:9.5px;color:var(--tx-3);margin-bottom:7px;white-space:nowrap}
+.wcol .ev{font-size:10.5px;font-weight:700;color:#fff;background:var(--p);border-radius:7px;padding:4px 5px;margin-bottom:4px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.wcol.today{border-color:transparent;box-shadow:inset 0 0 0 2px var(--p),var(--sh-1)}
+
+.cal-range-list{display:grid;gap:10px;padding-bottom:8px}
+.cal-range-note{font-size:11.5px;color:var(--tx-3);font-weight:650;padding:0 3px 1px}
+.cal-range-day{background:var(--sf);border:1px solid var(--bd);border-radius:18px;padding:12px;box-shadow:var(--sh-1)}
+.cal-range-head{width:100%;display:flex;align-items:center;gap:10px;text-align:left;padding:0 2px 10px}
+.cal-range-head>span:first-child{min-width:0;flex:1}
+.cal-range-head b{display:block;font-size:14px;font-weight:750;letter-spacing:-.015em}
+.cal-range-head small{display:block;color:var(--tx-3);font-size:10.5px;font-weight:600;text-transform:capitalize;margin-top:1px}
+.cal-range-total{text-align:right;flex:none}
+.cal-range-total b{font-size:12px}
+.cal-range-total small{white-space:nowrap}
+.cal-range-day .appt{background:var(--sf-2);box-shadow:none}
+.cal-range-picks{margin-bottom:14px}
+.cal-range-picks .card{flex:1;padding:12px 14px;text-align:left;min-width:0}
+.cal-range-picks .card.on{border-color:transparent;box-shadow:inset 0 0 0 2px var(--p)}
+.cal-range-picks .b{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cal-day-overview{display:grid;grid-template-columns:1fr 1fr;gap:1px;margin-bottom:12px;background:var(--bd);border:1px solid var(--bd);border-radius:16px;overflow:hidden}
+.cal-day-overview>div{padding:12px 14px;background:var(--sf-2)}
+.cal-day-overview span{display:block;font-size:11px;font-weight:600;color:var(--tx-3)}
+.cal-day-overview b{display:block;font-size:17px;font-weight:760;margin-top:2px}
+.cal-day-actions .lrow{width:100%;border-radius:15px;border:1px solid var(--bd);text-align:left}
 
 /* ---------- bottom sheet ---------- */
-.bd-mask{position:fixed;inset:0;background:rgba(8,11,18,.5);backdrop-filter:blur(2px);z-index:60;opacity:0;transition:opacity .25s var(--e)}
+.bd-mask{position:fixed;inset:0;background:rgba(8,11,18,.5);backdrop-filter:blur(3px);z-index:60;opacity:0;transition:opacity .32s var(--e-nav)}
 .bd-mask.in{opacity:1}
 .sheet{
+  --sheet-drag:0px;
   position:fixed;left:0;right:0;bottom:0;z-index:61;background:var(--sf);
   border-radius:var(--r-xl) var(--r-xl) 0 0;box-shadow:var(--sh-3);
   max-height:92vh;display:flex;flex-direction:column;
-  transform:translateY(100%);transition:transform .3s var(--e);
+  transform:translate3d(0,calc(100% + 16px + var(--sheet-drag)),0) scale(.985);opacity:.75;
+  transition:transform .4s var(--e-sheet),opacity .28s var(--e-nav);will-change:transform,opacity;
   padding-bottom:var(--safe-b)
 }
-.sheet.in{transform:none}
+.sheet.in{transform:translate3d(0,var(--sheet-drag),0) scale(1);opacity:1}
 .sheet .grab{width:38px;height:4px;border-radius:3px;background:var(--bd-2);margin:8px auto 2px;flex:none}
 .sheet-h{display:flex;align-items:center;gap:10px;padding:8px 18px 10px;flex:none}
 .sheet-h .t{font-size:18px;font-weight:750;letter-spacing:-.02em;flex:1}
 .sheet-b{overflow-y:auto;padding:0 18px 18px;-webkit-overflow-scrolling:touch}
 .sheet-f{padding:12px 18px calc(12px + var(--safe-b));border-top:1px solid var(--bd);flex:none;background:var(--sf)}
+.sheet.swapping .sheet-h>*{animation:sheet-content-in .24s var(--e-nav) both}
+.sheet.swapping .sheet-b,.sheet.swapping .sheet-f:not([hidden]){animation:sheet-content-in .28s .025s var(--e-nav) both}
+@keyframes sheet-content-in{from{opacity:0;transform:translate3d(0,7px,0)}to{opacity:1;transform:none}}
 @media(min-width:720px){
-  .sheet{left:50%;transform:translate(-50%,100%);width:460px;border-radius:var(--r-xl);bottom:24px;max-height:82vh}
-  .sheet.in{transform:translate(-50%,0)}
+  .sheet{left:50%;transform:translate3d(-50%,calc(100% + 40px + var(--sheet-drag)),0) scale(.97);width:460px;border-radius:var(--r-xl);bottom:24px;max-height:82vh}
+  .sheet.in{transform:translate3d(-50%,var(--sheet-drag),0) scale(1)}
 }
 
 /* ---------- forms ---------- */
@@ -562,7 +661,7 @@ body[data-tab="0"] .tip{bottom:calc(var(--safe-b) + 16px)}
 .ob p.sub.ob-lead{font-size:15px;line-height:1.5;margin-bottom:0;max-width:340px;margin-left:auto;margin-right:auto}
 
 /* ---------- dev dock ---------- */
-.dev-fab{position:fixed;left:10px;bottom:calc(var(--tab-h) + var(--safe-b) + 8px);z-index:33;width:32px;height:32px;border-radius:11px;display:grid;place-items:center;background:var(--tx);color:var(--bg);opacity:.22;box-shadow:var(--sh-1);transition:.2s}
+.dev-fab{position:fixed;left:10px;bottom:calc(var(--tab-h) + var(--safe-b) + 8px);z-index:33;width:32px;height:32px;border-radius:11px;display:grid;place-items:center;background:var(--tx);color:var(--bg);opacity:.22;box-shadow:var(--sh-1);transition:transform .2s var(--e),opacity .2s,background .2s}
 body[data-tab="0"] .dev-fab{bottom:calc(var(--safe-b) + 10px)}
 /* своя кнопка «назад» не нужна, если её рисует сам Telegram */
 body[data-tgback="1"] .top>.ico-btn[data-a="back"]{display:none}
@@ -625,6 +724,12 @@ body[data-tgback="1"] .top>.ico-btn[data-a="back"]{display:none}
   .fixbar{left:50%;transform:translateX(-50%);width:460px}
 }
 
+@media(prefers-reduced-motion:reduce){
+  .screen.nav-enter,.sheet.swapping .sheet-h>*,.sheet.swapping .sheet-b,.sheet.swapping .sheet-f,
+  .cal-today,.cal-content{animation:none!important}
+  .sheet,.bd-mask{transition-duration:.01ms!important}
+}
+
 /* ---------- месячный календарь ---------- */
 .mcal{background:var(--sf);border:1px solid var(--bd);border-radius:var(--r-l);padding:10px 10px 12px;box-shadow:var(--sh-1)}
 .mc-head{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:6px}
@@ -652,20 +757,31 @@ body[data-tgback="1"] .top>.ico-btn[data-a="back"]{display:none}
 
 /* ---------- месяц в календаре бизнеса ---------- */
 .mv-grid-wd{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:5px}
-.mv-grid-wd span{text-align:center;font-size:10.5px;font-weight:700;color:var(--tx-3);letter-spacing:.04em}
-.mv-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.mv-grid-wd span{text-align:center;font-size:10px;font-weight:700;color:var(--tx-3);letter-spacing:.04em}
+.mv-grid-wd span:nth-last-child(-n+2){color:var(--dan)}
+.mv-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
 .mv-cell{
-  position:relative;min-height:52px;border-radius:12px;background:var(--sf);
-  border:1px solid var(--bd);padding:5px 4px 9px;overflow:hidden;
-  display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:2px;
+  position:relative;min-height:55px;border-radius:11px;background:transparent;
+  border:1px solid transparent;padding:5px 2px 8px;overflow:hidden;
+  display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:4px;
   transition:transform .12s var(--e)
 }
 .mv-cell:active:not(.mv-empty){transform:scale(.94)}
 .mv-cell.mv-empty{background:transparent;border-color:transparent;pointer-events:none}
-.mv-cell.off{background:var(--sf-2);opacity:.62}
-.mv-cell.today{outline:2px solid var(--p);outline-offset:-2px}
-.mv-cell .d{font-size:13px;font-weight:650;color:var(--tx-2);line-height:1}
-.mv-cell .cnt{font-size:15px;font-weight:780;letter-spacing:-.02em;line-height:1.1}
-.mv-cell .cnt.dim{font-size:10px;font-weight:600;color:var(--tx-3);letter-spacing:0}
-.mv-cell .bar{position:absolute;left:0;bottom:0;height:3px;border-radius:0 2px 0 0;transition:width .4s var(--e)}
+.mv-cell:hover{background:var(--sf-2)}
+.mv-cell.off{background:var(--sf-2);opacity:.58}
+.mv-cell.weekend:not(.off) .d{color:var(--dan)}
+.mv-cell.today{background:var(--p-soft);border-color:color-mix(in srgb,var(--p) 35%,transparent)}
+.mv-cell .d{width:24px;height:24px;border-radius:9px;display:grid;place-items:center;font-size:12.5px;font-weight:700;color:var(--tx-2);line-height:1}
+.mv-cell.today .d,.mv-cell.today.weekend .d{background:var(--p);color:#fff}
+.mv-cell .cnt{font-size:10.5px;font-weight:700;letter-spacing:0;line-height:1;color:var(--tx)}
+.mv-cell .cnt small{font-size:8.5px;font-weight:600;color:var(--tx-3)}
+.mv-cell .cnt.dim{font-size:9px;font-weight:600;color:var(--tx-3);letter-spacing:0}
+.mv-cell .bar{position:absolute;left:5px;bottom:3px;height:3px;max-width:calc(100% - 10px);border-radius:3px;transition:width .4s var(--e)}
 .mv-cell .away{position:absolute;top:5px;right:5px;width:6px;height:6px;border-radius:50%;background:#06AED4}
+.mv-legend{margin-top:12px;gap:10px;justify-content:flex-start;overflow-x:auto;padding-bottom:2px;white-space:nowrap}
+@media(max-width:380px){
+  .cal-stat{padding:0 6px}
+  .cal-stat strong{font-size:14px}
+  .mv-cell{min-height:52px}
+}

@@ -18,7 +18,10 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if
 if (tg && tg.onEvent) { try { tg.onEvent('themeChanged', () => { if (S.theme === 'auto') applyTheme(); }); } catch (e) { } }
 
 /* ---------- общие действия ---------- */
-on('tab', ds => { const r = ds.r; if (routes[r]) go(r, {}, { root: true }); });
+on('tab', (ds, el) => {
+  const r = ds.r;
+  if (routes[r]) go(r, {}, { root: true, tabPulse: !!el?.classList.contains('tab') });
+});
 on('back', () => back());
 on('nav', ds => { const p = {}; Object.keys(ds).forEach(k => { if (k !== 'a' && k !== 'r') p[k] = ds[k]; }); go(ds.r, p); });
 on('noop', () => { });

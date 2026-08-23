@@ -609,7 +609,8 @@ on('cl.rate', ds => {
   setTimeout(() => reviewSheet(ds.id, { after: rr }), 280);
 });
 on('cl.cancel', async ds => {
-  const a = appt(ds.id); if (!a) return;
+  const a = appt(ds.id);
+  if (!a || a.status !== 'planned') { toast('Эту запись уже нельзя отменить', 'dan'); return; }
   const e = emp(a.employeeId), d = new Date(a.start);
   const ok = await confirmSheet({
     title: 'Отменить запись?',
@@ -621,7 +622,7 @@ ${dateLabel(d, now())}, ${hhmm(d)}
     ok: 'Отменить запись', cancel: 'Не отменять', danger: true,
   });
   if (!ok) return;
-  cancelAppointment(ds.id, 'client');
+  if (!cancelAppointment(ds.id, 'client')) { toast('Эту запись уже нельзя отменить', 'dan'); return; }
   if (window.__ma) { window.__ma.close(); window.__ma = null; }
   toast('Запись отменена', 'dan');
 });
@@ -699,4 +700,3 @@ on('cl.editMe', async () => {
   const v = await promptSheet({ title: 'Моё имя', label: 'Как к вам обращаться?', value: me.name });
   if (v) { updateClient(me.id, { name: v, initials: v.split(' ').filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() }); toast('Сохранено'); }
 });
-

@@ -1499,7 +1499,7 @@ route('o.subscription', {
     <div class="sec">
       <div class="sec-h"><div class="sec-t">Тарифы</div></div>
       <div class="wrap stack">
-        ${plans().filter(p => p.active !== false || p.id === c.plan).map(p => `<div class="card pad" style="${p.id === c.plan ? 'border-color:var(--p);box-shadow:0 0 0 1px var(--p)' : ''}">
+        ${plans().filter(p => p.active !== false || p.id === c.plan).map(p => `<div class="card pad" style="${p.id === c.plan ? 'border-color:transparent;box-shadow:inset 0 0 0 2px var(--p),var(--sh-2)' : ''}">
           <div class="row between" style="margin-bottom:8px">
             <div><div class="b" style="font-size:17px">${esc(p.name)}</div>
               <div class="tiny muted">${money(p.price)} / ${(PERIODS[p.period] || PERIODS.month).t}</div></div>
