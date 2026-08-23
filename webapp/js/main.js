@@ -1,4 +1,4 @@
-import { S, load, sub, emit } from './store.js';
+import { S, load, sub, emit, reportError, logEvent } from './store.js';
 import { initTelegram, tgColorScheme, startParam, tgUser, tg } from './tg.js';
 import { adminAllowed, unlockWithCode } from './config.js';
 import { bindDelegation, on } from './bus.js';
@@ -25,6 +25,28 @@ on('tab', (ds, el) => {
 on('back', () => back());
 on('nav', ds => { const p = {}; Object.keys(ds).forEach(k => { if (k !== 'a' && k !== 'r') p[k] = ds[k]; }); go(ds.r, p); });
 on('noop', () => { });
+
+/* ---------- сбор ошибок ----------
+   Ошибки видит владелец платформы в Super Admin, а не только консоль
+   разработчика. В боевой версии тот же поток уходит на сервер —
+   меняется приёмник в reportError, не эти обработчики.
+---------------------------------- */
+window.addEventListener('error', ev => {
+  try {
+    reportError(ev.message || 'Ошибка скрипта', {
+      stack: (ev.error && ev.error.stack) || (ev.filename ? ev.filename + ':' + ev.lineno : ''),
+      where: location.hash || 'старт',
+    });
+  } catch (e) { }
+});
+window.addEventListener('unhandledrejection', ev => {
+  try {
+    const r = ev.reason;
+    reportError((r && r.message) || String(r) || 'Необработанный промис', {
+      stack: (r && r.stack) || '', where: location.hash || 'старт',
+    });
+  } catch (e) { }
+});
 
 /* ---------- старт ---------- */
 async function boot() {

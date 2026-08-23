@@ -1,7 +1,7 @@
 import { $, esc } from './ui.js';
 import { icon } from './icons.js';
 import { haptic, setBackButton } from './tg.js';
-import { S } from './store.js';
+import { S, reportError } from './store.js';
 
 export const routes = {};
 export function route(name, def) { routes[name] = def; }
@@ -102,7 +102,11 @@ export function render(fresh = false) {
   const noTab = def.noTab || !tabsFor(S.session.role).length;
   let html = '';
   try { html = def.render(e.p) || ''; }
-  catch (err) { console.error('render error', e.r, err); html = `<div class="wrap"><div class="empty"><div class="t">Что-то пошло не так</div><div class="s">${esc(err.message)}</div></div></div>`; }
+  catch (err) {
+    console.error('render error', e.r, err);
+    try { reportError('Экран не отрисовался: ' + err.message, { stack: err.stack || '', where: e.r }); } catch (x) { }
+    html = `<div class="wrap"><div class="empty"><div class="t">Что-то пошло не так</div><div class="s">${esc(err.message)}</div></div></div>`;
+  }
   const motion = navMotion;
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const animate = fresh && !reduced && !!$('#screen', app);

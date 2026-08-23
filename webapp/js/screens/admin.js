@@ -3,12 +3,16 @@ import {
   now, today, rangeStats, emit, extendPlan,
   plans, planById, planPrice, planMonthly, updatePlan, addPlan, removePlan, PERIODS,
   notices, addNotice, removeNotice, NOTICE_KINDS, saSegments, saBroadcasts, addSaBroadcast,
+  logs, logEvent, LOG_KINDS, errors, reportError, resolveError, clearResolvedErrors,
+  tickets, addTicket, replyTicket, setTicketStatus, TICKET_STATUS, TICKET_TOPICS,
+  bans, activeBan, banEntity, liftBan, BAN_REASONS, platformUsers, platformHealth,
 } from '../store.js';
 import {
   esc, money, moneyShort, num, dateLabel, relPast, avatar, emptyState, sheet, toast, confirmSheet,
   segmented, bars, sparkline, progress, plural, dayKey, startOfDay, MONTHS, wait, loadingBlock,
   promptSheet, donut,
 } from '../ui.js';
+import { copy } from '../tg.js';
 import { icon } from '../icons.js';
 import { route, go, render } from '../router.js';
 import { on } from '../bus.js';
@@ -216,13 +220,26 @@ route('sa.company', {
       <button class="btn gh" data-a="sa.plan" data-id="${c.id}">${icon('crown', 17)}Тариф</button>
     </div></div>
 
-    <div class="wrap sec">
-      <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="sa.danger" data-id="${c.id}">
-        <div class="ic" style="background:var(--dan-soft);color:var(--dan)">${icon('alert', 18)}</div>
-        <div class="grow" style="text-align:left"><div class="tl">Опасная зона</div><div class="st">Заморозка и блокировка</div></div>
+    <div class="wrap sec"><div class="stack s">
+      <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="sa.coLog" data-id="${c.id}">
+        <div class="ic" style="background:var(--sf-3)">${icon('history', 18)}</div>
+        <div class="grow" style="text-align:left"><div class="tl">Журнал компании</div>
+          <div class="st">${logs().filter(l => l.companyId === c.id).length} событий</div></div>${icon('fwd', 17)}</button>
+      <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="sa.coTickets" data-id="${c.id}">
+        <div class="ic" style="background:var(--warn-soft);color:var(--warn)">${icon('msg', 18)}</div>
+        <div class="grow" style="text-align:left"><div class="tl">Обращения</div>
+          <div class="st">${tickets().filter(t => t.companyId === c.id).length} всего</div></div>${icon('fwd', 17)}</button>
+      <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="nav" data-r="sa.users" data-co="${c.id}">
+        <div class="ic" style="background:var(--p-soft);color:var(--p)">${icon('users', 18)}</div>
+        <div class="grow" style="text-align:left"><div class="tl">Люди компании</div>
+          <div class="st">${platformUsers({ companyId: c.id }).length} сотрудников и клиентов</div></div>${icon('fwd', 17)}</button>
+      <button class="lrow press" style="border-radius:16px;border:1px solid var(--dan-soft);background:var(--dan-soft);width:100%" data-a="sa.danger" data-id="${c.id}">
+        <div class="ic" style="background:var(--dan);color:#fff">${icon('alert', 18)}</div>
+        <div class="grow" style="text-align:left"><div class="tl" style="color:var(--dan)">Опасная зона</div>
+          <div class="st">${activeBan('company', c.id) ? 'Компания заблокирована' : 'Заморозка и блокировка'}</div></div>
         ${icon('fwd', 17)}
       </button>
-    </div>`;
+    </div></div>`;
   },
 });
 
@@ -243,6 +260,33 @@ on('sa.plan', ds => {
   window.__sp = s;
 });
 on('sa.setPlan', ds => { setPlan(ds.id, ds.p, null); window.__sp.close(); toast('Тариф изменён на ' + ds.p); });
+on('sa.coLog', ds => {
+  const list = logs().filter(l => l.companyId === ds.id).sort((a, b) => new Date(b.at) - new Date(a.at));
+  sheet({
+    title: 'Журнал · ' + coName(ds.id),
+    body: list.length ? `<div class="stack s">${list.slice(0, 40).map(l => {
+      const k = LOG_KINDS[l.kind] || LOG_KINDS.system;
+      return `<div class="row" style="gap:10px;align-items:flex-start">
+        <div class="tint" style="width:30px;height:30px;flex:none;background:${k.color}1f;color:${k.color}">${icon(k.icon, 15)}</div>
+        <div class="grow"><div class="sm" style="line-height:1.4">${esc(l.text)}</div>
+          <div class="tiny dim" style="margin-top:2px">${relPast(new Date(l.at), now())}</div></div>
+      </div>`;
+    }).join('')}</div>` : '<div class="center sm muted" style="padding:14px 0">Событий по этой компании нет</div>',
+  });
+});
+on('sa.coTickets', ds => {
+  const list = tickets().filter(t => t.companyId === ds.id);
+  sheet({
+    title: 'Обращения · ' + coName(ds.id),
+    body: list.length ? `<div class="stack s">${list.map(t => {
+      const st = TICKET_STATUS[t.status];
+      return `<button class="lrow press" style="border-radius:14px;border:1px solid var(--bd);width:100%" data-a="tk.open" data-id="${t.id}">
+        <div class="grow" style="text-align:left"><div class="tl">${esc(t.subject)}</div>
+          <div class="st">${esc(TICKET_TOPICS[t.topic] || t.topic)} · ${relPast(new Date(t.updatedAt), now())}</div></div>
+        <span class="bdg" style="background:${st.color}1f;color:${st.color}">${st.t}</span></button>`;
+    }).join('')}</div>` : '<div class="center sm muted" style="padding:14px 0">Обращений от этой компании нет</div>',
+  });
+});
 on('sa.enter', async ds => {
   const ok = await confirmSheet({ title: 'Войти как владелец?', text: 'Откроется кабинет этой компании — удобно для поддержки.', ok: 'Войти' });
   if (!ok) return;
@@ -250,6 +294,7 @@ on('sa.enter', async ds => {
   S.session.companyId = ds.id;
   S.session.employeeId = S.data.employees.find(e => e.companyId === ds.id && e.isOwner).id;
   S.session.clientId = S.data.clients.find(c => c.companyId === ds.id).id;
+  logEvent('auth', 'Вход в кабинет компании из поддержки', { companyId: ds.id });
   emit(); go('o.home', {}, { root: true }); toast('Вы в кабинете компании');
 });
 on('sa.danger', ds => {
@@ -276,13 +321,18 @@ on('sa.freeze', async ds => {
   setPlan(ds.id, allCompanies().find(c => c.id === ds.id).plan, 0);
   window.__sd.close(); toast('Компания заморожена', 'dan');
 });
-on('sa.block', async ds => {
+on('sa.block', ds => {
   const c = allCompanies().find(x => x.id === ds.id);
-  if (c.status === 'blocked') { setCompanyStatus(ds.id, null); window.__sd.close(); toast('Компания разблокирована'); return; }
-  const ok = await confirmSheet({ title: 'Заблокировать компанию?', text: 'Доступ закроется для всех сотрудников и клиентов.', ok: 'Заблокировать', danger: true });
-  if (!ok) return;
-  setCompanyStatus(ds.id, 'blocked');
-  window.__sd.close(); toast('Компания заблокирована', 'dan');
+  window.__sd && window.__sd.close();
+  if (c.status === 'blocked' || activeBan('company', ds.id)) {
+    liftBan('company', ds.id);
+    setCompanyStatus(ds.id, null);
+    toast('Компания разблокирована');
+    rr();
+    return;
+  }
+  // причина и срок обязательны: без них потом не разобраться, за что закрыли
+  setTimeout(() => banSheet('company', ds.id), 240);
 });
 
 /* =========================================================
@@ -297,6 +347,34 @@ route('sa.settings', {
     <div class="wrap sec" style="margin-top:4px"><div class="grid2">
       <div class="st-card"><div class="l">Версия</div><div class="v" style="font-size:16px">2.0 demo</div></div>
       <div class="st-card"><div class="l">Записей всего</div><div class="v">${num(s.totalAppts)}</div></div>
+    </div></div>
+
+    <div class="wrap sec"><div class="stack s">
+      <button class="lrow press" style="border-radius:16px;border:1px solid ${s.health.errors24 ? 'var(--dan-soft)' : 'var(--bd)'};${s.health.errors24 ? 'background:var(--dan-soft)' : ''};width:100%" data-a="nav" data-r="sa.health">
+        <div class="ic" style="background:${s.health.errors24 ? 'var(--dan);color:#fff' : 'var(--ok-soft);color:var(--ok)'}">${icon(s.health.errors24 ? 'alert' : 'checkCircle', 18)}</div>
+        <div class="grow" style="text-align:left"><div class="tl">Состояние платформы</div>
+          <div class="st">${s.health.errors24 ? s.health.errors24 + ' ошибок за сутки' : 'Ошибок за сутки нет'} · хранилище ${s.health.storagePct}%</div></div>${icon('fwd', 17)}</button>
+      <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="nav" data-r="sa.tickets">
+        <div class="ic" style="background:var(--warn-soft);color:var(--warn)">${icon('msg', 18)}</div>
+        <div class="grow" style="text-align:left"><div class="tl">Обращения</div>
+          <div class="st">${s.health.ticketsNew ? s.health.ticketsNew + ' без ответа' : 'Новых нет'} · всего открыто ${s.health.ticketsOpen}</div></div>
+        ${s.health.ticketsNew ? `<span class="bdg dan">${s.health.ticketsNew}</span>` : ''}${icon('fwd', 17)}</button>
+      <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="nav" data-r="sa.errors">
+        <div class="ic" style="background:var(--dan-soft);color:var(--dan)">${icon('alert', 18)}</div>
+        <div class="grow" style="text-align:left"><div class="tl">Ошибки</div>
+          <div class="st">${s.health.errorsOpen} открытых</div></div>${icon('fwd', 17)}</button>
+      <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="nav" data-r="sa.logs">
+        <div class="ic" style="background:var(--sf-3)">${icon('history', 18)}</div>
+        <div class="grow" style="text-align:left"><div class="tl">Журнал событий</div>
+          <div class="st">${s.health.logs} записей</div></div>${icon('fwd', 17)}</button>
+      <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="nav" data-r="sa.users">
+        <div class="ic" style="background:var(--p-soft);color:var(--p)">${icon('users', 18)}</div>
+        <div class="grow" style="text-align:left"><div class="tl">Люди платформы</div>
+          <div class="st">${num(s.users + s.clients)} сотрудников и клиентов</div></div>${icon('fwd', 17)}</button>
+      <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="nav" data-r="sa.bans">
+        <div class="ic" style="background:${s.health.bansActive ? 'var(--dan-soft);color:var(--dan)' : 'var(--sf-3)'}">${icon('ban', 18)}</div>
+        <div class="grow" style="text-align:left"><div class="tl">Блокировки</div>
+          <div class="st">${s.health.bansActive ? s.health.bansActive + ' активных' : 'Активных нет'}</div></div>${icon('fwd', 17)}</button>
     </div></div>
     <div class="wrap sec"><div class="stack s">
       <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="nav" data-r="sa.plans">
@@ -657,4 +735,445 @@ on('nt.ok', () => {
   const seg = n.segs.find(x => x.v === n.st.seg);
   addNotice({ kind: n.st.kind, title: n.st.title.trim(), text: n.st.text.trim(), segment: n.st.seg, to: seg ? seg.list.length : 0 });
   n.s.close(); toast('Уведомление отправлено'); rr();
+});
+
+/* =========================================================
+   Техническая часть платформы
+   Журнал, ошибки, обращения, люди и блокировки. Экраны читают
+   данные через функции store — когда появится сервер, поменяется
+   только их начинка.
+   ========================================================= */
+
+const coName = id => (allCompanies().find(c => c.id === id) || {}).name || '—';
+
+/* ---------- здоровье платформы ---------- */
+route('sa.health', {
+  tab: 'sa.settings',
+  render() {
+    const h = platformHealth();
+    const stor = h.storagePct;
+    const storColor = stor > 80 ? 'var(--dan)' : stor > 55 ? 'var(--warn)' : 'var(--ok)';
+    const rows = [
+      ['Ошибки за сутки', h.errors24, h.errors24 ? 'dan' : 'ok', 'sa.errors'],
+      ['Открытых ошибок', h.errorsOpen, h.errorsOpen ? 'warn' : 'ok', 'sa.errors'],
+      ['Обращения без ответа', h.ticketsNew, h.ticketsNew ? 'warn' : 'ok', 'sa.tickets'],
+      ['Активные блокировки', h.bansActive, h.bansActive ? 'warn' : 'ok', 'sa.bans'],
+    ];
+    return `
+    <div class="top"><button class="ico-btn" data-a="back">${icon('back', 19)}</button>
+      <div class="grow"><div class="top-t">Состояние</div><div class="top-sub">Версия ${h.version} · данные v${h.dataVersion}</div></div></div>
+
+    <div class="wrap sec" style="margin-top:4px"><div class="stack s">
+      ${rows.map(r => `<button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="nav" data-r="${r[3]}">
+        <div class="grow" style="text-align:left"><div class="tl">${r[0]}</div></div>
+        <span class="bdg ${r[2]}">${r[1]}</span>${icon('fwd', 16)}</button>`).join('')}
+    </div></div>
+
+    <div class="wrap sec">
+      <div class="card pad">
+        <div class="row between" style="margin-bottom:8px">
+          <div class="b sm">Хранилище</div>
+          <div class="tiny ${stor > 80 ? '' : 'dim'}" style="${stor > 80 ? 'color:var(--dan)' : ''}">${h.storageMb} МБ из 5 МБ</div>
+        </div>
+        ${progress(stor, storColor)}
+        <div class="tiny dim" style="margin-top:8px">
+          Демо держит данные в браузере, потолок — квота localStorage.
+          Фотографии занимают больше всего места. На сервере это ограничение снимается.
+        </div>
+      </div>
+    </div>
+
+    <div class="wrap sec">
+      <div class="sec-t" style="margin-bottom:8px">Записей в базе</div>
+      <div class="card pad stack s">
+        ${Object.entries({
+      'Компании': h.records.companies, 'Сотрудники': h.records.employees,
+      'Клиенты': h.records.clients, 'Записи': h.records.appointments, 'Отзывы': h.records.reviews,
+      'Событий в журнале': h.logs,
+    }).map(([k, v]) => `<div class="row between"><span class="sm muted">${k}</span><b class="sm">${num(v)}</b></div>`).join('')}
+      </div>
+    </div>
+
+    <div class="wrap sec"><div class="stack s">
+      <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="nav" data-r="sa.logs">
+        <div class="ic" style="background:var(--sf-3)">${icon('history', 18)}</div>
+        <div class="grow" style="text-align:left"><div class="tl">Журнал событий</div>
+          <div class="st">Оплаты, блокировки, изменения</div></div>${icon('fwd', 17)}</button>
+      <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="sa.selftest">
+        <div class="ic" style="background:var(--ok-soft);color:var(--ok)">${icon('checkCircle', 18)}</div>
+        <div class="grow" style="text-align:left"><div class="tl">Проверить экраны</div>
+          <div class="st">Прогнать все разделы и показать ошибки</div></div>${icon('fwd', 17)}</button>
+    </div></div>`;
+  },
+});
+
+/* Быстрый прогон всех экранов — техподдержке проще проверить сборку,
+   чем просить владельца пройти по разделам вручную. */
+on('sa.selftest', async () => {
+  const sh = sheet({ title: 'Проверка', body: loadingBlock('Прогоняю экраны…') });
+  await wait(400);
+  const R = await import('../router.js');
+  const bad = [];
+  const roleSave = S.session.role;
+  let checked = 0;
+  for (const role of ['owner', 'employee', 'client', 'admin']) {
+    S.session.role = role;
+    for (const [name, def] of Object.entries(R.routes)) {
+      const p = {};
+      if (name === 'o.employee' || name === 'o.schedule') p.id = (S.data.employees[0] || {}).id;
+      if (name === 'o.client') p.id = (S.data.clients[0] || {}).id;
+      if (name === 'sa.company') p.id = allCompanies()[0].id;
+      if (name === 'cl.success') p.id = (S.data.appointments[0] || {}).id;
+      checked++;
+      try { def.render(p); } catch (e) { bad.push(role + ' / ' + name + ': ' + e.message); }
+    }
+  }
+  S.session.role = roleSave;
+  bad.forEach(b => reportError('Самопроверка: ' + b, { where: 'sa.selftest' }));
+  sh.set({
+    title: bad.length ? 'Найдены ошибки' : 'Всё в порядке',
+    body: `<div class="center" style="padding:6px 0 12px">
+        <div class="tint" style="width:52px;height:52px;margin:0 auto 10px;background:${bad.length ? 'var(--dan-soft);color:var(--dan)' : 'var(--ok-soft);color:var(--ok)'}">
+          ${icon(bad.length ? 'alert' : 'checkCircle', 26)}</div>
+        <div class="b">${bad.length ? bad.length + ' из ' + checked + ' экранов упали' : 'Проверено экранов: ' + checked}</div>
+        <div class="sm muted" style="margin-top:4px">${bad.length ? 'Подробности записаны в раздел «Ошибки»' : 'Все разделы открываются во всех ролях'}</div>
+      </div>
+      ${bad.length ? `<div class="card flat" style="padding:12px 14px"><div class="tiny" style="line-height:1.6;color:var(--tx-2)">${bad.slice(0, 8).map(esc).join('<br>')}</div></div>` : ''}`,
+    footer: `<button class="btn p" data-a="sa.testOk">Понятно</button>`,
+  });
+  window.__st = sh;
+});
+on('sa.testOk', () => { window.__st && window.__st.close(); rr(); });
+
+/* ---------- журнал событий ---------- */
+const lgf = { kind: 'all', limit: 40 };
+route('sa.logs', {
+  tab: 'sa.settings',
+  render() {
+    const all = logs().slice().sort((a, b) => new Date(b.at) - new Date(a.at));
+    const list = (lgf.kind === 'all' ? all : all.filter(l => l.kind === lgf.kind)).slice(0, lgf.limit);
+    const counts = {};
+    all.forEach(l => { counts[l.kind] = (counts[l.kind] || 0) + 1; });
+    return `
+    <div class="top"><button class="ico-btn" data-a="back">${icon('back', 19)}</button>
+      <div class="grow"><div class="top-t">Журнал</div><div class="top-sub">${all.length} событий</div></div></div>
+    <div class="chips" style="margin-bottom:10px">
+      <button class="chip ${lgf.kind === 'all' ? 'on' : ''}" data-a="lg.f" data-v="all">Все · ${all.length}</button>
+      ${Object.entries(LOG_KINDS).filter(([k]) => counts[k]).map(([k, v]) =>
+      `<button class="chip ${lgf.kind === k ? 'on' : ''}" data-a="lg.f" data-v="${k}">${v.t} · ${counts[k]}</button>`).join('')}
+    </div>
+    <div class="wrap stack s">
+      ${list.length ? list.map(l => {
+      const k = LOG_KINDS[l.kind] || LOG_KINDS.system;
+      return `<div class="lrow" style="border-radius:14px;border:1px solid var(--bd);align-items:flex-start">
+        <div class="ic" style="background:${k.color}1f;color:${k.color};flex:none">${icon(k.icon, 17)}</div>
+        <div class="grow" style="min-width:0">
+          <div class="sm b" style="line-height:1.35">${esc(l.text)}</div>
+          <div class="tiny dim" style="margin-top:3px">
+            ${relPast(new Date(l.at), now())} · ${esc(l.companyId ? coName(l.companyId) : 'платформа')}${l.actor ? ' · ' + esc(l.actor) : ''}
+          </div>
+        </div>
+        ${l.level === 'warn' ? `<span class="bdg warn">важно</span>` : ''}
+      </div>`;
+    }).join('') : emptyState({ ic: 'history', title: 'Событий нет' })}
+    </div>
+    ${(lgf.kind === 'all' ? all : all.filter(l => l.kind === lgf.kind)).length > list.length
+        ? `<div class="wrap sec"><button class="btn gh sm" data-a="lg.more">Показать ещё</button></div>` : ''}`;
+  },
+});
+on('lg.f', ds => { lgf.kind = ds.v; lgf.limit = 40; rr(); });
+on('lg.more', () => { lgf.limit += 40; rr(); });
+
+/* ---------- ошибки ---------- */
+const erf = { show: 'open' };
+route('sa.errors', {
+  tab: 'sa.settings',
+  render() {
+    const all = errors().slice().sort((a, b) => new Date(b.lastAt) - new Date(a.lastAt));
+    const open = all.filter(e => !e.resolved);
+    const list = erf.show === 'open' ? open : all;
+    return `
+    <div class="top"><button class="ico-btn" data-a="back">${icon('back', 19)}</button>
+      <div class="grow"><div class="top-t">Ошибки</div>
+        <div class="top-sub">${open.length} открытых · ${all.reduce((s, e) => s + e.count, 0)} случаев</div></div></div>
+    <div class="wrap" style="margin-bottom:12px">
+      ${segmented('er.f', [{ v: 'open', t: 'Открытые · ' + open.length }, { v: 'all', t: 'Все · ' + all.length }], erf.show)}
+    </div>
+    <div class="wrap stack s">
+      ${list.length ? list.map(e => `<button class="card press" style="width:100%;padding:13px 14px;text-align:left;${e.resolved ? 'opacity:.55' : ''}" data-a="er.open" data-id="${e.id}">
+        <div class="row between" style="gap:8px;margin-bottom:5px">
+          <span class="row" style="gap:7px;min-width:0">
+            <span style="color:${e.level === 'warn' ? 'var(--warn)' : 'var(--dan)'};flex:none">${icon('alert', 16)}</span>
+            <b class="sm nowrap">${esc(e.message)}</b></span>
+          ${e.count > 1 ? `<span class="bdg ${e.resolved ? '' : 'dan'}">×${e.count}</span>` : ''}
+        </div>
+        <div class="tiny dim">${esc(e.where || '—')} · ${esc(coName(e.companyId))} · ${esc(e.role)} · ${relPast(new Date(e.lastAt), now())}</div>
+      </button>`).join('')
+        : emptyState({ ic: 'checkCircle', title: 'Ошибок нет', text: 'Сюда попадают падения экранов и действий у всех пользователей.' })}
+    </div>
+    ${all.some(e => e.resolved) ? `<div class="wrap sec"><button class="btn gh sm" data-a="er.clear">Очистить решённые</button></div>` : ''}`;
+  },
+});
+on('er.f', ds => { erf.show = ds.v; rr(); });
+on('er.clear', async () => {
+  const ok = await confirmSheet({ title: 'Очистить решённые?', text: 'Записи о закрытых ошибках будут удалены.', ok: 'Очистить', danger: true });
+  if (!ok) return;
+  clearResolvedErrors(); toast('Очищено');
+});
+on('er.open', ds => {
+  const e = errors().find(x => x.id === ds.id); if (!e) return;
+  const s = sheet({
+    title: 'Ошибка',
+    body: `
+      <div class="card flat" style="padding:12px 14px;margin-bottom:12px">
+        <div class="b sm" style="line-height:1.4">${esc(e.message)}</div>
+        <div class="hr"></div>
+        <div class="row between"><span class="sm muted">Где</span><b class="sm">${esc(e.where || '—')}</b></div>
+        <div class="row between" style="margin-top:6px"><span class="sm muted">Компания</span><b class="sm">${esc(coName(e.companyId))}</b></div>
+        <div class="row between" style="margin-top:6px"><span class="sm muted">Роль</span><b class="sm">${esc(e.role)}</b></div>
+        <div class="row between" style="margin-top:6px"><span class="sm muted">Случаев</span><b class="sm">${e.count}</b></div>
+        <div class="row between" style="margin-top:6px"><span class="sm muted">Впервые</span><b class="sm">${relPast(new Date(e.firstAt), now())}</b></div>
+        <div class="row between" style="margin-top:6px"><span class="sm muted">Последний раз</span><b class="sm">${relPast(new Date(e.lastAt), now())}</b></div>
+      </div>
+      ${e.stack ? `<div class="tiny muted b" style="margin-bottom:6px">СТЕК</div>
+      <div class="card flat" style="padding:12px 14px"><div class="tiny" style="font-family:ui-monospace,monospace;line-height:1.6;color:var(--tx-2);word-break:break-word">${esc(e.stack)}</div></div>` : ''}`,
+    footer: `<div class="btns">
+      <button class="btn gh" data-a="er.copy" data-id="${e.id}">${icon('copy', 17)}Скопировать</button>
+      <button class="btn ${e.resolved ? 'gh' : 'p'}" data-a="er.toggle" data-id="${e.id}">${e.resolved ? 'Вернуть в работу' : 'Отметить решённой'}</button>
+    </div>`,
+  });
+  window.__er = s;
+});
+on('er.toggle', ds => {
+  const e = errors().find(x => x.id === ds.id);
+  resolveError(ds.id, !e.resolved);
+  window.__er.close(); toast(e.resolved ? 'Возвращена в работу' : 'Отмечена решённой'); rr();
+});
+on('er.copy', async ds => {
+  const e = errors().find(x => x.id === ds.id);
+  await copy([e.message, e.where, e.stack].filter(Boolean).join('\n'));
+  toast('Скопировано');
+});
+
+/* ---------- обращения ---------- */
+const tkf = { status: 'open' };
+route('sa.tickets', {
+  tab: 'sa.settings',
+  render() {
+    const all = tickets();
+    const open = all.filter(t => t.status !== 'closed');
+    const list = tkf.status === 'open' ? open : tkf.status === 'all' ? all : all.filter(t => t.status === tkf.status);
+    return `
+    <div class="top"><button class="ico-btn" data-a="back">${icon('back', 19)}</button>
+      <div class="grow"><div class="top-t">Обращения</div>
+        <div class="top-sub">${open.length} в работе из ${all.length}</div></div></div>
+    <div class="chips" style="margin-bottom:12px">
+      <button class="chip ${tkf.status === 'open' ? 'on' : ''}" data-a="tk.f" data-v="open">Открытые · ${open.length}</button>
+      ${Object.entries(TICKET_STATUS).map(([k, v]) =>
+      `<button class="chip ${tkf.status === k ? 'on' : ''}" data-a="tk.f" data-v="${k}">${v.t} · ${all.filter(t => t.status === k).length}</button>`).join('')}
+      <button class="chip ${tkf.status === 'all' ? 'on' : ''}" data-a="tk.f" data-v="all">Все</button>
+    </div>
+    <div class="wrap stack s">
+      ${list.length ? list.map(t => {
+      const st = TICKET_STATUS[t.status] || TICKET_STATUS.new;
+      const last = t.messages[t.messages.length - 1];
+      return `<button class="card press" style="width:100%;padding:13px 14px;text-align:left" data-a="tk.open" data-id="${t.id}">
+        <div class="row between" style="gap:8px;margin-bottom:4px">
+          <b class="sm nowrap">${esc(t.subject)}</b>
+          <span class="bdg" style="background:${st.color}1f;color:${st.color};flex:none">${st.t}</span>
+        </div>
+        <div class="tiny muted nowrap">${esc(coName(t.companyId))} · ${esc(t.author)} · ${esc(TICKET_TOPICS[t.topic] || t.topic)}</div>
+        <div class="tiny dim" style="margin-top:5px">${last.from === 'support' ? 'вы: ' : ''}${esc(String(last.text).slice(0, 70))}${String(last.text).length > 70 ? '…' : ''} · ${relPast(new Date(t.updatedAt), now())}</div>
+      </button>`;
+    }).join('') : emptyState({ ic: 'msg', title: 'Обращений нет', text: 'Сюда попадают вопросы владельцев компаний.' })}
+    </div>`;
+  },
+});
+on('tk.f', ds => { tkf.status = ds.v; rr(); });
+on('tk.open', ds => {
+  const t = tickets().find(x => x.id === ds.id); if (!t) return;
+  const s = sheet({ title: '', body: '' });
+  const draw = () => {
+    const cur = tickets().find(x => x.id === ds.id);
+    const st = TICKET_STATUS[cur.status];
+    s.set({
+      title: cur.subject,
+      body: `
+        <div class="row between" style="margin-bottom:12px">
+          <div class="tiny muted">${esc(coName(cur.companyId))} · ${esc(cur.author)}</div>
+          <span class="bdg" style="background:${st.color}1f;color:${st.color}">${st.t}</span>
+        </div>
+        <div class="stack s" style="margin-bottom:14px">
+          ${cur.messages.map(m => `<div class="tk-msg ${m.from === 'support' ? 'ours' : ''}">
+            <div class="sm" style="line-height:1.5">${esc(m.text)}</div>
+            <div class="tiny dim" style="margin-top:4px">${m.from === 'support' ? 'поддержка' : esc(cur.author)} · ${relPast(new Date(m.at), now())}</div>
+          </div>`).join('')}
+        </div>
+        <div class="field"><label>Ответ</label>
+          <textarea class="inp" id="_tk" style="min-height:90px" placeholder="Ответ владельцу компании"></textarea></div>
+        <div class="pick">
+          ${Object.entries(TICKET_STATUS).map(([k, v]) => `<button class="o ${cur.status === k ? 'on' : ''}" data-a="tk.st" data-id="${cur.id}" data-v="${k}">${v.t}</button>`).join('')}
+        </div>`,
+      footer: `<div class="btns">
+        <button class="btn gh" data-a="tk.company" data-id="${cur.companyId}">Компания</button>
+        <button class="btn p" data-a="tk.send" data-id="${cur.id}">${icon('send', 17)}Ответить</button>
+      </div>`,
+    });
+  };
+  window.__tk = { s, draw };
+  draw();
+});
+on('tk.st', ds => { setTicketStatus(ds.id, ds.v); window.__tk.draw(); toast('Статус: ' + TICKET_STATUS[ds.v].t); });
+on('tk.send', ds => {
+  const el = window.__tk.s.el.querySelector('#_tk');
+  const text = (el.value || '').trim();
+  if (!text) { toast('Введите ответ', 'dan'); return; }
+  replyTicket(ds.id, text, 'support');
+  logEvent('system', 'Ответ на обращение', { companyId: (tickets().find(t => t.id === ds.id) || {}).companyId });
+  window.__tk.draw();
+  toast('Ответ отправлен');
+});
+on('tk.company', ds => { window.__tk.s.close(); setTimeout(() => go('sa.company', { id: ds.id }), 240); });
+
+/* ---------- люди платформы ---------- */
+const usf = { q: '', role: 'all' };
+route('sa.users', {
+  tab: 'sa.settings',
+  render() {
+    const list = platformUsers({ q: usf.q, role: usf.role });
+    const total = platformUsers({});
+    const kinds = [
+      ['all', 'Все', total.length],
+      ['owner', 'Владельцы', total.filter(u => u.kind === 'owner').length],
+      ['staff', 'Сотрудники', total.filter(u => u.kind === 'staff').length],
+      ['client', 'Клиенты', total.filter(u => u.kind === 'client').length],
+    ];
+    return `
+    <div class="top"><button class="ico-btn" data-a="back">${icon('back', 19)}</button>
+      <div class="grow"><div class="top-t">Люди</div><div class="top-sub">${num(total.length)} в системе</div></div></div>
+    <div class="wrap" style="margin-bottom:10px">
+      <div class="search">${icon('search', 18)}<input id="_uq" placeholder="Имя или телефон" value="${esc(usf.q)}"></div>
+    </div>
+    <div class="chips" style="margin-bottom:12px">
+      ${kinds.map(k => `<button class="chip ${usf.role === k[0] ? 'on' : ''}" data-a="us.f" data-v="${k[0]}">${k[1]} · ${k[2]}</button>`).join('')}
+    </div>
+    <div class="wrap stack s">
+      ${list.length ? list.slice(0, 60).map(u => `<button class="lrow press" style="border-radius:14px;border:1px solid var(--bd);width:100%;${u.banned ? 'opacity:.6' : ''}" data-a="us.open" data-id="${u.id}">
+        <div class="ic" style="background:${u.kind === 'client' ? 'var(--sf-3)' : 'var(--p-soft);color:var(--p)'}">${icon(u.kind === 'client' ? 'user' : 'users', 17)}</div>
+        <div class="grow" style="text-align:left">
+          <div class="tl">${esc(u.name)}${u.banned ? ' <span class="bdg dan">блок</span>' : ''}</div>
+          <div class="st">${esc(u.role)} · ${esc(coName(u.companyId))}</div>
+        </div>
+        ${icon('fwd', 16)}
+      </button>`).join('') : emptyState({ ic: 'users', title: 'Никого не найдено' })}
+      ${list.length > 60 ? `<div class="tiny dim center">Показаны первые 60 из ${list.length}</div>` : ''}
+    </div>`;
+  },
+  mount(p, root) {
+    const i = root.querySelector('#_uq');
+    if (i) i.oninput = e => {
+      usf.q = e.target.value;
+      const pos = e.target.selectionStart;
+      rr();
+      const n = document.querySelector('#_uq');
+      if (n) { n.focus(); n.setSelectionRange(pos, pos); }
+    };
+  },
+});
+on('us.f', ds => { usf.role = ds.v; rr(); });
+on('us.open', ds => {
+  const u = platformUsers({}).find(x => x.id === ds.id); if (!u) return;
+  const banned = activeBan('user', u.id);
+  const s = sheet({
+    title: u.name,
+    body: `
+      <div class="card flat" style="padding:12px 14px;margin-bottom:12px">
+        <div class="row between"><span class="sm muted">Кто</span><b class="sm">${esc(u.role)}</b></div>
+        <div class="row between" style="margin-top:6px"><span class="sm muted">Компания</span><b class="sm">${esc(coName(u.companyId))}</b></div>
+        ${u.phone ? `<div class="row between" style="margin-top:6px"><span class="sm muted">Телефон</span><b class="sm">${esc(u.phone)}</b></div>` : ''}
+        ${u.since ? `<div class="row between" style="margin-top:6px"><span class="sm muted">В системе с</span><b class="sm">${new Date(u.since).getDate()} ${MONTHS[new Date(u.since).getMonth()]} ${new Date(u.since).getFullYear()}</b></div>` : ''}
+      </div>
+      ${banned ? `<div class="card pad" style="background:var(--dan-soft);border-color:transparent">
+        <div class="row" style="gap:8px;color:var(--dan)">${icon('ban', 18)}<b class="sm">Заблокирован</b></div>
+        <div class="sm" style="margin-top:6px;color:var(--tx-2)">${esc(BAN_REASONS[banned.reason] || banned.reason)}${banned.note ? ' · ' + esc(banned.note) : ''}</div>
+        <div class="tiny dim" style="margin-top:4px">${relPast(new Date(banned.createdAt), now())}${banned.until ? ' · до ' + new Date(banned.until).getDate() + ' ' + MONTHS[new Date(banned.until).getMonth()] : ' · бессрочно'}</div>
+      </div>` : ''}`,
+    footer: banned
+      ? `<button class="btn p" data-a="us.unban" data-id="${u.id}">Разблокировать</button>`
+      : `<div class="btns">
+           <button class="btn gh" data-a="sa.enter" data-id="${u.companyId}">Кабинет компании</button>
+           <button class="btn dan" data-a="us.ban" data-id="${u.id}">Заблокировать</button>
+         </div>`,
+  });
+  window.__us = s;
+});
+on('us.unban', ds => { liftBan('user', ds.id); window.__us.close(); toast('Разблокирован'); rr(); });
+on('us.ban', ds => { window.__us.close(); setTimeout(() => banSheet('user', ds.id), 240); });
+
+/* ---------- блокировки ---------- */
+route('sa.bans', {
+  tab: 'sa.settings',
+  render() {
+    const all = bans().slice().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    const act = all.filter(b => !b.liftedAt && (!b.until || new Date(b.until) > now()));
+    const nameOf = b => b.type === 'company'
+      ? coName(b.targetId)
+      : ((platformUsers({}).find(u => u.id === b.targetId) || {}).name || b.targetId);
+    return `
+    <div class="top"><button class="ico-btn" data-a="back">${icon('back', 19)}</button>
+      <div class="grow"><div class="top-t">Блокировки</div>
+        <div class="top-sub">${act.length} активных из ${all.length}</div></div></div>
+    <div class="wrap stack s" style="margin-top:4px">
+      ${all.length ? all.map(b => {
+      const live = !b.liftedAt && (!b.until || new Date(b.until) > now());
+      return `<div class="card pad" style="${live ? '' : 'opacity:.55'}">
+        <div class="row between" style="margin-bottom:5px">
+          <b class="sm nowrap">${esc(nameOf(b))}</b>
+          <span class="bdg ${live ? 'dan' : ''}">${live ? 'активна' : b.liftedAt ? 'снята' : 'истекла'}</span>
+        </div>
+        <div class="tiny muted">${b.type === 'company' ? 'компания' : 'пользователь'} · ${esc(BAN_REASONS[b.reason] || b.reason)}${b.note ? ' · ' + esc(b.note) : ''}</div>
+        <div class="tiny dim" style="margin-top:4px">${relPast(new Date(b.createdAt), now())}${b.until ? ' · до ' + new Date(b.until).getDate() + ' ' + MONTHS[new Date(b.until).getMonth()] : ' · бессрочно'}</div>
+        ${live ? `<button class="btn xs gh" style="width:auto;margin-top:10px" data-a="ban.lift" data-t="${b.type}" data-id="${b.targetId}">Снять блокировку</button>` : ''}
+      </div>`;
+    }).join('') : emptyState({ ic: 'shield', title: 'Блокировок нет', text: 'Компании и пользователи блокируются из их карточек.' })}
+    </div>`;
+  },
+});
+on('ban.lift', ds => { liftBan(ds.t, ds.id); toast('Блокировка снята'); rr(); });
+
+/** Общая шторка блокировки: причина, срок, комментарий. */
+export function banSheet(type, targetId) {
+  const st = { reason: 'unpaid', days: 0, note: '' };
+  const s = sheet({ title: '', body: '' });
+  const DAYS = [[0, 'Бессрочно'], [7, '7 дней'], [30, '30 дней'], [90, '90 дней']];
+  const draw = () => {
+    s.set({
+      title: type === 'company' ? 'Блокировка компании' : 'Блокировка пользователя',
+      body: `
+      <div class="field"><label>Причина</label>
+        <div class="pick">${Object.entries(BAN_REASONS).map(([k, v]) =>
+        `<button class="o ${st.reason === k ? 'on' : ''}" data-a="ban.reason" data-k="${k}">${v}</button>`).join('')}</div></div>
+      <div class="field"><label>Срок</label>
+        <div class="pick">${DAYS.map(d => `<button class="o ${st.days === d[0] ? 'on' : ''}" data-a="ban.days" data-d="${d[0]}">${d[1]}</button>`).join('')}</div></div>
+      <div class="field"><label>Комментарий</label>
+        <input class="inp" id="_bn" value="${esc(st.note)}" placeholder="Виден только в панели"></div>
+      <div class="tiny dim">${type === 'company'
+          ? 'Онлайн-запись перестанет работать, кабинет закроется. Данные сохранятся.'
+          : 'Человек не сможет войти. Его записи и история сохранятся.'}</div>`,
+      footer: `<button class="btn dan" data-a="ban.ok">Заблокировать</button>`,
+    });
+  };
+  const capture = () => { const el = s.el.querySelector('#_bn'); if (el) st.note = el.value; };
+  window.__bn = { s, st, draw, capture, type, targetId };
+  draw();
+  return s;
+}
+on('ban.reason', ds => { const b = window.__bn; b.capture(); b.st.reason = ds.k; b.draw(); });
+on('ban.days', ds => { const b = window.__bn; b.capture(); b.st.days = +ds.d; b.draw(); });
+on('ban.ok', () => {
+  const b = window.__bn; b.capture();
+  banEntity({ type: b.type, targetId: b.targetId, reason: b.st.reason, note: b.st.note.trim(), days: b.st.days });
+  b.s.close();
+  toast('Заблокировано', 'dan');
+  rr();
 });

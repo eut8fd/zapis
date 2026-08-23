@@ -189,12 +189,101 @@ function buildBackground(st, today) {
   });
 }
 
+/* Журнал, ошибки и обращения: без них технические разделы Super Admin
+   выглядят сломанными, а не пустыми. Данные детерминированные. */
+function buildOps(st, today) {
+  const r = rng(7777);
+  const ago = (d, h) => new Date(today.getTime() - d * 86400000 + h * 3600000).toISOString();
+  const cs = st.companies.filter(c => !c.id.startsWith('bg'));
+
+  const LOGS = [
+    ['billing', 'Подписка продлена на 30 дн.', 'c1', 1, 10, 'info'],
+    ['auth', 'Вход в кабинет компании из поддержки', 'c2', 1, 14, 'info'],
+    ['moderation', 'Заблокировано: Beauty Point — Неоплата', 'bg6', 2, 9, 'warn'],
+    ['company', 'Изменены часы работы', 'c3', 2, 16, 'info'],
+    ['message', 'Рассылка «Свободные окна в пятницу» — 42 получателя', 'c1', 3, 11, 'info'],
+    ['billing', 'Тариф изменён: START → PRO', 'bg2', 4, 15, 'info'],
+    ['system', 'Плановые работы завершены', null, 5, 3, 'info'],
+    ['auth', 'Новая компания зарегистрирована', 'bg9', 6, 12, 'info'],
+    ['billing', 'Платёж не прошёл: недостаточно средств', 'bg6', 7, 19, 'warn'],
+    ['company', 'Добавлен сотрудник', 'c2', 8, 13, 'info'],
+    ['message', 'Системное уведомление о техработах', null, 12, 20, 'info'],
+    ['moderation', 'Разблокировано: Lash Room', 'bg7', 15, 10, 'info'],
+  ];
+  LOGS.forEach((l, i) => {
+    st.logs.push({
+      id: 'lg_seed' + i, kind: l[0], text: l[1], companyId: l[2],
+      actor: 'super-admin', level: l[5], meta: null, at: ago(l[3], l[4]),
+    });
+  });
+
+  const ERRORS = [
+    ['Cannot read properties of undefined (reading \'name\')', 'o.cal', 3, 0, 4, false, 'error'],
+    ['Не удалось сохранить изменения: QuotaExceededError', 'o.settings', 1, 1, 9, false, 'error'],
+    ['Экран не отрисовался: services is not defined', 'o.services', 1, 6, 11, true, 'error'],
+    ['Действие «fin.add»: amount is NaN', 'fin.add', 2, 2, 15, false, 'warn'],
+    ['Failed to fetch', 'ai.chat', 5, 0, 21, false, 'error'],
+  ];
+  ERRORS.forEach((e, i) => {
+    st.errors.push({
+      id: 'er_seed' + i, message: e[0], stack: 'at ' + e[1] + ' (app.js)', where: e[1],
+      level: e[6], count: e[2], resolved: e[5],
+      role: i % 2 ? 'employee' : 'owner', companyId: cs[i % cs.length].id,
+      firstAt: ago(e[3] + 2, e[4]), lastAt: ago(e[3], e[4]),
+      resolvedAt: e[5] ? ago(e[3] - 1 > 0 ? e[3] - 1 : 0, e[4]) : null,
+    });
+  });
+
+  const TICKETS = [
+    ['c2', 'billing', 'Не проходит оплата картой',
+     'Пробую продлить подписку второй день — платёж отклоняется. Карта рабочая, в других местах проходит.',
+     'new', 0, 11, [], 'Максим Орлов'],
+    ['c1', 'bug', 'Пропали записи на понедельник',
+     'Утром были три записи, сейчас в календаре пусто. Клиенты говорят, что записывались.',
+     'work', 1, 9,
+     [['support', 'Проверяем. Уточните, пожалуйста, менялся ли график мастера в понедельник?']],
+     'Александр Ким'],
+    ['c3', 'howto', 'Как настроить разные часы по субботам',
+     'Хотим по субботам работать до 16:00, а в будни до 20:00. Не нашли, где это задаётся.',
+     'closed', 4, 15,
+     [['support', 'Настройки → Часы работы: время задаётся отдельно для каждого дня недели.'],
+      ['company', 'Нашли, спасибо!']],
+     'Айгуль Ержанова'],
+    ['bg4', 'feature', 'Нужен экспорт клиентов в таблицу',
+     'Хотим выгружать базу клиентов в Excel для рассылок вне Telegram.',
+     'new', 2, 18, [], 'Владелец'],
+  ];
+  TICKETS.forEach((t, i) => {
+    const created = ago(t[5], t[6]);
+    const msgs = [{ from: 'company', text: t[3], at: created }];
+    (t[7] || []).forEach((m, k) => {
+      msgs.push({ from: m[0], text: m[1], at: ago(Math.max(0, t[5] - k - 1), t[6] + 2) });
+    });
+    st.tickets.push({
+      id: 'tk_seed' + i, companyId: t[0], topic: t[1], subject: t[2], status: t[4],
+      author: t[8], messages: msgs,
+      createdAt: created, updatedAt: msgs[msgs.length - 1].at,
+    });
+  });
+
+  // блокировка компании, которая уже отражена в статусе
+  const blocked = st.companies.find(c => c.status === 'blocked');
+  if (blocked) {
+    st.bans.push({
+      id: 'bn_seed1', type: 'company', targetId: blocked.id, reason: 'unpaid',
+      note: 'Не оплачено больше 14 дней', until: null,
+      createdAt: ago(2, 9), by: 'super-admin', liftedAt: null,
+    });
+  }
+}
+
 export function buildSeed(anchor) {
   const today = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate());
   const st = {
     companies: [], employees: [], services: [], clients: [], appointments: [],
     expenses: [], incomes: [], reviews: [], broadcasts: [], blocks: [], notes: [],
     recurring: [], plans: PLANS(), notices: [], saBroadcasts: [],
+    logs: [], errors: [], tickets: [], bans: [],
   };
 
   CO.forEach(co => {
@@ -459,6 +548,8 @@ export function buildSeed(anchor) {
   });
 
   buildBackground(st, today);
+
+  buildOps(st, today);
 
   // пара системных уведомлений, чтобы раздел не был пустым при первом входе
   st.notices.push(

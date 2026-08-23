@@ -198,6 +198,10 @@ svg{display:inline-block;vertical-align:middle;flex:none}
 .ph-row .grow{display:flex;flex-direction:column;align-items:flex-start}
 .ph-row .btn.xs{width:auto}
 
+/* ---------- переписка в обращении ---------- */
+.tk-msg{background:var(--sf-2);border-radius:14px;padding:11px 13px;max-width:88%}
+.tk-msg.ours{background:var(--p-soft);margin-left:auto}
+
 /* ---------- выбор фирменного цвета ---------- */
 .col-pick{display:flex;flex-wrap:wrap;gap:10px}
 .col-dot{

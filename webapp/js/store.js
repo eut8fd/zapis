@@ -2,7 +2,7 @@ import { buildSeed } from './seed.js';
 import { startOfDay, dayKey, pad } from './ui.js';
 
 const KEY = 'zapis.demo.v2';
-const VER = 10;
+const VER = 11;
 
 export const S = {
   v: VER, anchor: null, shift: 0, theme: 'auto', aiMode: 'demo', onboarded: true,
@@ -620,11 +620,15 @@ export function setPlan(companyId, plan, days) {
 /** Продлить подписку на один период выбранного тарифа (месяц, квартал, год). */
 export function extendPlan(companyId, planId = null) {
   const c = co(companyId); if (!c) return 0;
+  const wasPlan = c.plan;
   const p = planById(planId || c.plan);
   const days = p ? (PERIODS[p.period] || PERIODS.month).days : 30;
   const base = Math.max(now().getTime(), new Date(c.planUntil).getTime() || 0);
   if (planId) c.plan = planId;
   c.planUntil = new Date(base + days * 86400000).toISOString();
+  logEvent('billing', planId && planId !== wasPlan
+    ? 'Тариф изменён: ' + wasPlan + ' → ' + planId
+    : 'Подписка продлена на ' + days + ' дн.', { companyId });
   emit();
   return days;
 }
@@ -955,6 +959,228 @@ export function lostClients(companyId = cid(), days = 45) {
     .sort((a, b) => b.st.spent - a.st.spent);
 }
 
+/* ---------- техническая часть платформы ----------
+   Журнал, ошибки, обращения и блокировки живут в тех же структурах,
+   что будут на сервере: запись создаётся одной функцией и никогда
+   не правится на месте. Когда появится API, эти функции станут
+   запросами, а экраны Super Admin останутся прежними.
+-------------------------------------------------- */
+
+/** Что писать в журнал. Ключ — он же фильтр в интерфейсе. */
+export const LOG_KINDS = {
+  auth: { t: 'Вход и роли', color: '#0EA5E9', icon: 'logout' },
+  billing: { t: 'Оплаты и тарифы', color: '#12B76A', icon: 'card' },
+  moderation: { t: 'Блокировки', color: '#F04462', icon: 'ban' },
+  company: { t: 'Компании', color: '#8B5CF6', icon: 'building' },
+  message: { t: 'Рассылки', color: '#EC4899', icon: 'megaphone' },
+  system: { t: 'Система', color: '#7C8AA5', icon: 'gear' },
+};
+
+export const logs = () => (S.data.logs || []);
+
+/** Записать событие. companyId и actor необязательны. */
+export function logEvent(kind, text, { companyId = null, actor = null, level = 'info', meta = null } = {}) {
+  const rec = {
+    id: uid('lg_'), kind, text, level,
+    companyId: companyId || null,
+    actor: actor || (S.session.role === 'admin' ? 'super-admin' : (me() || {}).name || null),
+    meta, at: now().toISOString(),
+  };
+  S.data.logs = S.data.logs || [];
+  S.data.logs.push(rec);
+  // журнал не должен расти бесконечно в браузере: на сервере это делает ротация
+  if (S.data.logs.length > 400) S.data.logs.splice(0, S.data.logs.length - 400);
+  emit();
+  return rec;
+}
+
+/* ---------- ошибки ----------
+   Собираются по-настоящему: main.js вешает onerror и unhandledrejection.
+   В демо это тот же поток, что будет в бою, — меняется только приёмник.
+---------------------------------- */
+export const errors = () => (S.data.errors || []);
+
+export function reportError(message, { stack = '', where = '', level = 'error', companyId = cid() } = {}) {
+  S.data.errors = S.data.errors || [];
+  const key = String(message).slice(0, 160);
+  const seen = S.data.errors.find(e => e.message === key && e.where === where && !e.resolved);
+  if (seen) {
+    // одну и ту же ошибку не плодим — считаем повторы, как это делает Sentry
+    seen.count++;
+    seen.lastAt = now().toISOString();
+    emit();
+    return seen;
+  }
+  const rec = {
+    id: uid('er_'), message: key, stack: String(stack || '').slice(0, 900),
+    where: where || (typeof location !== 'undefined' ? location.hash : ''),
+    level, count: 1, resolved: false,
+    role: S.session.role, companyId,
+    firstAt: now().toISOString(), lastAt: now().toISOString(),
+  };
+  S.data.errors.push(rec);
+  if (S.data.errors.length > 120) S.data.errors.splice(0, S.data.errors.length - 120);
+  emit();
+  return rec;
+}
+export function resolveError(id, resolved = true) {
+  const e = errors().find(x => x.id === id);
+  if (e) { e.resolved = resolved; e.resolvedAt = resolved ? now().toISOString() : null; emit(); }
+}
+export function clearResolvedErrors() {
+  S.data.errors = errors().filter(e => !e.resolved);
+  emit();
+}
+
+/* ---------- обращения в поддержку ---------- */
+export const TICKET_STATUS = {
+  new: { t: 'Новое', color: '#F79009' },
+  work: { t: 'В работе', color: '#0EA5E9' },
+  closed: { t: 'Закрыто', color: '#12B76A' },
+};
+export const TICKET_TOPICS = {
+  bug: 'Что-то не работает',
+  billing: 'Оплата и тариф',
+  howto: 'Как сделать',
+  feature: 'Пожелание',
+  other: 'Другое',
+};
+
+export const tickets = () => (S.data.tickets || []).slice()
+  .sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt));
+
+export function addTicket({ companyId = cid(), topic = 'other', subject, text, author = null }) {
+  const rec = {
+    id: uid('tk_'), companyId, topic, subject, status: 'new',
+    author: author || (me() || {}).name || 'Владелец',
+    messages: [{ from: 'company', text, at: now().toISOString() }],
+    createdAt: now().toISOString(), updatedAt: now().toISOString(),
+  };
+  S.data.tickets = S.data.tickets || [];
+  S.data.tickets.push(rec);
+  emit();
+  return rec;
+}
+export function replyTicket(id, text, from = 'support') {
+  const t = tickets().find(x => x.id === id); if (!t) return null;
+  t.messages.push({ from, text, at: now().toISOString() });
+  t.updatedAt = now().toISOString();
+  if (from === 'support' && t.status === 'new') t.status = 'work';
+  emit();
+  return t;
+}
+export function setTicketStatus(id, status) {
+  const t = tickets().find(x => x.id === id); if (!t) return;
+  t.status = status;
+  t.updatedAt = now().toISOString();
+  emit();
+}
+
+/* ---------- блокировки ----------
+   Блокировка — это запись со сроком и причиной, а не флаг: в боевой
+   версии по ней строится история и автоматическое снятие.
+---------------------------------- */
+export const BAN_REASONS = {
+  unpaid: 'Неоплата',
+  abuse: 'Жалобы клиентов',
+  spam: 'Спам в рассылках',
+  fraud: 'Подозрение на мошенничество',
+  request: 'По просьбе владельца',
+  other: 'Другое',
+};
+
+export const bans = () => (S.data.bans || []);
+export const activeBan = (type, targetId) => bans().find(b =>
+  b.type === type && b.targetId === targetId && !b.liftedAt &&
+  (!b.until || new Date(b.until) > now()));
+
+export function banEntity({ type = 'company', targetId, reason = 'other', note = '', days = 0 }) {
+  const rec = {
+    id: uid('bn_'), type, targetId, reason, note,
+    until: days ? new Date(now().getTime() + days * 86400000).toISOString() : null,
+    createdAt: now().toISOString(), by: 'super-admin', liftedAt: null,
+  };
+  S.data.bans = S.data.bans || [];
+  S.data.bans.push(rec);
+  if (type === 'company') setCompanyStatus(targetId, 'blocked');
+  const name = type === 'company' ? (co(targetId) || {}).name : (emp(targetId) || client(targetId) || {}).name;
+  logEvent('moderation', 'Заблокировано: ' + (name || targetId) + ' — ' + (BAN_REASONS[reason] || reason),
+    { companyId: type === 'company' ? targetId : null, level: 'warn' });
+  emit();
+  return rec;
+}
+export function liftBan(type, targetId) {
+  const b = activeBan(type, targetId);
+  if (b) { b.liftedAt = now().toISOString(); }
+  if (type === 'company') setCompanyStatus(targetId, null);
+  const name = type === 'company' ? (co(targetId) || {}).name : (emp(targetId) || client(targetId) || {}).name;
+  logEvent('moderation', 'Разблокировано: ' + (name || targetId), { companyId: type === 'company' ? targetId : null });
+  emit();
+  return b;
+}
+
+/* ---------- сводный реестр людей платформы ----------
+   Сотрудники и клиенты всех компаний одним списком: в боевой версии
+   это будет отдельная таблица users, здесь — вычисляемая выборка.
+------------------------------------------------------ */
+export function platformUsers({ q = '', role = 'all', companyId = null } = {}) {
+  const out = [];
+  S.data.employees.forEach(e => {
+    if (e.active === false) return;
+    out.push({
+      id: e.id, kind: e.isOwner ? 'owner' : 'staff', name: e.name, phone: e.phone || '',
+      companyId: e.companyId, role: e.role, since: e.createdAt || null,
+      banned: !!activeBan('user', e.id),
+    });
+  });
+  S.data.clients.forEach(c => {
+    out.push({
+      id: c.id, kind: 'client', name: c.name, phone: c.phone || '',
+      companyId: c.companyId, role: 'Клиент', since: c.createdAt,
+      banned: !!activeBan('user', c.id),
+    });
+  });
+  const needle = q.trim().toLowerCase();
+  return out.filter(u => {
+    if (role !== 'all' && u.kind !== role) return false;
+    if (companyId && u.companyId !== companyId) return false;
+    if (needle && !(u.name.toLowerCase().includes(needle) || u.phone.includes(needle))) return false;
+    return true;
+  });
+}
+
+/** Техническое состояние платформы — для экрана «Здоровье». */
+export function platformHealth() {
+  const dayAgo = now().getTime() - 86400000;
+  const errs = errors();
+  const raw = (() => {
+    try { return (localStorage.getItem(KEY) || '').length; } catch (e) { return 0; }
+  })();
+  const openTickets = tickets().filter(t => t.status !== 'closed');
+  return {
+    version: '2.0 demo',
+    dataVersion: VER,
+    storageBytes: raw,
+    storageMb: +(raw / 1024 / 1024).toFixed(2),
+    // квота localStorage ~5 МБ на домен; это и есть потолок демо
+    storagePct: Math.min(100, Math.round(raw / (5 * 1024 * 1024) * 100)),
+    errors24: errs.filter(e => new Date(e.lastAt).getTime() > dayAgo && !e.resolved)
+      .reduce((sum, e) => sum + e.count, 0),
+    errorsOpen: errs.filter(e => !e.resolved).length,
+    ticketsOpen: openTickets.length,
+    ticketsNew: openTickets.filter(t => t.status === 'new').length,
+    bansActive: bans().filter(b => !b.liftedAt && (!b.until || new Date(b.until) > now())).length,
+    logs: logs().length,
+    records: {
+      companies: S.data.companies.length,
+      employees: S.data.employees.length,
+      clients: S.data.clients.length,
+      appointments: S.data.appointments.length,
+      reviews: S.data.reviews.length,
+    },
+  };
+}
+
 /* ---------- супер-админ ---------- */
 
 /* Тарифы — данные, а не константы (§100–§102): название, цену, период,
@@ -1075,6 +1301,7 @@ export function saStats() {
     blocked: cs.filter(c => c.status === 'blocked'),
     newThisMonth: signups[signups.length - 1].count,
     signups, byPlan, price,
+    health: platformHealth(),
   };
 }
 export function companyStats(id) {
