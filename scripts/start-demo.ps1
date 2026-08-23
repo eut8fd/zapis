@@ -109,7 +109,9 @@ Ok "публичный: $public"
 # --- 3. .env ----------------------------------------------------------------
 $envPath = Join-Path $Root '.env'
 $lines = @()
-if (Test-Path $envPath) { $lines = Get-Content $envPath }
+# Get-Content в PS 5.1 читает файл как ANSI и уродует кириллицу:
+# .env перезаписывался mojibake, а бот выставлял себе имя из мусора.
+if (Test-Path $envPath) { $lines = [IO.File]::ReadAllText($envPath) -split "`r?`n" }
 $out = @()
 $hasUrl = $false
 foreach ($l in $lines) {
