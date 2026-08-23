@@ -434,14 +434,22 @@ function weekView(d, empId) {
     const day = addDays(start, i);
     const list = dayAppts(day, { employeeId: empId });
     const isT = dayKey(day) === dayKey(now());
+    // Шапка, список и подвал — три отдельных блока: иначе «+N» висит
+    // сразу за плашками, и низ колонок не совпадает между собой.
     cells.push(`<button class="wcol ${isT ? 'today' : ''}" data-a="cal.dayMenu" data-d="${day.getTime()}">
-      <div class="w">${WD[day.getDay()]}</div><div class="n">${day.getDate()}</div><div class="wcount">${nAppt(list.length)}</div>
-      ${list.slice(0, 4).map(a => {
+      <div class="whead">
+        <div class="w">${WD[day.getDay()]}</div>
+        <div class="n">${day.getDate()}</div>
+        <div class="wcount">${nAppt(list.length)}</div>
+      </div>
+      <div class="wevs">
+        ${list.slice(0, 4).map(a => {
       const e = emp(a.employeeId);
       return `<div class="ev" style="background:${e ? e.color : apptColor(a)}">${hhmm(new Date(a.start))}</div>`;
     }).join('')}
-      ${list.length > 4 ? `<div class="tiny dim">+${list.length - 4}</div>` : ''}
-      ${!list.length ? '<div class="tiny dim">—</div>' : ''}
+        ${!list.length ? '<div class="wempty">свободно</div>' : ''}
+      </div>
+      <div class="wmore">${list.length > 4 ? '+' + (list.length - 4) + ' ещё' : ''}</div>
     </button>`);
   }
   return `<div class="wgrid">${cells.join('')}</div>`;

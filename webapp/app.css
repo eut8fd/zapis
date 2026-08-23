@@ -452,13 +452,27 @@ svg{display:inline-block;vertical-align:middle;flex:none}
 .tl-now::before{content:"";position:absolute;left:-5px;top:-3px;width:8px;height:8px;border-radius:50%;background:var(--dan)}
 
 /* week grid: карточки не сжимаются до нечитаемых семи колонок */
-.wgrid{display:flex;gap:8px;padding:1px 16px 8px;overflow-x:auto;scroll-snap-type:x proximity}
-.wcol{flex:0 0 88px;background:var(--sf);border:1px solid var(--bd);border-radius:16px;padding:9px 7px;min-height:132px;text-align:left;scroll-snap-align:start;box-shadow:var(--sh-1)}
-.wcol .w{font-size:10px;font-weight:700;color:var(--tx-3);text-transform:uppercase}
-.wcol .n{font-size:20px;font-weight:760;margin:0;letter-spacing:-.03em}
-.wcol .wcount{font-size:9.5px;color:var(--tx-3);margin-bottom:7px;white-space:nowrap}
-.wcol .ev{font-size:10.5px;font-weight:700;color:#fff;background:var(--p);border-radius:7px;padding:4px 5px;margin-bottom:4px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+/* Неделя. Колонки тянутся под самую высокую (stretch задан явно —
+   на поведение по умолчанию полагаться нельзя), а внутри три яруса:
+   шапка, плашки, подвал. Подвал прижат к низу, поэтому нижняя линия
+   у всех дней общая — с «+N» и без него. */
+.wgrid{display:flex;align-items:stretch;gap:8px;padding:1px 16px 8px;overflow-x:auto;scroll-snap-type:x proximity}
+.wcol{
+  flex:0 0 88px;display:flex;flex-direction:column;
+  background:var(--sf);border:1px solid var(--bd);border-radius:16px;
+  padding:9px 7px;min-height:150px;text-align:left;scroll-snap-align:start;box-shadow:var(--sh-1)
+}
+.wcol .whead{flex:none;margin-bottom:7px}
+.wcol .w{font-size:10px;font-weight:700;color:var(--tx-3);text-transform:uppercase;line-height:1.2}
+.wcol .n{font-size:20px;font-weight:760;margin:0;letter-spacing:-.03em;line-height:1.15}
+.wcol .wcount{font-size:9.5px;color:var(--tx-3);white-space:nowrap;line-height:1.3}
+.wcol .wevs{flex:1;display:flex;flex-direction:column;gap:4px;min-height:0}
+.wcol .ev{font-size:10.5px;font-weight:700;color:#fff;background:var(--p);border-radius:7px;padding:4px 5px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;flex:none}
+.wcol .wempty{font-size:10px;color:var(--tx-3);opacity:.75}
+/* подвал занимает место всегда — иначе колонки с «+N» ниже остальных */
+.wcol .wmore{flex:none;min-height:13px;margin-top:6px;font-size:10px;font-weight:650;color:var(--tx-3);white-space:nowrap}
 .wcol.today{border-color:transparent;box-shadow:inset 0 0 0 2px var(--p),var(--sh-1)}
+.wcol.today .n{color:var(--p)}
 
 .cal-range-list{display:grid;gap:10px;padding-bottom:8px}
 .cal-range-note{font-size:11.5px;color:var(--tx-3);font-weight:650;padding:0 3px 1px}
