@@ -24,6 +24,12 @@
   --ff:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
   --e:cubic-bezier(.22,.61,.36,1);
   --e-nav:cubic-bezier(.2,.78,.22,1);
+  /* шкала загрузки месяца: смешиваем с поверхностью, а не с прозрачностью —
+     иначе на тёмном фоне слабые ступени становятся неразличимы */
+  --heat-0:var(--sf-2);
+  --heat-1:color-mix(in srgb,var(--p) 18%,var(--sf));
+  --heat-2:color-mix(in srgb,var(--p) 40%,var(--sf));
+  --heat-3:color-mix(in srgb,var(--p) 68%,var(--sf));
   --e-sheet:cubic-bezier(.2,.84,.24,1);
 }
 [data-theme="dark"]{
@@ -41,6 +47,11 @@
   --sh-2:0 6px 20px -6px rgba(0,0,0,.55);
   --sh-3:0 20px 50px -12px rgba(0,0,0,.7);
   --sk:linear-gradient(90deg,var(--sf-2) 25%,var(--sf-3) 50%,var(--sf-2) 75%);
+  /* на тёмном шаги нужны крупнее: глаз хуже различает близкие тёмные тона */
+  --heat-0:var(--sf-2);
+  --heat-1:color-mix(in srgb,var(--p) 24%,var(--sf));
+  --heat-2:color-mix(in srgb,var(--p) 48%,var(--sf));
+  --heat-3:color-mix(in srgb,var(--p) 76%,var(--sf));
 }
 
 *,*::before,*::after{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -782,16 +793,20 @@ body[data-tgback="1"] .top>.ico-btn[data-a="back"]{display:none}
 }
 .mv-cell:active:not(.mv-empty){transform:scale(.94)}
 .mv-cell.mv-empty{background:transparent;border-color:transparent;pointer-events:none}
-.mv-cell:hover{background:var(--sf-2)}
-/* заливка = загрузка дня, одна шкала от слабой к плотной */
-.mv-cell.lv1{background:color-mix(in srgb,var(--p) 11%,transparent)}
-.mv-cell.lv2{background:color-mix(in srgb,var(--p) 26%,transparent)}
-.mv-cell.lv3{background:color-mix(in srgb,var(--p) 46%,transparent)}
+/* заливка = загрузка дня; день без записей — просто поверхность,
+   поэтому сетка читается как сетка, а не как набор пятен на фоне */
+.mv-cell.lv0{background:var(--heat-0)}
+.mv-cell.lv1{background:var(--heat-1)}
+.mv-cell.lv2{background:var(--heat-2)}
+.mv-cell.lv3{background:var(--heat-3)}
 .mv-cell.lv2 .cnt,.mv-cell.lv3 .cnt{color:var(--tx)}
-.mv-cell.off{background:var(--sf-2);opacity:.5}
-.mv-cell.off.lv1,.mv-cell.off.lv2,.mv-cell.off.lv3{background:var(--sf-2)}
-.mv-cell.weekend:not(.off) .d{color:var(--dan)}
-.mv-cell.today{border-color:var(--p)}
+/* на заливке приглушённый цвет числа теряется — начиная со средней */
+.mv-cell.lv2 .d,.mv-cell.lv3 .d{color:var(--tx)}
+.mv-cell.off{background:var(--sf-2);opacity:.45}
+/* красное число выходного на синей заливке не читалось: там, где есть
+   записи, день по факту рабочий — оставляем красным только пустые */
+.mv-cell.weekend.lv0:not(.off) .d{color:var(--dan)}
+.mv-cell.today{border-color:var(--p);box-shadow:0 0 0 1px var(--p)}
 .mv-cell .d{width:24px;height:24px;border-radius:9px;display:grid;place-items:center;font-size:12.5px;font-weight:700;color:var(--tx-2);line-height:1}
 .mv-cell.today .d,.mv-cell.today.weekend .d{background:var(--p);color:#fff}
 .mv-cell .cnt{font-size:12px;font-weight:750;letter-spacing:-.01em;line-height:1;color:var(--tx-2);min-height:12px}
@@ -805,9 +820,9 @@ body[data-tgback="1"] .top>.ico-btn[data-a="back"]{display:none}
 }
 .mv-legend span{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
 .mv-scale i{width:13px;height:13px;border-radius:4px}
-.mv-scale i.lv1{background:color-mix(in srgb,var(--p) 11%,var(--sf))}
-.mv-scale i.lv2{background:color-mix(in srgb,var(--p) 26%,var(--sf))}
-.mv-scale i.lv3{background:color-mix(in srgb,var(--p) 46%,var(--sf))}
+.mv-scale i.lv1{background:var(--heat-1)}
+.mv-scale i.lv2{background:var(--heat-2)}
+.mv-scale i.lv3{background:var(--heat-3)}
 .mv-away i{width:7px;height:7px;border-radius:50%;background:#06AED4}
 @media(max-width:380px){
   .cal-stat{padding:0 6px}
