@@ -362,9 +362,13 @@ def bk_confirm(cid, uid, user, data):
 def mine_screen(cid, uid):
     rows_bk = bk.user_bookings(uid)
     if not rows_bk:
-        return ('<b>Мои записи</b>\n\nПока пусто. Записаться можно за три нажатия — '
-                'свободное время видно сразу.',
-                {'inline_keyboard': [[cb('⚡ Записаться', 'bk::::')], [cb('‹ Назад', 'menu')]]})
+        return ('<b>Мои записи</b>\n\nЗаписей пока нет. Свободное время видно сразу — '
+                'выберите услугу и время в приложении или запишитесь прямо в чате.',
+                {'inline_keyboard': [
+                    [open_btn('📅  Записаться онлайн', cid + '_book')],
+                    [cb('⚡ Быстрая запись в чате', 'bk::::')],
+                    [cb('‹ В меню', 'menu')],
+                ]})
     lines, rows = [], []
     for when, b in rows_bk:
         c = COMPANIES.get(b['cid'], COMPANIES[cid])
@@ -375,9 +379,12 @@ def mine_screen(cid, uid):
             bk.hm(b['min']), s[1]))
         rows.append([cb('Отменить: %s %s' % (bk.day_label(when.date(), date.today()), bk.hm(b['min'])),
                         'cxl:' + b['id'])])
-    rows.append([cb('⚡ Записаться ещё', 'bk::::')])
-    rows.append([cb('‹ Назад', 'menu')])
-    return ('<b>Мои записи</b>\n\n' + '\n\n'.join(lines), {'inline_keyboard': rows})
+    rows.append([open_btn('📅  Записаться ещё', cid + '_book')])
+    rows.append([cb('⚡ Быстрая запись в чате', 'bk::::')])
+    rows.append([cb('‹ В меню', 'menu')])
+    return ('<b>Мои записи</b>\n\n' + '\n\n'.join(lines) +
+            '\n\nНапомним за 24 часа и за 2 часа до визита.',
+            {'inline_keyboard': rows})
 
 
 # --------------------------------------------------------------------- меню бизнеса
@@ -393,12 +400,12 @@ def biz_text(cid):
 
 def biz_kb(cid, uid=None):
     rows = [
-        [open_btn('💼 Открыть кабинет', 'owner')],
+        [open_btn('💼  Открыть кабинет', 'owner')],
         [open_btn('Календарь', 'owner_cal'), open_btn('Клиенты', 'owner_clients')],
         [cb('Ссылка для клиентов', 'link')],
         [cb('Подписка', 'plan'), cb('Поддержка', 'support')],
         [cb('🔔 Очередь напоминаний', 'reminders')],
-        [cb('Сменить компанию', 'switch')],
+        [cb('Сменить компанию', 'switch'), cb('‹ В меню', 'menu')],
     ]
     if uid is not None and is_admin(uid):
         rows.append([{'text': '🛡 Панель администратора', 'web_app': {'url': admin_url()}}])
@@ -445,22 +452,6 @@ def plan_kb():
 
 
 # --------------------------------------------------------------------- витрина
-LANDING_TEXT = (
-    '<b>{brand} — онлайн-запись в Telegram</b>\n\n'
-    'Клиенты записываются за 30 секунд, а бизнес видит расписание, '
-    'клиентов и деньги в одном приложении.\n\n'
-    'С чего начнём?'
-).format(brand=BRAND)
-
-
-def landing_kb():
-    return {'inline_keyboard': [
-        [cb('👤 Я клиент — хочу записаться', 'role_client')],
-        [cb('💼 У меня бизнес', 'role_biz')],
-        [cb('Возможности', 'features'), cb('Тарифы', 'prices')],
-    ]}
-
-
 def pick_kb(prefix, title_cb='landing'):
     rows = [[cb(COMPANIES[k]['name'], '%s:%s' % (prefix, k))] for k in COMPANIES]
     rows.append([cb('‹ Назад', title_cb)])
@@ -651,17 +642,74 @@ def reminders_screen(uid):
             {'inline_keyboard': [[cb('Обновить', 'reminders')], [cb('‹ В меню', 'menu')]]})
 
 
-def menu_for(uid):
-    """Текст и клавиатура главного меню под роль пользователя."""
+def main_menu(uid):
+    """
+    Главное меню: три действия и ничего лишнего.
+
+      1) записаться — приложение с полным календарём;
+      2) свои записи — прямо в чате, без открытия приложения;
+      3) бизнес — кабинет, если он есть, иначе создание.
+
+    Второстепенное (услуги, контакты, тарифы) живёт внутри этих трёх
+    экранов и в /help: на первом экране оно только рассеивает внимание.
+    """
     s = state(uid)
-    role = s.get('role')
-    if role == 'client':
-        cid = company_id_of(uid)
-        return client_text(cid), client_kb(cid, uid)
-    if role == 'biz':
-        cid = company_id_of(uid)
-        return biz_text(cid), biz_kb(cid, uid)
-    return LANDING_TEXT, landing_kb()
+    cid = company_id_of(uid)
+    c = COMPANIES[cid]
+    mine = bk.user_bookings(uid)
+    biz_cid = s.get('company') if s.get('role') == 'biz' else None
+
+    lines = ['<b>%s — онлайн-запись в Telegram</b>' % esc(BRAND), '']
+    if biz_cid and biz_cid in COMPANIES:
+        lines.append('Ваш бизнес: <b>%s</b> · тариф %s'
+                     % (esc(COMPANIES[biz_cid]['name']), esc(COMPANIES[biz_cid]['plan'])))
+    else:
+        lines.append('Салон: <b>%s</b> · %s' % (esc(c['name']), esc(c['city'])))
+    if mine:
+        when, b = mine[0]
+        # услугу берём из салона самой записи: она может быть не из текущего
+        bc = COMPANIES.get(b['cid'], c)
+        try:
+            svc = bc['services'][b['svc']][0]
+        except Exception:  # noqa: BLE001
+            svc = 'визит'
+        where = '' if b['cid'] == cid else ' · ' + esc(bc['name'])
+        lines.append('Ближайшая запись: <b>%s, %s</b> · %s%s' % (
+            bk.day_label(when.date(), date.today()), bk.hm(b['min']), esc(svc), where))
+    lines.append('')
+    lines.append('Свободное время видно сразу — запись занимает полминуты.')
+
+    rows = [[open_btn('📅  Записаться онлайн', cid + '_book')]]
+    rows.append([cb('🗓  Мои записи' + (' · %d' % len(mine) if mine else ''), 'mine')])
+    if biz_cid and biz_cid in COMPANIES:
+        rows.append([cb('💼  %s' % COMPANIES[biz_cid]['name'], 'biz')])
+    else:
+        rows.append([cb('💼  Создать бизнес', 'biz_start')])
+    return '\n'.join(lines), {'inline_keyboard': rows}
+
+
+BIZ_START_TEXT = (
+    '<b>Бизнесу</b>\n\n'
+    'Соберите страницу записи за пару минут: услуги, мастера, часы работы. '
+    'Дальше клиенты записываются сами, а вы видите расписание, клиентов '
+    'и деньги в одном приложении.\n\n'
+    'Можно не настраивать с нуля — откройте готовую демо-компанию '
+    'и посмотрите, как это выглядит с данными.'
+)
+
+
+def biz_start_kb():
+    return {'inline_keyboard': [
+        [open_btn('✨  Создать свой бизнес', 'onboarding')],
+        [cb('Открыть демо-компанию', 'role_biz')],
+        [cb('Возможности', 'features'), cb('Тарифы', 'prices')],
+        [cb('‹ В меню', 'menu')],
+    ]}
+
+
+def menu_for(uid):
+    """Текст и клавиатура главного меню."""
+    return main_menu(uid)
 
 
 def apply_menu_button(chat_id, uid):
@@ -694,6 +742,7 @@ def setup():
     api('setMyCommands', commands=[
         {'command': 'start', 'description': 'Главное меню'},
         {'command': 'app', 'description': 'Открыть приложение'},
+        {'command': 'salons', 'description': 'Выбрать салон'},
         {'command': 'help', 'description': 'Помощь и поддержка'},
     ])
     if HTTPS:
@@ -724,6 +773,11 @@ def handle_message(msg):
 
     if low == '/help':
         send(chat, HELP_TEXT, back_kb([open_btn('Открыть приложение')] if HTTPS else None))
+        return
+
+    if low == '/salons':
+        send(chat, '<b>Демо-салоны</b>\n\nВыберите, от чьего имени смотреть запись.',
+             pick_kb('pick_c', 'menu'))
         return
 
     if low == '/admin':
@@ -805,6 +859,14 @@ def handle_callback(cq):
         t, kb = reminders_screen(uid)
         edit(chat, mid, t, kb)
         return
+    if data == 'biz':
+        # бизнес уже выбран — показываем его название и быстрые действия
+        t, kb = biz_text(company_id_of(uid)), biz_kb(company_id_of(uid), uid)
+        edit(chat, mid, t, kb)
+        return
+    if data == 'biz_start':
+        edit(chat, mid, BIZ_START_TEXT, biz_start_kb())
+        return
     if data.startswith('cxl:'):
         rec = bk.cancel_booking(uid, data.split(':', 1)[1])
         t, kb = mine_screen(cid, uid)
@@ -819,18 +881,18 @@ def handle_callback(cq):
         USERS.pop(str(uid), None)
         save_users()
         apply_menu_button(chat, uid)
-        t, kb = LANDING_TEXT, landing_kb()
+        t, kb = menu_for(uid)
     elif data == 'role_client':
         t = '<b>Выберите салон</b>\n\nОбычно клиент попадает сюда по ссылке салона — ' \
             'тогда этот шаг не нужен.'
-        kb = pick_kb('pick_c')
+        kb = pick_kb('pick_c', 'menu')
     elif data == 'role_biz':
         t = '<b>Выберите компанию</b>\n\nЭто демо-компании с готовыми данными: ' \
             'расписанием, клиентами и финансами.'
-        kb = pick_kb('pick_b')
+        kb = pick_kb('pick_b', 'biz_start')
     elif data == 'switch':
         t = '<b>Выберите компанию</b>'
-        kb = pick_kb('pick_b')
+        kb = pick_kb('pick_b', 'biz')
     elif data == 'services':
         t, kb = services_text(cid), client_back_kb(cid)
     elif data == 'contacts':
