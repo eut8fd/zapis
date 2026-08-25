@@ -153,10 +153,60 @@ export async function pullAppointments() {
   return added;
 }
 
+/* ---------------- приглашения в команду ----------------
+   Ссылку делают на одном устройстве, а открывают на другом. Без общего
+   склада приглашение вообще не имело бы смысла: у того, кто переходит,
+   в браузере пусто.
+-------------------------------------------------------- */
+
+export async function pushInvite(inv) {
+  if (!inv) return;
+  await req('/api/invites', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(inv),
+  });
+}
+
+export async function patchInvite(id, patch) {
+  if (!id) return;
+  await req('/api/invites/' + encodeURIComponent(id), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+}
+
+/** Достать одно приглашение с сервера — по нему человек и входит. */
+export async function fetchInvite(id) {
+  const data = await req('/api/invites');
+  if (!data || !Array.isArray(data.invites)) return null;
+  return data.invites.find(i => i.id === id) || null;
+}
+
+/** Забрать приглашения компании к себе: владелец видит их состояние. */
+export async function pullInvites() {
+  const data = await req('/api/invites');
+  if (!data || !Array.isArray(data.invites)) return 0;
+  S.data.invites = S.data.invites || [];
+  const mine = new Map(S.data.invites.map(i => [i.id, i]));
+  let n = 0;
+  data.invites.forEach(i => {
+    const has = mine.get(i.id);
+    if (!has) { S.data.invites.push(i); n++; return; }
+    // ссылку могли погасить на другом устройстве
+    if (i.usedAt && !has.usedAt) { Object.assign(has, i); n++; }
+  });
+  if (n) emit();
+  return n;
+}
+
 /** Разовая синхронизация при запуске: сначала отдать, потом забрать. */
 export async function syncOnBoot() {
   pushCatalog(0);
-  return pullAppointments();
+  const n = await pullAppointments();
+  await pullInvites();
+  return n;
 }
 
 export const syncAlive = () => alive;

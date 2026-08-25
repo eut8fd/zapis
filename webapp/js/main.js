@@ -65,7 +65,7 @@ async function boot() {
     import('./screens/owner.js'), import('./screens/clients.js'), import('./screens/more.js'),
     import('./screens/ai.js'), import('./screens/client.js'), import('./screens/employee.js'),
     import('./screens/admin.js'), import('./screens/onboarding.js'), import('./dev.js'),
-    import('./screens/business.js'),
+    import('./screens/business.js'), import('./screens/invite.js'),
   ]);
 
   // стартовый маршрут: параметр из ссылки бота, иначе роль сессии
@@ -79,9 +79,13 @@ async function boot() {
   };
   const tgName = () => { const u = tgUser(); return u ? [u.first_name, u.last_name].filter(Boolean).join(' ') : ''; };
   let def = { r: 'o.home', p: {} };
+  // Приглашение в команду. Проверяем раньше салонов: идентификатор
+  // приглашения ни с каким салоном не совпадёт, но порядок важен для
+  // читающего — это отдельный вход, а не разновидность салонного.
+  if (/^inv[a-z0-9]{8,}$/.test(sp)) { def = { r: 'inv.join', p: { id: sp } }; }
   // ссылка салона — привязка. Ставится один раз и дальше живёт в сессии:
   // салон, который привёл клиента, не теряет его из-за похода в каталог
-  if (S.data.companies.some(c => c.id === sp)) {
+  else if (S.data.companies.some(c => c.id === sp)) {
     S.session.role = 'client';
     setHome(sp);
     ensurePerson(tgName());
@@ -133,8 +137,8 @@ async function boot() {
   // витрина для бизнеса (biz.) открыта всем: на неё приходят до того,
   // как у человека появилась хоть какая-то роль
   const ROLE_OK = {
-    owner: /^(o\.|ai\.|biz\.|onb$)/, employee: /^(e\.|o\.|ai\.|biz\.|onb$)/,
-    client: /^(cl\.|biz\.|onb$)/, admin: /^(sa\.|o\.|ai\.|biz\.|onb$)/,
+    owner: /^(o\.|ai\.|biz\.|inv\.|onb$)/, employee: /^(e\.|o\.|ai\.|biz\.|inv\.|onb$)/,
+    client: /^(cl\.|biz\.|inv\.|onb$)/, admin: /^(sa\.|o\.|ai\.|biz\.|inv\.|onb$)/,
   };
   const h = location.hash.replace(/^#\/?/, '').split('?')[0];
   if (h && !(ROLE_OK[S.session.role] || /./).test(h)) location.hash = '';

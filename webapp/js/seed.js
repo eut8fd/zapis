@@ -424,7 +424,7 @@ export function buildSeed(anchor) {
     companies: [], employees: [], services: [], clients: [], appointments: [],
     expenses: [], incomes: [], reviews: [], broadcasts: [], blocks: [], notes: [],
     recurring: [], plans: PLANS(), notices: [], saBroadcasts: [],
-    logs: [], errors: [], tickets: [], bans: [],
+    logs: [], errors: [], tickets: [], bans: [], invites: [],
   };
 
   CO.forEach(co => {

@@ -45,7 +45,7 @@ MIME = {
 
 # Пишем под замком: сервер многопоточный, а файл один.
 LOCK = threading.Lock()
-EMPTY = {'catalog': None, 'appointments': [], 'updatedAt': 0}
+EMPTY = {'catalog': None, 'appointments': [], 'invites': [], 'updatedAt': 0}
 
 
 def read_store():
@@ -126,6 +126,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._json({'catalog': data['catalog'], 'updatedAt': data['updatedAt']})
         if self.path.startswith('/api/appointments'):
             return self._json({'appointments': data['appointments'], 'updatedAt': data['updatedAt']})
+        if self.path.startswith('/api/invites'):
+            return self._json({'invites': data['invites'], 'updatedAt': data['updatedAt']})
         if self.path.startswith('/api/state'):
             return self._json(data)
         return self._json({'error': 'unknown endpoint'}, 404)
@@ -142,30 +144,42 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             write_store(data)
         return self._json({'ok': True})
 
+    # Записи и приглашения кладутся одинаково: добавить или заменить по id.
+    LISTS = {'/api/appointments': ('appointments', 2000),
+             '/api/invites': ('invites', 500)}
+
+    def _list_for(self, path):
+        for prefix, (key, cap) in self.LISTS.items():
+            if path.startswith(prefix):
+                return key, cap
+        return None, 0
+
     def do_POST(self):                     # noqa: N802
-        if not self.path.startswith('/api/appointments'):
+        key, cap = self._list_for(self.path)
+        if not key:
             return self._json({'error': 'unknown endpoint'}, 404)
         body = self._body()
         if not isinstance(body, dict) or not body.get('id'):
-            return self._json({'error': 'appointment expected'}, 400)
+            return self._json({'error': 'record with id expected'}, 400)
         with LOCK:
             data = read_store()
-            rest = [a for a in data['appointments'] if a.get('id') != body['id']]
+            rest = [a for a in data[key] if a.get('id') != body['id']]
             rest.append(body)
             # Список не растёт бесконечно: демо живёт неделями, а не годами.
-            data['appointments'] = rest[-2000:]
+            data[key] = rest[-cap:]
             write_store(data)
         return self._json({'ok': True, 'id': body['id']})
 
     def do_PATCH(self):                    # noqa: N802
-        if not self.path.startswith('/api/appointments/'):
+        key, _ = self._list_for(self.path)
+        if not key or self.path.rstrip('/').count('/') < 3:
             return self._json({'error': 'unknown endpoint'}, 404)
         aid = self.path.rsplit('/', 1)[-1].split('?')[0]
         body = self._body() or {}
         with LOCK:
             data = read_store()
             found = None
-            for a in data['appointments']:
+            for a in data[key]:
                 if a.get('id') == aid:
                     a.update(body)
                     found = a

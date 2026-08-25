@@ -8,6 +8,7 @@
   recurring, addRecurring, updateRecurring, removeRecurring, REPEAT, plans, planById, planPrice, PERIODS,
   setupSteps, markSetup, resetTips, tipSeen, markTip, appt, BRAND_COLORS, setCompanyColor,
   canOnlyMine, catalogReady, catalogMissing, setLang, can,
+  createInvite, invites, inviteState, revokeInvite, ROLES as ACCESS,
 } from '../store.js';
 import {
   esc, money, moneyShort, hhmm, dateLabel, relPast, avatar, emptyState, sheet, toast, promptSheet,
@@ -18,10 +19,12 @@ import {
 import { icon, catIcon } from '../icons.js';
 import { bookingLink } from './owner.js';
 import { LANGS, lang } from '../i18n.js';
+import { pushInvite, patchInvite } from '../sync.js';
 import { route, go, render } from '../router.js';
 import { on, fire } from '../bus.js';
 import { newApptFlow, addServiceSheet, blockFlow, openApptSheet, absenceFlow, tipOnce } from '../flows.js';
-import { haptic, copy } from '../tg.js';
+import { haptic, copy, openLink } from '../tg.js';
+import { BOT_USERNAME } from '../config.js';
 
 const rr = () => render(false);
 
@@ -68,6 +71,119 @@ route('o.more', {
       <button class="btn gh" data-a="o.share">${icon('share', 18)}Поделиться страницей записи</button>
     </div>`;
   },
+});
+
+/* Приглашения показываем только пока они живы: погашенная ссылка —
+   это история, а не задача, и место на экране она занимать не должна. */
+function inviteList() {
+  const live = invites().filter(i => inviteState(i) === 'активна');
+  if (!live.length) return '';
+  return `<div class="sec">
+    <div class="sec-h"><div class="sec-t">Приглашения</div>
+      <span class="tiny dim">${live.length} ${plural(live.length, ['ссылка', 'ссылки', 'ссылок'])}</span></div>
+    <div class="wrap stack s">
+      ${live.map(i => {
+    const left = Math.max(0, Math.ceil((new Date(i.expiresAt) - now()) / 86400000));
+    return `<div class="lrow" style="border-radius:16px;border:1px solid var(--bd)">
+        <div class="ic" style="background:var(--p-soft);color:var(--p)">${icon('link', 18)}</div>
+        <div class="grow" style="min-width:0">
+          <div class="tl nowrap">${esc(i.role)}</div>
+          <div class="st">${esc((ACCESS[i.access] || ACCESS.staff).t)} · осталось ${left} ${plural(left, ['день', 'дня', 'дней'])}</div>
+        </div>
+        <button class="ico-btn" data-a="tm.invShow" data-id="${i.id}">${icon('share', 18)}</button>
+        <button class="ico-btn" data-a="tm.invKill" data-id="${i.id}" style="color:var(--dan)">${icon('trash', 18)}</button>
+      </div>`;
+  }).join('')}
+    </div>
+  </div>`;
+}
+
+/* Ссылка с уже выбранной ролью. Роль выбирает владелец здесь, а не человек
+   при входе: иначе любой перешедший назначал бы себе права сам. */
+const invDraft = { access: 'staff', role: 'Мастер', days: 7 };
+
+on('tm.invite', () => {
+  const s = sheet({ title: 'Пригласить в команду', body: '' });
+  const draw = () => {
+    const el = s.el.querySelector('#_ir');
+    if (el) invDraft.role = el.value;
+    s.set({
+      title: 'Пригласить в команду',
+      body: `<div class="field"><label>Роль в команде</label>
+          <input class="inp" id="_ir" value="${esc(invDraft.role)}" placeholder="Мастер маникюра"></div>
+        <div class="field"><label>Уровень доступа</label>
+          <div class="stack s">
+            ${['staff', 'manager'].map(k => `<button class="lrow press" style="border-radius:14px;border:1.5px solid ${invDraft.access === k ? 'var(--p)' : 'var(--bd)'};width:100%;${invDraft.access === k ? 'background:var(--p-soft)' : ''}" data-a="tm.invAccess" data-v="${k}">
+              <div class="grow" style="text-align:left"><div class="tl">${ACCESS[k].t}</div>
+                <div class="st">${ACCESS[k].s}</div></div>
+              ${invDraft.access === k ? `<span style="color:var(--p)">${icon('checkCircle', 19)}</span>` : ''}
+            </button>`).join('')}
+          </div></div>
+        <div class="field"><label>Ссылка живёт</label>
+          <div class="pick">${[1, 3, 7, 30].map(d => `<button class="o ${invDraft.days === d ? 'on' : ''}" data-a="tm.invDays" data-v="${d}">${d} ${plural(d, ['день', 'дня', 'дней'])}</button>`).join('')}</div></div>
+        <div class="tiny dim" style="padding:0 4px">Ссылка одноразовая: как только по ней войдут, она перестанет работать.</div>`,
+      footer: `<button class="btn p" data-a="tm.invMake">${icon('link', 18)}Создать ссылку</button>`,
+    });
+  };
+  window.__inv = { s, draw };
+  draw();
+});
+on('tm.invAccess', ds => {
+  const el = window.__inv.s.el.querySelector('#_ir');
+  const was = ACCESS[invDraft.access].t;
+  if (el) invDraft.role = el.value;
+  invDraft.access = ds.v;
+  // роль по умолчанию идёт за уровнем доступа, но правку руками не затираем
+  if (!invDraft.role || invDraft.role === was) invDraft.role = ACCESS[ds.v].t;
+  window.__inv.draw();
+});
+on('tm.invDays', ds => { invDraft.days = +ds.v; window.__inv.draw(); });
+on('tm.invMake', () => {
+  const el = window.__inv.s.el.querySelector('#_ir');
+  if (el) invDraft.role = el.value.trim() || ACCESS[invDraft.access].t;
+  const inv = createInvite({ access: invDraft.access, role: invDraft.role, days: invDraft.days });
+  pushInvite(inv);
+  window.__inv.s.close();
+  setTimeout(() => showInvite(inv.id), 260);
+});
+on('tm.invShow', ds => showInvite(ds.id));
+on('tm.invKill', async ds => {
+  const ok = await confirmSheet({
+    title: 'Отозвать приглашение?',
+    text: 'Ссылка перестанет работать. Тем, кому вы её уже отправили, придётся прислать новую.',
+    ok: 'Отозвать', danger: true,
+  });
+  if (!ok) return;
+  revokeInvite(ds.id);
+  patchInvite(ds.id, { revokedAt: new Date().toISOString() });
+  toast('Приглашение отозвано', 'dan');
+});
+
+const inviteLink = id => 'https://t.me/' + BOT_USERNAME + '?start=' + id;
+
+async function showInvite(id) {
+  const inv = invites().find(i => i.id === id);
+  if (!inv) return;
+  const link = inviteLink(id);
+  await copy(link);
+  sheet({
+    title: 'Ссылка готова',
+    body: `<div class="center" style="padding:2px 0 14px">
+        <div class="tint" style="width:52px;height:52px;margin:0 auto 10px;background:var(--p-soft);color:var(--p)">${icon('link', 26)}</div>
+        <div class="b" style="font-size:16px">${esc(inv.role)}</div>
+        <div class="sm muted">${esc((ACCESS[inv.access] || ACCESS.staff).t)}</div>
+      </div>
+      <div class="card flat" style="padding:13px;text-align:center">
+        <div class="tiny muted">Ссылка скопирована</div>
+        <div class="b sm" style="margin-top:4px;word-break:break-all">${esc(link)}</div>
+      </div>
+      <div class="tiny dim center" style="margin-top:12px">Отправьте её человеку в Telegram. Он откроет, подтвердит имя — и появится в команде с этой ролью.</div>`,
+    footer: `<button class="btn p" data-a="tm.invSend" data-link="${esc(link)}">${icon('send', 18)}Отправить в Telegram</button>`,
+  });
+}
+on('tm.invSend', ds => {
+  openLink('https://t.me/share/url?url=' + encodeURIComponent(ds.link) +
+    '&text=' + encodeURIComponent('Приглашаю вас в команду — откройте ссылку, чтобы присоединиться'));
 });
 
 /* =========================================================
@@ -251,6 +367,10 @@ route('o.team', {
     return `
     <div class="top"><button class="ico-btn" data-a="back">${icon('back', 19)}</button>
       <div class="grow"><div class="top-t">Команда</div><div class="top-sub">${list.length} ${plural(list.length, ['человек', 'человека', 'человек'])}</div></div></div>
+    <div class="wrap sec">
+      <button class="btn gh" data-a="tm.invite">${icon('link', 17)}Пригласить по ссылке</button>
+    </div>
+    ${inviteList()}
     <div class="wrap stack s">
       ${list.map(e => {
       const t = todayStats(cid(), e.id);

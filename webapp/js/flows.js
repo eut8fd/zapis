@@ -5,6 +5,7 @@ import {
   now, today, slotsFor, slotFree, toMin, toHM, createAppointment, cancelAppointment, completeAppointment,
   moveAppointment, createClient, createService, updateService, addBlock, addAbsence, ABSENCE, clientStats, updateClient,
   nextFreeFor, workDay, workWindow, cats, addCat, addReview, reviewFor, tipSeen, markTip,
+  canTouchAppt, bookableStaff, can,
 } from './store.js';
 import {
   sheet, toast, confirmSheet, esc, money, hhmm, dateLabel, dateFull, nMin, avatar, WD, dayKey,
@@ -100,20 +101,29 @@ export function openApptSheet(id) {
       <button class="act" data-a="ap.call" data-id="${a.id}">${icon('phone', 20)}Позвонить</button>
       <button class="act" data-a="ap.msg" data-id="${a.id}">${icon('msg', 20)}Написать</button>
       <button class="act" data-a="ap.open" data-id="${a.id}">${icon('user', 20)}Клиент</button>
-      ${a.status === 'planned' ? `<button class="act" data-a="ap.cancel" data-id="${a.id}" style="color:var(--dan)">${icon('xCircle', 20)}Отменить</button>` : ''}
+      ${a.status === 'planned' && canTouchAppt(a) ? `<button class="act" data-a="ap.cancel" data-id="${a.id}" style="color:var(--dan)">${icon('xCircle', 20)}Отменить</button>` : ''}
     </div>`;
 
-  const footer = a.status === 'planned'
-    ? `<div class="btns">
-         <button class="btn gh" data-a="ap.move" data-id="${a.id}">${icon('history', 18)}Перенести</button>
-         <button class="btn ${isPast ? 'ok' : 'p'}" data-a="ap.done" data-id="${a.id}">${icon('check', 18)}Завершить</button>
+  // Чужая запись: мастер её видит — она стоит в общем календаре, — но
+  // ничего с ней сделать не может. Кнопки не прячем молча, а заменяем
+  // объяснением: иначе выглядит как поломка.
+  const mayEdit = canTouchAppt(a);
+  const footer = !mayEdit
+    ? `<div class="card pad row" style="gap:10px;background:var(--sf-2);border-color:transparent">
+         <span style="color:var(--tx-3)">${icon('lock', 18)}</span>
+         <div class="sm" style="color:var(--tx-2)">Это запись другого мастера. Перенести или отменить её может он сам, администратор или владелец.</div>
        </div>`
-    : a.status === 'done'
+    : a.status === 'planned'
       ? `<div class="btns">
-           <button class="btn gh" data-a="ap.voice" data-id="${a.id}">${icon('mic', 18)}Заметка</button>
-           <button class="btn p" data-a="ap.repeat" data-id="${a.id}">${icon('refresh', 18)}Повторить запись</button>
+           <button class="btn gh" data-a="ap.move" data-id="${a.id}">${icon('history', 18)}Перенести</button>
+           <button class="btn ${isPast ? 'ok' : 'p'}" data-a="ap.done" data-id="${a.id}">${icon('check', 18)}Завершить</button>
          </div>`
-      : `<button class="btn p" data-a="ap.repeat" data-id="${a.id}">${icon('refresh', 18)}Записать снова</button>`;
+      : a.status === 'done'
+        ? `<div class="btns">
+             <button class="btn gh" data-a="ap.voice" data-id="${a.id}">${icon('mic', 18)}Заметка</button>
+             <button class="btn p" data-a="ap.repeat" data-id="${a.id}">${icon('refresh', 18)}Повторить запись</button>
+           </div>`
+        : `<button class="btn p" data-a="ap.repeat" data-id="${a.id}">${icon('refresh', 18)}Записать снова</button>`;
 
   const s = sheet({ title: 'Запись', body, footer });
   s.el.dataset.apptSheet = a.id;
@@ -129,7 +139,18 @@ on('ap.open', ds => { const a = appt(ds.id); document.querySelectorAll('.sheet')
 on('ap.call', ds => { const a = appt(ds.id), c = client(a.clientId); if (c && c.phone) openLink('tel:' + c.phone.replace(/\s/g, '')); else toast('Нет номера', 'dan'); });
 on('ap.msg', ds => { const a = appt(ds.id), c = client(a.clientId); openLink('https://t.me/' + String(c && c.tg || '').replace('@', '')); });
 
+/* Проверяем не только в разметке: действие можно вызвать и не из карточки —
+   из подсказки, из старого открытого экрана, из консоли. Право должно
+   стоять там, где происходит изменение. */
+function guard(id) {
+  const a = appt(id);
+  if (canTouchAppt(a)) return a;
+  toast('Это запись другого мастера', 'dan');
+  return null;
+}
+
 on('ap.done', async ds => {
+  if (!guard(ds.id)) return;
   completeAppointment(ds.id);
   document.querySelectorAll('.sheet [data-sheet-close]').forEach(b => b.click());
   await wait(320);
@@ -144,8 +165,9 @@ on('ap.done', async ds => {
 });
 
 on('ap.cancel', async ds => {
-  const a = appt(ds.id);
-  if (!a || a.status !== 'planned') { toast('Выполненную запись нельзя отменить', 'dan'); return; }
+  const a = guard(ds.id);
+  if (!a) return;
+  if (a.status !== 'planned') { toast('Выполненную запись нельзя отменить', 'dan'); return; }
   const ok = await confirmSheet({ title: 'Отменить запись?', text: 'Слот снова станет свободным, клиент получит уведомление.', ok: 'Отменить запись', cancel: 'Оставить', danger: true });
   if (!ok) return;
   if (!cancelAppointment(ds.id, S.session.role)) { toast('Эту запись уже нельзя отменить', 'dan'); return; }
@@ -159,9 +181,9 @@ on('ap.repeat', ds => {
   setTimeout(() => newApptFlow({ clientId: a.clientId, serviceIds: a.serviceIds.slice(), employeeId: a.employeeId }), 300);
 });
 
-on('ap.voice', ds => { const a = appt(ds.id); document.querySelectorAll('.sheet [data-sheet-close]').forEach(b => b.click()); setTimeout(() => voiceNoteSheet(a.clientId), 300); });
+on('ap.voice', ds => { const a = guard(ds.id); if (!a) return; document.querySelectorAll('.sheet [data-sheet-close]').forEach(b => b.click()); setTimeout(() => voiceNoteSheet(a.clientId), 300); });
 
-on('ap.move', ds => moveFlow(ds.id));
+on('ap.move', ds => { if (guard(ds.id)) moveFlow(ds.id); });
 on('ap.note', async ds => {
   const a = appt(ds.id);
   const v = await promptSheet({ title: 'Заметка к записи', label: 'Текст', value: a.note, multiline: true });
@@ -314,7 +336,7 @@ export function newApptFlow(pre = {}) {
   function ensureDate() {
     if (state._auto || pre.date || pre.startMin != null) return;
     state._auto = true;
-    const cands = staff().filter(e => !state.serviceIds.length || state.serviceIds.every(id => (svc(id) || { employeeIds: [] }).employeeIds.includes(e.id)));
+    const cands = bookableStaff().filter(e => !state.serviceIds.length || state.serviceIds.every(id => (svc(id) || { employeeIds: [] }).employeeIds.includes(e.id)));
     const ids = state.employeeId ? [state.employeeId] : cands.map(e => e.id);
     for (let i = 0; i < 14; i++) {
       const d = addDays(today(), i);
@@ -324,7 +346,7 @@ export function newApptFlow(pre = {}) {
 
   function stepTime() {
     ensureDate();
-    const cands = staff().filter(e => !state.serviceIds.length || state.serviceIds.every(id => (svc(id) || { employeeIds: [] }).employeeIds.includes(e.id)));
+    const cands = bookableStaff().filter(e => !state.serviceIds.length || state.serviceIds.every(id => (svc(id) || { employeeIds: [] }).employeeIds.includes(e.id)));
     const empIds = state.employeeId ? [state.employeeId] : cands.map(e => e.id);
     const slots = slotsFor(empIds, state.date, duration());
     const cl = client(state.clientId);
@@ -386,7 +408,7 @@ export function newApptFlow(pre = {}) {
   on('na.slot', ds => { if (ds.f !== '1') return; state.min = +ds.m; if (ds.e) state.employeeId = ds.e; haptic('select'); draw(); });
   on('na.create', () => {
     const d = new Date(state.date); d.setHours(Math.floor(state.min / 60), state.min % 60, 0, 0);
-    const empId = state.employeeId || (slotsFor(staff().map(e => e.id), state.date, duration()).find(x => x.min === state.min) || {}).empId;
+    const empId = state.employeeId || (slotsFor(bookableStaff().map(e => e.id), state.date, duration()).find(x => x.min === state.min) || {}).empId;
     if (!empId) { toast('Нет свободного мастера', 'dan'); return; }
     createAppointment({ clientId: state.clientId, employeeId: empId, serviceIds: state.serviceIds, start: d, source: 'owner' });
     s.close();

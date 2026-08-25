@@ -3,7 +3,7 @@ import { startOfDay, dayKey, pad } from './ui.js';
 import { applyLang, lang, t as tr } from './i18n.js';
 
 const KEY = 'zapis.demo.v2';
-const VER = 14;
+const VER = 15;
 
 // homeId, person и clientIds появились вместе с каталогом — см. блок
 // «Клиент: свой салон, личность и каталог» ниже.
@@ -85,6 +85,7 @@ export function reset(doEmit = true) {
   S.shift = 0;
   S.data = buildSeed(t);
   S.session = SESSION();
+  S.data.invites = S.data.invites || [];
   S.aiChat = {}; S.onboarded = true; S.seenTips = {};
   S.lang = lang();
   autoComplete();
@@ -1057,6 +1058,109 @@ export function can(perm, e = me()) {
   if (!e) return false;
   if (e.isOwner) return true;
   return ROLES[roleOf(e)].perms.includes(perm);
+}
+
+/* =========================================================
+   Приглашения в команду
+   ---------------------------------------------------------
+   Владелец делает ссылку с уже выбранной ролью и отправляет человеку.
+   Тот открывает — и оказывается в команде. Ссылка одноразовая: второй
+   переход по ней ничего не создаёт, иначе пересланное приглашение
+   заводило бы сотрудников без ведома владельца.
+
+   Живут приглашения в общем складе, а не только в браузере: ссылку
+   создают на одном устройстве, а открывают на другом — иначе вся затея
+   не имеет смысла.
+   ========================================================= */
+export const invites = (companyId = cid()) =>
+  (S.data.invites || []).filter(i => i.companyId === companyId)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+export const inviteById = id => (S.data.invites || []).find(i => i.id === id) || null;
+
+/** активна | использована | истекла | отозвана */
+export function inviteState(inv) {
+  if (!inv) return 'нет';
+  if (inv.revokedAt) return 'отозвана';
+  if (inv.usedAt) return 'использована';
+  if (new Date(inv.expiresAt) < now()) return 'истекла';
+  return 'активна';
+}
+
+export function createInvite({ companyId = cid(), access = 'staff', role = 'Мастер', days = 7 } = {}) {
+  const rnd = () => Math.random().toString(36).slice(2, 8);
+  const inv = {
+    id: 'inv' + rnd() + rnd(),
+    companyId, access, role: String(role || '').trim() || ROLES[access].t,
+    createdAt: now().toISOString(),
+    createdBy: (me() || {}).id || null,
+    expiresAt: new Date(now().getTime() + days * 86400000).toISOString(),
+    usedAt: null, usedBy: null, revokedAt: null,
+  };
+  S.data.invites = S.data.invites || [];
+  S.data.invites.push(inv);
+  emit();
+  return inv;
+}
+
+export function revokeInvite(id) {
+  const inv = inviteById(id);
+  if (!inv || inv.usedAt) return false;
+  inv.revokedAt = now().toISOString();
+  emit();
+  return true;
+}
+
+/**
+ * Принять приглашение: завести сотрудника и погасить ссылку.
+ * Возвращает { ok, employee } либо { ok: false, why }.
+ */
+export function acceptInvite(id, person = {}) {
+  const inv = inviteById(id);
+  const st = inviteState(inv);
+  if (st !== 'активна') return { ok: false, why: st };
+  const c = co(inv.companyId);
+  if (!c) return { ok: false, why: 'нет компании' };
+
+  const name = String(person.name || '').trim() || 'Новый сотрудник';
+  const e = createEmployee({
+    name, role: inv.role, phone: person.phone || '', companyId: inv.companyId,
+  });
+  e.access = inv.access;
+  e.tg = person.tg || '';
+  e.tgId = person.tgId || '';
+  inv.usedAt = now().toISOString();
+  inv.usedBy = e.id;
+  logEvent('team', 'Сотрудник вошёл по приглашению', { companyId: inv.companyId, actor: name });
+  emit();
+  return { ok: true, employee: e };
+}
+
+/**
+ * Можно ли трогать эту запись: переносить, отменять, завершать.
+ * Мастер распоряжается только своими. Раньше проверки не было вовсе —
+ * право createAppt существовало, но его никто не спрашивал.
+ */
+export function canTouchAppt(a) {
+  if (!a) return false;
+  if (can('allCalendar')) return true;      // владелец, администратор, супер-админ
+  const e = me();
+  return !!(e && a.employeeId === e.id && can('createAppt'));
+}
+
+/** Можно ли создать запись этому мастеру. */
+export function canBookFor(employeeId) {
+  if (can('allCalendar')) return true;
+  const e = me();
+  return !!(e && employeeId === e.id && can('createAppt'));
+}
+
+/** Мастера, которым текущий пользователь вправе создавать записи. */
+export function bookableStaff(companyId = cid()) {
+  const list = staff(companyId);
+  if (can('allCalendar')) return list;
+  const e = me();
+  return list.filter(x => e && x.id === e.id);
 }
 
 export function setRole(employeeId, access) {

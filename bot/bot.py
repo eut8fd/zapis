@@ -535,6 +535,14 @@ PRICES_TEXT = (
 # Идентификаторы компаний Mini App: c1, bg5, co_lx8f2. Ключевые слова
 # (admin, biz, find, create) под шаблон не подходят и сюда не проваливаются.
 CATALOG_ID = re.compile(r'^(c\d+|bg\d+|co_[a-z0-9]+)$')
+# Приглашение в команду: владелец делает ссылку, человек по ней входит.
+INVITE_ID = re.compile(r'^inv[a-z0-9]{8,}$')
+
+INVITE_TEXT = (
+    '<b>Приглашение в команду</b>\n\n'
+    'Вас зовут работать в салоне. Откройте приглашение — там будет видно, '
+    'в какой салон и на какую роль. Ссылка одноразовая.'
+)
 
 FIND_TEXT = (
     '<b>Куда записаться</b>\n\n'
@@ -953,6 +961,13 @@ def handle_message(msg):
         apply_menu_button(chat, uid)
         send(chat, FIND_TEXT, {'inline_keyboard': [
             [open_btn('🔎  Найти, куда записаться', 'find')],
+            [cb('‹ В меню', 'menu')],
+        ]})
+        return
+    elif INVITE_ID.match(param):
+        apply_menu_button(chat, uid)
+        send(chat, INVITE_TEXT, {'inline_keyboard': [
+            [open_btn('👥  Открыть приглашение', param)],
             [cb('‹ В меню', 'menu')],
         ]})
         return
