@@ -17,6 +17,7 @@ import { on } from '../bus.js';
 import { haptic, openLink, tgClose, copy } from '../tg.js';
 import { BOT_USERNAME } from '../config.js';
 import { LANGS, lang } from '../i18n.js';
+import { pushAppointment, patchAppointment } from '../sync.js';
 import { setLang } from '../store.js';
 import { dateStrip, reviewSheet, tipOnce } from '../flows.js';
 
@@ -412,7 +413,11 @@ on('bk.confirm', async () => {
   const sh = sheet({ title: t('Подтверждение'), body: loadingBlock(t('Бронируем время…')) });
   await wait(1100);
   // карточку в этом салоне заводим ровно здесь — в момент первой записи
-  const a = createAppointment({ clientId: ensureMyClient().id, employeeId: empId, serviceIds: [sv.id], start: d, source: 'client' });
+  const rec = ensureMyClient();
+  const a = createAppointment({ clientId: rec.id, employeeId: empId, serviceIds: [sv.id], start: d, source: 'client' });
+  // В общий список кладём имя и telegram-id: своих карточек клиентов у бота
+  // нет, связать запись с человеком он может только по ним.
+  pushAppointment(a, { clientName: rec.name, clientTg: rec.tg || '' });
   sh.close();
   book.st.created = a.id;
   haptic('success');
@@ -839,7 +844,8 @@ ${dateLabel(d, now())}, ${hhmm(d)}
     ok: 'Отменить запись', cancel: 'Не отменять', danger: true,
   });
   if (!ok) return;
-  if (!cancelAppointment(ds.id, 'client')) { toast('Эту запись уже нельзя отменить', 'dan'); return; }
+  if (!cancelAppointment(ds.id, 'client')) { toast(t('Эту запись уже нельзя отменить'), 'dan'); return; }
+  patchAppointment(ds.id, { status: 'cancelled' });
   if (window.__ma) { window.__ma.close(); window.__ma = null; }
   toast(t('Запись отменена'), 'dan');
 });
@@ -873,6 +879,7 @@ on('cl.move', ds => {
   on('cm.ok', d2 => {
     const dt = new Date(date); dt.setHours(Math.floor(pick / 60), pick % 60, 0, 0);
     moveAppointment(d2.id, dt, null);
+    patchAppointment(d2.id, { start: dt.toISOString() });
     s.close(); toast(t('Запись перенесена'));
   });
   draw();

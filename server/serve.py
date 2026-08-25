@@ -1,11 +1,32 @@
-"""Статический сервер для Mini App. Без зависимостей."""
+"""
+Статический сервер для Mini App плюс маленькое общее хранилище.
+
+Зачем хранилище. У бота была своя база (`bot/bookings.json`, услуги по номеру
+в списке), у Mini App — `localStorage` браузера. Они не знали друг о друге:
+бот видел три салона из одиннадцати, а напоминания уходили только по записям
+из чата, хотя интерфейс обещал их всем.
+
+Теперь Mini App выкладывает сюда справочник (компании, услуги, мастера,
+часы), а бот его читает. Записи складываются в общий список в формате
+приложения — с настоящими идентификаторами услуг, а не порядковыми номерами.
+
+Формат хранения — один JSON-файл `.run/shared.json`. Для демо этого хватает:
+писателей единицы, а зависимостей у проекта нет и не будет.
+
+Без зависимостей.
+"""
 import http.server
+import json
 import os
 import socketserver
 import sys
+import threading
+import time
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'webapp'))
+RUN = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '.run'))
+STORE = os.path.join(RUN, 'shared.json')
 
 MIME = {
     '.html': 'text/html; charset=utf-8',
@@ -22,6 +43,33 @@ MIME = {
     '': 'application/octet-stream',
 }
 
+# Пишем под замком: сервер многопоточный, а файл один.
+LOCK = threading.Lock()
+EMPTY = {'catalog': None, 'appointments': [], 'updatedAt': 0}
+
+
+def read_store():
+    try:
+        with open(STORE, encoding='utf-8-sig') as f:
+            data = json.load(f)
+        for k, v in EMPTY.items():
+            data.setdefault(k, v)
+        return data
+    except Exception:                      # noqa: BLE001 — файла ещё нет или он битый
+        return dict(EMPTY)
+
+
+def write_store(data):
+    os.makedirs(RUN, exist_ok=True)
+    data['updatedAt'] = int(time.time())
+    tmp = STORE + '.tmp'
+    # Пишем через временный файл: бот читает этот же файл, и застать его
+    # наполовину записанным он не должен.
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False)
+    os.replace(tmp, STORE)
+    return data
+
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     extensions_map = MIME
@@ -29,17 +77,102 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=ROOT, **kw)
 
+    # ---------------------------------------------------------------- служебное
     def end_headers(self):
         self.send_header('Cache-Control', 'no-store, max-age=0')
         self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, PUT, POST, PATCH, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         # Mini App открывается во фрейме Telegram
         self.send_header('X-Frame-Options', 'ALLOWALL')
         super().end_headers()
 
     def log_message(self, fmt, *args):
-        if '"GET' in (fmt % args) and ' 200 ' in (fmt % args):
+        line = fmt % args
+        if '"GET' in line and ' 200 ' in line:
             return
-        sys.stderr.write('%s\n' % (fmt % args))
+        sys.stderr.write('%s\n' % line)
+
+    def _json(self, obj, code=200):
+        body = json.dumps(obj, ensure_ascii=False).encode('utf-8')
+        self.send_response(code)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _body(self):
+        n = int(self.headers.get('Content-Length') or 0)
+        if not n:
+            return None
+        try:
+            return json.loads(self.rfile.read(n).decode('utf-8'))
+        except Exception:                  # noqa: BLE001
+            return None
+
+    # ---------------------------------------------------------------- маршруты
+    def do_OPTIONS(self):                  # noqa: N802
+        self.send_response(204)
+        self.end_headers()
+
+    def do_GET(self):                      # noqa: N802
+        if self.path.startswith('/api/'):
+            return self._api_get()
+        return super().do_GET()
+
+    def _api_get(self):
+        data = read_store()
+        if self.path.startswith('/api/catalog'):
+            return self._json({'catalog': data['catalog'], 'updatedAt': data['updatedAt']})
+        if self.path.startswith('/api/appointments'):
+            return self._json({'appointments': data['appointments'], 'updatedAt': data['updatedAt']})
+        if self.path.startswith('/api/state'):
+            return self._json(data)
+        return self._json({'error': 'unknown endpoint'}, 404)
+
+    def do_PUT(self):                      # noqa: N802
+        if not self.path.startswith('/api/catalog'):
+            return self._json({'error': 'unknown endpoint'}, 404)
+        body = self._body()
+        if not isinstance(body, dict) or 'catalog' not in body:
+            return self._json({'error': 'catalog expected'}, 400)
+        with LOCK:
+            data = read_store()
+            data['catalog'] = body['catalog']
+            write_store(data)
+        return self._json({'ok': True})
+
+    def do_POST(self):                     # noqa: N802
+        if not self.path.startswith('/api/appointments'):
+            return self._json({'error': 'unknown endpoint'}, 404)
+        body = self._body()
+        if not isinstance(body, dict) or not body.get('id'):
+            return self._json({'error': 'appointment expected'}, 400)
+        with LOCK:
+            data = read_store()
+            rest = [a for a in data['appointments'] if a.get('id') != body['id']]
+            rest.append(body)
+            # Список не растёт бесконечно: демо живёт неделями, а не годами.
+            data['appointments'] = rest[-2000:]
+            write_store(data)
+        return self._json({'ok': True, 'id': body['id']})
+
+    def do_PATCH(self):                    # noqa: N802
+        if not self.path.startswith('/api/appointments/'):
+            return self._json({'error': 'unknown endpoint'}, 404)
+        aid = self.path.rsplit('/', 1)[-1].split('?')[0]
+        body = self._body() or {}
+        with LOCK:
+            data = read_store()
+            found = None
+            for a in data['appointments']:
+                if a.get('id') == aid:
+                    a.update(body)
+                    found = a
+            if found is None:
+                return self._json({'error': 'not found'}, 404)
+            write_store(data)
+        return self._json({'ok': True})
 
 
 class Server(socketserver.ThreadingTCPServer):
@@ -49,6 +182,7 @@ class Server(socketserver.ThreadingTCPServer):
 
 if __name__ == '__main__':
     print('webapp root :', ROOT)
+    print('общий склад :', STORE)
     print('serving     : http://localhost:%d' % PORT)
     with Server(('0.0.0.0', PORT), Handler) as httpd:
         try:

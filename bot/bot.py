@@ -28,6 +28,7 @@ from datetime import date, datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import booking as bk  # noqa: E402
+import shared as sh  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..'))
@@ -79,7 +80,33 @@ def is_admin(user_id):
 
 # --------------------------------------------------------------------- данные
 with open(os.path.join(HERE, 'companies.json'), 'r', encoding='utf-8-sig') as f:
-    COMPANIES = json.load(f)
+    FALLBACK_COMPANIES = json.load(f)
+COMPANIES = dict(FALLBACK_COMPANIES)
+_catalog_stamp = None
+
+
+def refresh_companies(force=False):
+    """
+    Справочник берём у Mini App, если оно его выложило: там все салоны
+    каталога, а в companies.json их три. Файла нет или он пуст — работаем
+    по старому файлу, как раньше.
+    """
+    global COMPANIES, _catalog_stamp
+    try:
+        stamp = sh.read().get('updatedAt')
+        if not force and stamp == _catalog_stamp:
+            return False
+        fresh = sh.companies()
+        _catalog_stamp = stamp
+        if fresh:
+            changed = set(fresh) != set(COMPANIES)
+            COMPANIES = fresh
+            return changed
+        if COMPANIES is not FALLBACK_COMPANIES:
+            COMPANIES = dict(FALLBACK_COMPANIES)
+    except Exception as e:  # noqa: BLE001
+        print('   справочник не прочитался:', e)
+    return False
 
 USERS_PATH = os.path.join(bk.DATA_DIR, 'users.json')
 try:
@@ -345,6 +372,7 @@ def bk_confirm(cid, uid, user, data):
         'name': (user or {}).get('first_name', ''), 'status': 'active',
     })
     st = c['staff'][emp]
+    share_booking(cid, c, rec, svc, emp, d, tm, user)
     txt = (
         '✅ <b>Готово! Вы записаны</b>\n\n'
         '<b>{svc}</b>\n'
@@ -358,6 +386,30 @@ def bk_confirm(cid, uid, user, data):
         [cb('Мои записи', 'mine')],
         [cb('‹ В меню', 'menu')],
     ]})
+
+
+def share_booking(cid, c, rec, svc, emp, d, tm, user):
+    """
+    Положить запись из чата в общий список — с настоящими идентификаторами
+    услуги и мастера, а не номерами в списке. Без них приложение не смогло бы
+    показать эту запись у себя.
+    """
+    ids = c.get('serviceIds') or []
+    sids = c.get('staffIds') or []
+    if svc >= len(ids) or emp >= len(sids):
+        return                      # работаем по старому файлу, id взять неоткуда
+    start = datetime(d.year, d.month, d.day, tm // 60, tm % 60)
+    prices = c.get('servicePrices') or []
+    sh.put_appointment({
+        'id': rec['id'], 'companyId': cid, 'clientId': None,
+        'clientName': (user or {}).get('first_name', '') or 'Гость',
+        'clientTg': (user or {}).get('id', ''),
+        'employeeId': sids[emp], 'serviceIds': [ids[svc]],
+        'start': start.isoformat(), 'duration': rec.get('dur', 60),
+        'price': prices[svc] if svc < len(prices) else 0,
+        'status': 'planned', 'source': 'bot',
+        'createdAt': datetime.now().isoformat(),
+    })
 
 
 def mine_screen(cid, uid):
@@ -582,9 +634,70 @@ def reminder_text(b, kind, left_min):
              price=s[1], dur=s[2], name=esc(c['name']), addr=esc(c['addr']), tail=tail)
 
 
+def app_reminder_text(a, kind):
+    """Текст напоминания по записи, сделанной в приложении."""
+    c = COMPANIES.get(a.get('companyId'))
+    if not c:
+        return None
+    try:
+        i = (c.get('serviceIds') or []).index((a.get('serviceIds') or [None])[0])
+        name = c['services'][i][0]
+    except Exception:  # noqa: BLE001
+        name = 'визит'
+    try:
+        start = datetime.fromisoformat(str(a['start']).replace('Z', ''))
+    except Exception:  # noqa: BLE001
+        return None
+    when = '%s, %s' % (bk.day_label(start.date(), date.today()),
+                       bk.hm(start.hour * 60 + start.minute))
+    head = ('🔔 <b>Напоминание: завтра запись</b>' if kind == '24h'
+            else '⏰ <b>Скоро визит</b>')
+    return '%s\n\n<b>%s</b>\n%s\n%s' % (head, esc(name), when, esc(c['name']))
+
+
+def app_due_reminders(now=None):
+    """
+    Созревшие напоминания по записям из приложения. Раньше их не было вовсе:
+    бот видел только свою базу, а интерфейс обещал напоминания всем.
+    Клиента узнаём по clientTg — telegram-id кладёт туда само приложение.
+    """
+    now = now or datetime.now()
+    out = []
+    for a in sh.appointments():
+        if a.get('status') != 'planned' or a.get('source') == 'bot':
+            continue
+        uid = a.get('clientTg')
+        if not uid:
+            continue
+        try:
+            start = datetime.fromisoformat(str(a['start']).replace('Z', ''))
+        except Exception:  # noqa: BLE001
+            continue
+        if start < now:
+            continue
+        left = (start - now).total_seconds() / 60.0
+        done = a.get('reminded') or {}
+        for kind, before in bk.REMINDERS:
+            if done.get(kind) or left > before:
+                continue
+            if left < before - bk.LATE_LIMIT:
+                sh.mark_reminded(a.get('id'), kind)
+                continue
+            out.append((a, kind))
+    return out
+
+
 def send_due_reminders():
     """Разослать созревшие напоминания. Возвращает, сколько отправлено."""
     sent = 0
+    for a, kind in app_due_reminders():
+        txt = app_reminder_text(a, kind)
+        sh.mark_reminded(a.get('id'), kind)
+        if not txt:
+            continue
+        r = send(a['clientTg'], txt, {'inline_keyboard': [[cb('Мои записи', 'mine')]]})
+        if r.get('ok'):
+            sent += 1
     for b, kind, left in bk.due_reminders():
         txt = reminder_text(b, kind, left)
         if not txt:
@@ -611,6 +724,7 @@ def tick_reminders():
     if now - _last_remind_check < REMIND_EVERY:
         return
     _last_remind_check = now
+    refresh_companies()
     try:
         n = send_due_reminders()
         if n:
@@ -751,6 +865,11 @@ def apply_menu_button(chat_id, uid):
 def setup():
     global BOT_USERNAME
     print('bot: настройка…')
+    # Справочник от Mini App читаем до всего остального: от него зависит,
+    # сколько салонов бот вообще знает.
+    refresh_companies(force=True)
+    print('   салонов в справочнике: %d%s'
+          % (len(COMPANIES), ' (из приложения)' if sh.available() else ' (из companies.json)'))
     me = api('getMe').get('result', {})
     BOT_USERNAME = me.get('username', '')
 

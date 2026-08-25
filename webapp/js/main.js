@@ -4,6 +4,7 @@ import { adminAllowed, unlockWithCode } from './config.js';
 import { bindDelegation, on } from './bus.js';
 import { render, bootRoute, go, back, routes } from './router.js';
 import { $ } from './ui.js';
+import { syncOnBoot, pushCatalog } from './sync.js';
 
 /* ---------- тема ---------- */
 export function applyTheme() {
@@ -142,8 +143,15 @@ async function boot() {
   if (S.session.role === 'client' && !homeId() && h === 'cl.company') location.hash = '';
 
   sub(() => render(false));
+  // Справочник уходит на сервер после любого изменения данных, с задержкой:
+  // бот читает оттуда салоны и услуги. Если сервера нет, sync молча
+  // отключается — приложение работает на localStorage, как раньше.
+  sub(() => pushCatalog());
   $('#boot') && $('#boot').remove();
   bootRoute(def);
+  // Записи из чата бота подтягиваем после первой отрисовки, чтобы не
+  // задерживать открытие: сеть может и не ответить.
+  syncOnBoot().catch(() => { });
   window.addEventListener('resize', () => { });
 }
 
