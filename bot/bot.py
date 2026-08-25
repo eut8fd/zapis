@@ -18,6 +18,7 @@
 """
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -479,6 +480,16 @@ PRICES_TEXT = (
     'Первые 14 дней — бесплатно, карта не нужна.'
 )
 
+# Идентификаторы компаний Mini App: c1, bg5, co_lx8f2. Ключевые слова
+# (admin, biz, find, create) под шаблон не подходят и сюда не проваливаются.
+CATALOG_ID = re.compile(r'^(c\d+|bg\d+|co_[a-z0-9]+)$')
+
+FIND_TEXT = (
+    '<b>Куда записаться</b>\n\n'
+    'Салоны по услуге, названию или городу — маникюр, барбершоп, спа. '
+    'Свободное время видно сразу, запись занимает полминуты.'
+)
+
 SUPPORT_TEXT = (
     '<b>Поддержка</b>\n\n'
     'Поможем настроить услуги, график и страницу записи — обычно отвечаем '
@@ -658,13 +669,18 @@ def main_menu(uid):
     c = COMPANIES[cid]
     mine = bk.user_bookings(uid)
     biz_cid = s.get('company') if s.get('role') == 'biz' else None
+    # салон есть только у того, кто пришёл по ссылке или выбрал его сам.
+    # Остальным салон не подставляем: человек его не выбирал
+    bound = s.get('company') in COMPANIES
 
     lines = ['<b>%s — онлайн-запись в Telegram</b>' % esc(BRAND), '']
     if biz_cid and biz_cid in COMPANIES:
         lines.append('Ваш бизнес: <b>%s</b> · тариф %s'
                      % (esc(COMPANIES[biz_cid]['name']), esc(COMPANIES[biz_cid]['plan'])))
-    else:
+    elif bound:
         lines.append('Салон: <b>%s</b> · %s' % (esc(c['name']), esc(c['city'])))
+    else:
+        lines.append('Найдите, куда записаться: по услуге, салону или городу.')
     if mine:
         when, b = mine[0]
         # услугу берём из салона самой записи: она может быть не из текущего
@@ -679,7 +695,7 @@ def main_menu(uid):
     lines.append('')
     lines.append('Свободное время видно сразу — запись занимает полминуты.')
 
-    rows = [[open_btn('📅  Записаться онлайн', cid + '_book')]]
+    rows = [[open_btn('📅  Записаться онлайн', cid + '_book')]] if bound or biz_cid         else [[open_btn('🔎  Найти, куда записаться', 'find')]]
     rows.append([cb('🗓  Мои записи' + (' · %d' % len(mine) if mine else ''), 'mine')])
     if biz_cid and biz_cid in COMPANIES:
         rows.append([cb('💼  %s' % COMPANIES[biz_cid]['name'], 'biz')])
@@ -699,8 +715,12 @@ BIZ_START_TEXT = (
 
 
 def biz_start_kb():
+    # Первым делом — витрина в Mini App: там то же самое, но с картинками,
+    # разбором разделов и живым кабинетом. Кому не нужно объяснять,
+    # тот жмёт вторую кнопку и попадает сразу в форму.
     return {'inline_keyboard': [
-        [open_btn('✨  Создать свой бизнес', 'onboarding')],
+        [open_btn('✨  Что вы получите', 'create')],
+        [open_btn('Сразу создать бизнес', 'onboarding')],
         [cb('Открыть демо-компанию', 'role_biz')],
         [cb('Возможности', 'features'), cb('Тарифы', 'prices')],
         [cb('‹ В меню', 'menu')],
@@ -806,6 +826,29 @@ def handle_message(msg):
         set_state(uid, role='client', company=param)
     elif param in ('biz', 'business', 'owner'):  # ссылка «для бизнеса»
         set_state(uid, role='biz', company=company_id_of(uid))
+    elif param == 'create':                      # ссылка на витрину для бизнеса
+        apply_menu_button(chat, uid)
+        send(chat, BIZ_START_TEXT, biz_start_kb())
+        return
+    elif param == 'find':                        # ссылка на каталог
+        apply_menu_button(chat, uid)
+        send(chat, FIND_TEXT, {'inline_keyboard': [
+            [open_btn('🔎  Найти, куда записаться', 'find')],
+            [cb('‹ В меню', 'menu')],
+        ]})
+        return
+    elif CATALOG_ID.match(param):
+        # Салон из каталога Mini App. Своей базы по нему у бота нет — записывать
+        # в чате нечего, — но ссылку присылают людям, и вести она должна
+        # на страницу салона, а не в холодное меню.
+        apply_menu_button(chat, uid)
+        send(chat, '<b>Страница записи</b>\n\n'
+                   'Откройте салон и выберите время — свободные окна видно сразу.',
+             {'inline_keyboard': [
+                 [open_btn('📅  Открыть страницу записи', param)],
+                 [cb('‹ В меню', 'menu')],
+             ]})
+        return
 
     apply_menu_button(chat, uid)
     t, kb = menu_for(uid)

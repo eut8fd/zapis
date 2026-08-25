@@ -6,52 +6,53 @@ export const $ = (s, r = document) => r.querySelector(s);
 export const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 export const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-/* ---------------- Формат ---------------- */
-export const MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
-export const MON_SHORT = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
-export const WD = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
-export const WD_FULL = ['воскресенье', 'понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота'];
+/* ---------------- Формат ----------------
+   Названия месяцев и дней недели живут в i18n и переписываются там же
+   при смене языка — здесь они просто пробрасываются дальше, чтобы
+   полсотни мест по проекту продолжали импортировать их из ui.
+------------------------------------------- */
+import { t, plural as tPlural, locale, MONTHS, MON_SHORT, WD, WD_FULL, MONTH_NAMES } from './i18n.js';
+export { t, MONTHS, MON_SHORT, WD, WD_FULL, MONTH_NAMES };
+export const plural = tPlural;
 
 export const pad = n => String(n).padStart(2, '0');
-export const money = n => new Intl.NumberFormat('ru-RU').format(Math.round(n)) + ' ₸';
+export const money = n => new Intl.NumberFormat(locale()).format(Math.round(n)) + ' ₸';
 export const moneyShort = n => n >= 1000000 ? (n / 1000000).toFixed(n % 1000000 ? 1 : 0) + 'M' : n >= 1000 ? Math.round(n / 1000) + 'K' : String(Math.round(n));
-export const num = n => new Intl.NumberFormat('ru-RU').format(n);
+export const num = n => new Intl.NumberFormat(locale()).format(n);
 export const hhmm = d => pad(d.getHours()) + ':' + pad(d.getMinutes());
 export const dayKey = d => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
 export const startOfDay = d => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 export const addDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n, d.getHours(), d.getMinutes());
 export const sameDay = (a, b) => dayKey(a) === dayKey(b);
 
-export function plural(n, forms) {
-  const a = Math.abs(n) % 100, b = a % 10;
-  if (a > 10 && a < 20) return forms[2];
-  if (b > 1 && b < 5) return forms[1];
-  if (b === 1) return forms[0];
-  return forms[2];
-}
 export const nAppt = n => n + ' ' + plural(n, ['запись', 'записи', 'записей']);
 export const nVisit = n => n + ' ' + plural(n, ['визит', 'визита', 'визитов']);
 export const nClient = n => n + ' ' + plural(n, ['клиент', 'клиента', 'клиентов']);
-export const nMin = m => m >= 60 ? (m % 60 ? Math.floor(m / 60) + ' ч ' + (m % 60) + ' мин' : Math.floor(m / 60) + ' ' + plural(Math.floor(m / 60), ['час', 'часа', 'часов'])) : m + ' мин';
+export const nMin = m => m >= 60
+  ? (m % 60
+    ? Math.floor(m / 60) + ' ' + t('ч') + ' ' + (m % 60) + ' ' + t('мин')
+    : Math.floor(m / 60) + ' ' + plural(Math.floor(m / 60), ['час', 'часа', 'часов']))
+  : m + ' ' + t('мин');
 
 export function dateLabel(d, now) {
-  const t = startOfDay(now), x = startOfDay(d);
-  const diff = Math.round((x - t) / 86400000);
-  if (diff === 0) return 'Сегодня';
-  if (diff === 1) return 'Завтра';
-  if (diff === -1) return 'Вчера';
-  return d.getDate() + ' ' + MONTHS[d.getMonth()];
+  const today = startOfDay(now), x = startOfDay(d);
+  const diff = Math.round((x - today) / 86400000);
+  if (diff === 0) return t('Сегодня');
+  if (diff === 1) return t('Завтра');
+  if (diff === -1) return t('Вчера');
+  return dateFull(d);
 }
 export function dateFull(d) { return d.getDate() + ' ' + MONTHS[d.getMonth()]; }
 export function relPast(d, now) {
   const days = Math.round((startOfDay(now) - startOfDay(d)) / 86400000);
-  if (days <= 0) return 'сегодня';
-  if (days === 1) return 'вчера';
-  if (days < 7) return days + ' ' + plural(days, ['день', 'дня', 'дней']) + ' назад';
-  if (days < 31) { const w = Math.floor(days / 7); return w + ' ' + plural(w, ['неделю', 'недели', 'недель']) + ' назад'; }
-  const m = Math.floor(days / 30); return m + ' ' + plural(m, ['месяц', 'месяца', 'месяцев']) + ' назад';
+  if (days <= 0) return t('сегодня');
+  if (days === 1) return t('вчера');
+  const say = (n, forms) => t('{n} назад', { n: n + ' ' + plural(n, forms) });
+  if (days < 7) return say(days, ['день', 'дня', 'дней']);
+  if (days < 31) return say(Math.floor(days / 7), ['неделю', 'недели', 'недель']);
+  return say(Math.floor(days / 30), ['месяц', 'месяца', 'месяцев']);
 }
-export const greet = h => h < 5 ? 'Доброй ночи' : h < 12 ? 'Доброе утро' : h < 18 ? 'Добрый день' : 'Добрый вечер';
+export const greet = h => t(h < 5 ? 'Доброй ночи' : h < 12 ? 'Доброе утро' : h < 18 ? 'Добрый день' : 'Добрый вечер');
 
 /* ---------------- Компоненты ---------------- */
 export function avatar(p, size = 'm', cls = '') {
@@ -381,8 +382,7 @@ export function promptSheet({ title, label, value = '', placeholder = '', multil
    остаются видимыми — так понятнее, чем прятать их совсем.
    avail(date) -> null | число свободных слотов | true/false
 ------------------------------------------------------- */
-export const MONTH_NAMES = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
-  'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+
 
 export function monthGrid(view, {
   selected = null, action = 'cal.pick', navAction = 'cal.month',

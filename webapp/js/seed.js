@@ -11,6 +11,62 @@ const SF = ['Петрова', 'Иванова', 'Смагулова', 'Ким', 
 const SM = ['Петров', 'Иванов', 'Смагулов', 'Ким', 'Ли', 'Абдрахманов', 'Ахметов', 'Соколов', 'Новиков', 'Жумабаев', 'Тулегенов', 'Орлов', 'Кузнецов', 'Сейтказы', 'Беков', 'Мухамедов', 'Волков', 'Романов', 'Ержанов', 'Садыков'];
 
 const initials = n => n.split(' ').filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase();
+
+/* ---------------- Обложки салонов ----------------
+   Фотографий в проекте нет и быть не может: снимок уехал бы в localStorage
+   вместе с данными и съел бы квоту на всю базу. Поэтому обложку рисуем —
+   плотная подложка фирменного цвета и несколько мягких форм поверх.
+   Разные seed дают разные композиции, и каталог перестаёт выглядеть
+   списком одинаковых плашек. Около 500 байт на салон.
+--------------------------------------------------- */
+function shade(hex, pct) {
+  const n = parseInt(hex.slice(1), 16);
+  const ch = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map(v => {
+    const x = Math.round(v + (pct < 0 ? v : 255 - v) * (pct / 100));
+    return Math.max(0, Math.min(255, x));
+  });
+  return '#' + ch.map(v => v.toString(16).padStart(2, '0')).join('');
+}
+
+function coverArt(color, seed) {
+  const r = rng(seed);
+  const a = shade(color, -18), b = shade(color, -52);
+  const parts = [`<rect width="120" height="70" fill="url(#g)"/>`];
+  const n = int(r, 3, 5);
+  for (let i = 0; i < n; i++) {
+    const op = (0.08 + r() * 0.20).toFixed(2);
+    const x = int(r, -14, 116), y = int(r, -14, 78);
+    if (r() < 0.45) {
+      const w = int(r, 26, 64), h = int(r, 10, 26);
+      parts.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${Math.round(h / 2)}" fill="#fff" opacity="${op}"/>`);
+    } else {
+      parts.push(`<circle cx="${x}" cy="${y}" r="${int(r, 16, 44)}" fill="#fff" opacity="${op}"/>`);
+    }
+  }
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 70" preserveAspectRatio="xMidYMid slice">`
+    + `<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">`
+    + `<stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs>`
+    + parts.join('') + `</svg>`;
+  return 'data:image/svg+xml,' + encodeURIComponent(svg);
+}
+/* Координаты городов. Точка салона — центр города плюс детерминированный
+   разброс: настоящих адресов у демо-салонов нет, а расстояния должны
+   отличаться, иначе сортировка «рядом» ничего не сортирует. */
+const CITY_GEO = {
+  'Алматы': [43.2380, 76.8890],
+  'Астана': [51.1280, 71.4300],
+  'Шымкент': [42.3150, 69.5870],
+  'Актобе': [50.2830, 57.1670],
+  'Караганда': [49.8060, 73.0850],
+};
+function geoFor(city, r) {
+  const base = CITY_GEO[city] || CITY_GEO['Алматы'];
+  return {
+    lat: +(base[0] + (r() - 0.5) * 0.11).toFixed(5),
+    lon: +(base[1] + (r() - 0.5) * 0.16).toFixed(5),
+  };
+}
+
 const phone = r => '+7 7' + int(r, 10, 79) + ' ' + int(r, 100, 999) + ' ' + String(int(r, 10, 99)) + ' ' + String(int(r, 10, 99));
 
 const WEEK_DEFAULT = () => ({
@@ -111,60 +167,145 @@ const PLANS = () => ([
   },
   {
     id: 'PRO', name: 'PRO', price: 19900, period: 'month', active: true, color: '#4C6FFF',
-    limits: { staff: 10, services: 100, broadcasts: 20 },
-    feats: ['До 10 сотрудников', 'AI-помощник', 'Рассылки', 'Аналитика и финансы'],
+    limits: { staff: 10, services: 100, broadcasts: 20, onlyMine: true },
+    feats: ['До 10 сотрудников', 'AI-помощник', 'Рассылки', 'Аналитика и финансы', 'Только мой салон'],
   },
   {
     id: 'BUSINESS', name: 'BUSINESS', price: 39900, period: 'month', active: true, color: '#8B5CF6',
-    limits: { staff: 0, services: 0, broadcasts: 0 },
+    limits: { staff: 0, services: 0, broadcasts: 0, onlyMine: true },
     feats: ['Без ограничений', 'Несколько филиалов', 'API и интеграции', 'Приоритетная поддержка'],
   },
 ]);
 
-// «Фоновые» компании — нужны, чтобы панель Super Admin выглядела как настоящий SaaS
+/* Остальные компании платформы.
+   Раньше они были чисто «фоновыми» — существовали только ради того, чтобы
+   Super Admin выглядел как настоящий SaaS, и услуги в них назывались
+   «Основная услуга» и «Премиум». Теперь в них записывается клиент из
+   каталога, поэтому наполнение должно быть настоящим: названия услуг,
+   цены, адреса и роли мастеров. */
 const BG = [
-  ['Nail Bar Almaty', 'Ногтевая студия', 'Алматы', 'PRO', 26, '#EC4899'],
-  ['Studio Hair&Co', 'Парикмахерская', 'Алматы', 'START', 12, '#F79009'],
-  ['Brow House', 'Броу-бар', 'Астана', 'PRO', 48, '#8B5CF6'],
-  ['Men’s Club', 'Барбершоп', 'Шымкент', 'BUSINESS', 71, '#0EA5E9'],
-  ['Aroma Spa', 'Спа-центр', 'Астана', 'PRO', 4, '#12B76A'],
-  ['Beauty Point', 'Салон красоты', 'Караганда', 'START', -3, '#F04462'],
-  ['Lash Room', 'Студия ресниц', 'Алматы', 'START', 19, '#06AED4'],
-  ['Barber 7', 'Барбершоп', 'Актобе', 'PRO', 33, '#6366F1'],
-  ['Sakura Nails', 'Ногтевая студия', 'Алматы', 'PRO', 9, '#FB7185'],
+  {
+    name: 'Nail Bar Almaty', cat: 'Ногтевая студия', city: 'Алматы', plan: 'PRO', days: 26,
+    color: '#EC4899', addr: 'ул. Байтурсынова 85', role: 'Мастер маникюра',
+    about: 'Маникюр, педикюр и дизайн. Работаем без выходных.',
+    services: [
+      ['Маникюр с покрытием', 8000, 75, 'nails'], ['Классический маникюр', 5000, 50, 'nails'],
+      ['Педикюр с покрытием', 11000, 90, 'nails'], ['Дизайн ногтей', 3000, 30, 'nails'],
+    ],
+  },
+  {
+    name: 'Studio Hair&Co', cat: 'Парикмахерская', city: 'Алматы', plan: 'START', days: 12,
+    color: '#F79009', addr: 'мкр. Самал-2, дом 33', role: 'Парикмахер',
+    about: 'Стрижки и окрашивание для всей семьи.',
+    services: [
+      ['Женская стрижка', 7000, 60, 'hair'], ['Мужская стрижка', 4500, 40, 'hair'],
+      ['Окрашивание', 16000, 120, 'hair'], ['Укладка', 6000, 45, 'hair'],
+      ['Детская стрижка', 3500, 30, 'hair'],
+    ],
+  },
+  {
+    name: 'Brow House', cat: 'Броу-бар', city: 'Астана', plan: 'PRO', days: 48,
+    color: '#8B5CF6', addr: 'ул. Сыганак 18', role: 'Бровист',
+    about: 'Брови и ресницы: коррекция, окрашивание, ламинирование.',
+    services: [
+      ['Коррекция бровей', 3500, 30, 'brow'], ['Окрашивание бровей', 5000, 40, 'brow'],
+      ['Ламинирование бровей', 9000, 60, 'brow'], ['Ламинирование ресниц', 11000, 70, 'brow'],
+    ],
+  },
+  {
+    name: 'Men’s Club', cat: 'Барбершоп', city: 'Шымкент', plan: 'BUSINESS', days: 71,
+    color: '#0EA5E9', addr: 'пр. Тауке хана 41', role: 'Барбер', male: true,
+    about: 'Барбершоп с двумя залами и детским креслом.',
+    services: [
+      ['Мужская стрижка', 5500, 45, 'bar'], ['Стрижка + борода', 8500, 70, 'bar'],
+      ['Моделирование бороды', 4500, 35, 'bar'], ['Королевское бритьё', 6500, 50, 'bar'],
+      ['Детская стрижка', 4000, 35, 'bar'],
+    ],
+  },
+  {
+    name: 'Aroma Spa', cat: 'Спа-центр', city: 'Астана', plan: 'PRO', days: 4,
+    color: '#12B76A', addr: 'ул. Достык 5, 3 этаж', role: 'Массажист',
+    about: 'Массаж и спа-программы после рабочего дня.',
+    services: [
+      ['Классический массаж', 16000, 60, 'spa'], ['Расслабляющий массаж', 14000, 50, 'spa'],
+      ['Массаж спины', 9000, 30, 'spa'], ['Спа-программа для двоих', 38000, 120, 'spa'],
+    ],
+  },
+  {
+    name: 'Beauty Point', cat: 'Салон красоты', city: 'Караганда', plan: 'START', days: -3,
+    color: '#F04462', addr: 'пр. Бухар жырау 60', role: 'Мастер',
+    about: 'Ногти, волосы и брови в одном месте.',
+    services: [
+      ['Маникюр с покрытием', 7000, 70, 'nails'], ['Женская стрижка', 6000, 55, 'hair'],
+      ['Коррекция бровей', 3000, 30, 'brow'],
+    ],
+  },
+  {
+    name: 'Lash Room', cat: 'Студия ресниц', city: 'Алматы', plan: 'START', days: 19,
+    color: '#06AED4', addr: 'ул. Жандосова 58', role: 'Лешмейкер',
+    about: 'Наращивание и ламинирование ресниц.',
+    services: [
+      ['Наращивание классика', 12000, 100, 'brow'], ['Наращивание 2D', 15000, 120, 'brow'],
+      ['Снятие ресниц', 2500, 25, 'brow'], ['Ламинирование ресниц', 10000, 70, 'brow'],
+    ],
+  },
+  {
+    name: 'Barber 7', cat: 'Барбершоп', city: 'Актобе', plan: 'PRO', days: 33,
+    color: '#6366F1', addr: 'ул. Абилкайыр хана 74', role: 'Барбер', male: true,
+    about: 'Стрижка, борода и уход. Без записи не принимаем.',
+    services: [
+      ['Мужская стрижка', 5000, 45, 'bar'], ['Стрижка машинкой', 3500, 25, 'bar'],
+      ['Борода', 4000, 35, 'bar'], ['Камуфляж седины', 6000, 45, 'bar'],
+    ],
+  },
+  {
+    name: 'Sakura Nails', cat: 'Ногтевая студия', city: 'Алматы', plan: 'PRO', days: 9,
+    color: '#FB7185', addr: 'ул. Розыбакиева 247', role: 'Мастер маникюра',
+    about: 'Аппаратный маникюр и укрепление гелем.',
+    services: [
+      ['Аппаратный маникюр', 7500, 70, 'nails'], ['Укрепление гелем', 10000, 90, 'nails'],
+      ['Педикюр', 10000, 80, 'nails'], ['Снятие покрытия', 2000, 25, 'nails'],
+    ],
+  },
 ];
 
 function buildBackground(st, today) {
   BG.forEach((b, bi) => {
-    const [name, cat, city, plan, days, color] = b;
+    const { name, cat, city, plan, days, color, addr, about, role, male } = b;
     const r = rng(9000 + bi * 37);
     const id = 'bg' + (bi + 1);
     st.companies.push({
       id, name, short: name.split(' ')[0], cat, color, city,
-      addr: 'ул. Демо ' + int(r, 1, 90), phone: phone(r), rating: +(4.4 + r() * 0.6).toFixed(1),
-      reviewsCount: int(r, 20, 180), about: '', plan,
+      addr, phone: phone(r), rating: +(4.4 + r() * 0.6).toFixed(1),
+      reviewsCount: int(r, 20, 180), about, plan,
       planUntil: new Date(today.getTime() + days * 86400000).toISOString(),
       slug: id, tgLink: id, initials: initials(name), status: days < -1 ? 'blocked' : null,
       createdAt: new Date(today.getTime() - int(r, 20, 500) * 86400000).toISOString(),
-      hours: WEEK_DEFAULT(), currency: '₸',
-      logo: null, cover: null, finCats: { income: {}, expense: {} },
+      hours: WEEK_DEFAULT(), currency: '₸', ...geoFor(city, r),
+      logo: null, cover: coverArt(color, 9000 + bi * 37), finCats: { income: {}, expense: {} },
     });
     const owner = { id: id + '_owner', companyId: id, name: pick(r, M) + ' ' + pick(r, SM), role: 'Владелец', isOwner: true, active: true, initials: 'ВЛ', color: AV[bi % AV.length], phone: phone(r), schedule: WEEK_DEFAULT(), serviceIds: [], takesAppointments: false, access: 'owner', photo: null, since: null, showExp: true };
     st.employees.push(owner);
+    // категории услуг компании — по ним же метим мастеров, иначе фильтр
+    // «мастера этой услуги» на странице салона окажется пустым
+    const tags = [...new Set(b.services.map(s => s[3]))];
     const team = [];
     for (let i = 0; i < int(r, 1, 4); i++) {
-      const nm = pick(r, F) + ' ' + pick(r, SF);
+      const nm = male ? pick(r, M) + ' ' + pick(r, SM) : pick(r, F) + ' ' + pick(r, SF);
       team.push({
-        id: id + '_e' + i, companyId: id, name: nm, role: 'Мастер', active: true,
+        id: id + '_e' + i, companyId: id, name: nm, role, active: true,
         initials: initials(nm), color: AV[(bi + i) % AV.length], phone: phone(r),
-        schedule: WEEK_DEFAULT(), serviceIds: [], takesAppointments: true, tags: ['nails'],
+        schedule: WEEK_DEFAULT(), serviceIds: [], takesAppointments: true, tags,
         access: 'staff', rating: (4.5 + r() * .5).toFixed(1),
         photo: null, since: today.getFullYear() - int(r, 1, 9), showExp: true,
       });
     }
     st.employees.push(...team);
-    const svcs = [['Основная услуга', 9000, 60], ['Быстрая услуга', 5000, 30], ['Премиум', 20000, 120]]
-      .map((s, i) => ({ id: id + '_s' + i, companyId: id, name: s[0], price: s[1], duration: s[2], cat: 'nails', color, active: true, buffer: 0, desc: '', photo: null, employeeIds: team.map(e => e.id) }));
+    const svcs = b.services.map((s, i) => ({
+      id: id + '_s' + i, companyId: id, name: s[0], price: s[1], duration: s[2],
+      cat: s[3], color: CAT_COLOR[s[3]] || color, active: true, buffer: 0, desc: '', photo: null,
+      employeeIds: team.map(e => e.id),
+    }));
     st.services.push(...svcs);
     team.forEach(e => { e.serviceIds = svcs.map(s => s.id); });
     const cls = [];
@@ -294,8 +435,8 @@ export function buildSeed(anchor) {
       addr: co.addr, phone: co.phone, rating: co.rating, reviewsCount: co.reviews, about: co.about,
       plan: co.plan, planUntil: untilDate.toISOString(), slug: co.slug, tgLink: co.tgLink,
       initials: initials(co.name), createdAt: new Date(today.getTime() - int(r, 120, 400) * 86400000).toISOString(),
-      hours: WEEK_DEFAULT(), currency: '₸',
-      logo: null, cover: null, finCats: { income: {}, expense: {} },
+      hours: WEEK_DEFAULT(), currency: '₸', ...geoFor(co.city, r),
+      logo: null, cover: coverArt(co.color, co.seed), finCats: { income: {}, expense: {} },
     });
 
     // владелец

@@ -211,6 +211,7 @@ function rangeTitle(from, to) {
 }
 
 route('o.cal', {
+  perm: 'allCalendar',
   tab: 'o.cal',
   fab: () => `<button class="fab" data-a="cal.add">${icon('plus', 26, 2.4)}</button>`,
   render() { return calendarScreen({ scope: 'company' }); },

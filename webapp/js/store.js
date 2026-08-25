@@ -1,12 +1,20 @@
 import { buildSeed } from './seed.js';
 import { startOfDay, dayKey, pad } from './ui.js';
+import { applyLang, lang, t as tr } from './i18n.js';
 
 const KEY = 'zapis.demo.v2';
-const VER = 11;
+const VER = 14;
+
+// homeId, person и clientIds появились вместе с каталогом — см. блок
+// «Клиент: свой салон, личность и каталог» ниже.
+const SESSION = () => ({
+  role: 'owner', companyId: 'c1', employeeId: 'c1_owner', clientId: 'c1_cl1',
+  homeId: null, person: null, clientIds: {},
+});
 
 export const S = {
-  v: VER, anchor: null, shift: 0, theme: 'auto', aiMode: 'demo', onboarded: true,
-  session: { role: 'owner', companyId: 'c1', employeeId: 'c1_owner', clientId: 'c1_cl1' },
+  v: VER, anchor: null, shift: 0, theme: 'auto', lang: 'ru', aiMode: 'demo', onboarded: true,
+  session: SESSION(),
   data: null, aiChat: {}, seenTips: {},
 };
 
@@ -29,7 +37,7 @@ export function shiftBy(ms) { S.shift += ms; emit(); }
 let quotaWarned = false;
 export function save() {
   try {
-    localStorage.setItem(KEY, JSON.stringify({ v: VER, anchor: S.anchor, shift: S.shift, theme: S.theme, aiMode: S.aiMode, onboarded: S.onboarded, session: S.session, data: S.data, aiChat: S.aiChat, seenTips: S.seenTips }));
+    localStorage.setItem(KEY, JSON.stringify({ v: VER, anchor: S.anchor, shift: S.shift, theme: S.theme, lang: S.lang, aiMode: S.aiMode, onboarded: S.onboarded, session: S.session, data: S.data, aiChat: S.aiChat, seenTips: S.seenTips }));
     quotaWarned = false;
   } catch (e) {
     console.warn('save failed', e);
@@ -60,8 +68,9 @@ function shiftTree(node, ms) {
 export function load() {
   let raw = null;
   try { raw = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) { }
-  if (!raw || raw.v !== VER || !raw.data) { reset(false); return; }
+  if (!raw || raw.v !== VER || !raw.data) { reset(false); applyLang(S.lang); return; }
   Object.assign(S, raw);
+  applyLang(S.lang);
   // Демо всегда «свежее»: переносим данные на текущий день
   const a = startOfDay(new Date(S.anchor));
   const t = startOfDay(new Date());
@@ -75,8 +84,9 @@ export function reset(doEmit = true) {
   S.anchor = t.toISOString();
   S.shift = 0;
   S.data = buildSeed(t);
-  S.session = { role: 'owner', companyId: 'c1', employeeId: 'c1_owner', clientId: 'c1_cl1' };
+  S.session = SESSION();
   S.aiChat = {}; S.onboarded = true; S.seenTips = {};
+  S.lang = lang();
   autoComplete();
   if (doEmit) emit(); else save();
 }
@@ -91,6 +101,14 @@ export function autoComplete() {
     if (end < n - 2 * 3600000) { a.status = 'done'; ch++; }
   });
   return ch;
+}
+
+/** Язык интерфейса. Настройка устройства, а не компании: у владельца
+    и у клиента на одном телефоне он один. */
+export function setLang(id) {
+  if (!applyLang(id)) return;
+  S.lang = id;
+  emit();
 }
 
 /* ---------- селекторы ---------- */
@@ -114,6 +132,8 @@ export const blocks = (id = cid()) => S.data.blocks.filter(b => b.companyId === 
 export const me = () => S.session.role === 'client' ? client(S.session.clientId) : emp(S.session.employeeId);
 export const isOwner = () => S.session.role === 'owner';
 export const isEmployee = () => S.session.role === 'employee';
+/** Администратор — сотрудник, которому открыт весь салон. */
+export const isManager = () => S.session.role === 'employee' && can('allCalendar');
 
 export function apptEnd(a) { return new Date(new Date(a.start).getTime() + a.duration * 60000); }
 export function apptTitle(a) { return (a.serviceIds || []).map(id => (svc(id) || {}).name).filter(Boolean).join(' + ') || 'Услуга'; }
@@ -138,6 +158,282 @@ export function clientStats(clientId) {
   const next = list.filter(a => a.status === 'planned' && new Date(a.start) > now()).sort((a, b) => new Date(a.start) - new Date(b.start))[0];
   const last = done[0];
   return { visits: done.length, spent, avg: done.length ? Math.round(spent / done.length) : 0, next, last, all: list };
+}
+
+/* =========================================================
+   Клиент: свой салон, личность и каталог
+   ---------------------------------------------------------
+   Клиент бывает двух видов, и от этого зависит вся его часть:
+     • привязанный — пришёл по ссылке салона (?start=c1). Первая вкладка
+       навсегда принадлежит салону, входа в каталог на ней нет;
+     • свободный — открыл бота сам. Первая вкладка — поиск.
+
+   homeId ставится один раз и дальше не меняется, даже если клиент
+   запишется в другом месте: салон, который привёл клиента, не должен
+   терять его из-за того, что человек сходил на массаж.
+
+   Один человек в двух салонах — это две карточки клиента: карточка
+   принадлежит компании, и чужой салон видеть её не должен. Поэтому
+   личность живёт в сессии (person), а clientIds — карта «салон → его
+   карточка в этом салоне». Карточка заводится только при первой записи:
+   от простого просмотра страницы салон не должен получать клиента.
+   ========================================================= */
+export const homeId = () => S.session.homeId || null;
+export const homeCo = () => (homeId() ? co(homeId()) : null);
+export const isBound = () => !!homeCo();
+
+export const person = () => S.session.person || null;
+
+/** Личность: из Telegram, если приложение открыто из бота, иначе просто имя. */
+export function ensurePerson(name) {
+  if (S.session.person) return S.session.person;
+  const nm = String(name || '').trim() || 'Гость';
+  S.session.person = { name: nm, phone: '', initials: initialsOf(nm), color: '#4C6FFF', tg: '' };
+  return S.session.person;
+}
+
+const initialsOf = n => String(n || '').split(' ').filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase();
+
+/** Привязать клиента к салону и взять личность из его карточки там. */
+export function setHome(companyId) {
+  const c = co(companyId);
+  if (!c) return;
+  S.session.homeId = companyId;
+  S.session.companyId = companyId;
+  const rec = myClient(companyId) || clients(companyId)[0];
+  if (rec) {
+    S.session.clientIds = { ...(S.session.clientIds || {}), [companyId]: rec.id };
+    S.session.clientId = rec.id;
+    if (!S.session.person) S.session.person = { name: rec.name, phone: rec.phone, initials: rec.initials, color: rec.color, tg: rec.tg || '' };
+  }
+}
+
+/** Открыть салон на просмотр, не трогая привязку. */
+export function viewCompany(companyId) {
+  if (!co(companyId)) return;
+  S.session.companyId = companyId;
+  const rec = myClient(companyId);
+  S.session.clientId = rec ? rec.id : null;
+}
+
+/** Карточка этого человека в компании; null — он там ещё не записывался. */
+export function myClient(companyId = cid()) {
+  const id = (S.session.clientIds || {})[companyId];
+  return id ? client(id) : null;
+}
+
+/** Та же карточка, но заводится, если её ещё нет. Зовётся при записи. */
+export function ensureMyClient(companyId = cid()) {
+  const has = myClient(companyId);
+  if (has) return has;
+  const p = person() || {};
+  const name = p.name || 'Гость';
+  const rec = {
+    id: uid('cl_'), companyId, name, phone: p.phone || '', tg: p.tg || '',
+    initials: p.initials || initialsOf(name), color: p.color || '#4C6FFF',
+    createdAt: now().toISOString(), note: '', ai: null, tags: [],
+  };
+  S.data.clients.push(rec);
+  S.session.clientIds = { ...(S.session.clientIds || {}), [companyId]: rec.id };
+  if (companyId === cid()) S.session.clientId = rec.id;
+  return rec;
+}
+
+/** Имя и телефон меняются сразу во всех салонах — это один человек. */
+export function updatePerson(patch) {
+  S.session.person = { ...(S.session.person || {}), ...patch };
+  if (patch.name) S.session.person.initials = initialsOf(patch.name);
+  Object.values(S.session.clientIds || {}).forEach(id => {
+    const c = client(id);
+    if (c) Object.assign(c, { name: S.session.person.name, phone: S.session.person.phone, initials: S.session.person.initials });
+  });
+  emit();
+}
+
+/** Все записи человека — по всем салонам сразу, свежие первыми. */
+export function myAppts() {
+  const ids = Object.values(S.session.clientIds || {});
+  if (!ids.length) return [];
+  return S.data.appointments.filter(a => ids.includes(a.clientId))
+    .sort((a, b) => new Date(b.start) - new Date(a.start));
+}
+
+export function myStats() {
+  const list = myAppts();
+  const done = list.filter(a => a.status === 'done');
+  const next = list.filter(a => a.status === 'planned' && new Date(a.start) > now())
+    .sort((a, b) => new Date(a.start) - new Date(b.start))[0];
+  return { visits: done.length, next, last: done[0], all: list };
+}
+
+/** Салоны, где человек уже записывался, — свежие первыми, без своего. */
+export function myCompanies() {
+  const seen = new Map();
+  myAppts().forEach(a => { if (!seen.has(a.companyId)) seen.set(a.companyId, a); });
+  return [...seen.keys()].filter(id => id !== homeId()).map(co).filter(Boolean);
+}
+
+/* ---------- где я ----------
+   Координаты человека в базу не кладём: это его текущее местоположение,
+   а не данные демо. Живут в модуле до перезагрузки — ровно столько,
+   сколько нужно, чтобы отсортировать каталог.
+------------------------------- */
+let myGeo = null;
+export const geo = () => myGeo;
+
+/** Спросить геопозицию. Возвращает координаты либо null, если отказали. */
+export function askGeo() {
+  return new Promise(resolve => {
+    if (!navigator.geolocation) { resolve(null); return; }
+    navigator.geolocation.getCurrentPosition(
+      pos => { myGeo = { lat: pos.coords.latitude, lon: pos.coords.longitude }; emit(); resolve(myGeo); },
+      () => resolve(null),
+      { enableHighAccuracy: false, timeout: 8000, maximumAge: 300000 },
+    );
+  });
+}
+export function forgetGeo() { myGeo = null; emit(); }
+
+/** Расстояние по прямой, км. Формула гаверсинуса. */
+export function distanceKm(a, b) {
+  if (!a || !b || a.lat == null || b.lat == null) return null;
+  const R = 6371, rad = x => x * Math.PI / 180;
+  const dLat = rad(b.lat - a.lat), dLon = rad(b.lon - a.lon);
+  const h = Math.sin(dLat / 2) ** 2 +
+    Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+/** Расстояние до салона от текущей позиции; null — позиции нет. */
+export const distanceTo = c => (myGeo && c ? distanceKm(myGeo, c) : null);
+
+/* ---------- каталог ---------- */
+
+/** Тариф разрешает закрыть каталог от своих клиентов? */
+export function canOnlyMine(c) {
+  const p = planById((c || {}).plan);
+  return !!(p && p.limits && p.limits.onlyMine);
+}
+
+/** Виден ли клиенту вход в каталог. Салон на PRO может его закрыть. */
+export function catalogVisible() {
+  const h = homeCo();
+  return !(h && h.onlyMine && canOnlyMine(h));
+}
+
+/** Салоны, в которые можно записаться: с услугами и не заблокированные. */
+/* Заготовки, которые онбординг подставляет вместо адреса и телефона.
+   Держим их здесь, а не строкой в двух местах: по ним же проверяется,
+   дозаполнил ли владелец карточку. */
+export const ADDR_TODO = 'Укажите адрес в настройках';
+export const PHONE_TODO = '+7 700 000 00 00';
+
+/**
+ * Готова ли компания показываться посторонним.
+ * Свежесозданная компания — это ещё не салон: у неё заготовка вместо адреса
+ * и телефона. Пускать её в каталог нельзя — клиент придёт по адресу
+ * «Укажите адрес в настройках».
+ */
+export function catalogReady(c) {
+  if (!c || c.status === 'blocked') return false;
+  if (!svcs(c.id).length || !staff(c.id).length) return false;
+  const addr = String(c.addr || '').trim();
+  const phone = String(c.phone || '').trim();
+  return !!addr && addr !== ADDR_TODO && !!phone && phone !== PHONE_TODO;
+}
+
+/** Чего не хватает компании до публикации — для подсказки владельцу. */
+export function catalogMissing(c = co()) {
+  const out = [];
+  if (!c) return out;
+  if (!svcs(c.id).length) out.push('услуги');
+  if (!staff(c.id).length) out.push('мастера');
+  const addr = String(c.addr || '').trim();
+  if (!addr || addr === ADDR_TODO) out.push('адрес');
+  const phone = String(c.phone || '').trim();
+  if (!phone || phone === PHONE_TODO) out.push('телефон');
+  return out;
+}
+
+export function catalogCompanies() {
+  return allCompanies().filter(catalogReady);
+}
+
+/**
+ * Направления салона — по категориям его услуг, а не по вывеске.
+ * Вывеска — свободный текст владельца, и «Спа-центр» со «Спа и массаж»
+ * разъезжаются на два раздела, хотя это одно и то же. А салон красоты
+ * делает и ногти, и волосы, и уместен сразу в обоих разделах.
+ */
+export function companyDirs(companyId) {
+  return [...new Set(svcs(companyId).map(s => s.cat))];
+}
+
+/** Название и цвет направления берём у первого салона, где оно есть. */
+function dirInfo(key) {
+  const owner = catalogCompanies().find(c => companyDirs(c.id).includes(key));
+  return catInfo(key, owner ? owner.id : cid());
+}
+
+/** Разделы каталога с числом салонов в каждом. */
+export function catalogCats() {
+  const m = new Map();
+  catalogCompanies().forEach(c => companyDirs(c.id).forEach(k => m.set(k, (m.get(k) || 0) + 1)));
+  return [...m.entries()]
+    .map(([cat, n]) => ({ cat, n, ...dirInfo(cat) }))
+    .sort((a, b) => b.n - a.n || a.t.localeCompare(b.t));
+}
+
+export function catalogCities() {
+  return [...new Set(catalogCompanies().map(c => c.city))].sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Поиск по каталогу. Свой салон всегда идёт первым в выдаче: клиент попал
+ * сюда из его же приложения, и терять позицию из-за этого салон не должен.
+ */
+export function catalogSearch({ q = '', cat = '', city = '', near = false } = {}) {
+  const needle = String(q).trim().toLowerCase();
+  const list = catalogCompanies().filter(c => {
+    if (cat && !companyDirs(c.id).includes(cat)) return false;
+    if (city && c.city !== city) return false;
+    if (!needle) return true;
+    const hay = [c.name, c.cat, c.city, c.addr, ...svcs(c.id).map(s => s.name)].join(' ').toLowerCase();
+    return hay.includes(needle);
+  });
+  const home = homeId();
+  return list.sort((a, b) => {
+    if (a.id === home) return -1;
+    if (b.id === home) return 1;
+    // «Рядом» сортирует по расстоянию; салоны без координат уходят в конец,
+    // а не наверх с нулём — иначе они бы выглядели ближайшими
+    if (near && myGeo) {
+      const da = distanceTo(a), db = distanceTo(b);
+      if (da != null && db != null) return da - db;
+      if (da != null) return -1;
+      if (db != null) return 1;
+    }
+    return (b.rating || 0) - (a.rating || 0) || a.name.localeCompare(b.name);
+  });
+}
+
+/** Минимальная цена салона — «от 5 000 ₸» на карточке каталога. */
+export function minPrice(companyId) {
+  const list = svcs(companyId);
+  return list.length ? Math.min(...list.map(s => s.price)) : 0;
+}
+
+/** Ближайшее свободное окно во всём салоне — главный крючок карточки. */
+export function nextFreeInCompany(companyId, duration = 60, maxDays = 7) {
+  const ids = staff(companyId).map(e => e.id);
+  if (!ids.length) return null;
+  const base = today();
+  for (let d = 0; d < maxDays; d++) {
+    const date = new Date(base.getTime() + d * 86400000);
+    const s = slotsFor(ids, date, duration, { companyId }).find(x => x.free);
+    if (s) return { date, slot: s };
+  }
+  return null;
 }
 
 export function nextAppt(companyId = cid(), employeeId = null) {
@@ -688,7 +984,10 @@ export function cats(companyId = cid()) {
   return out;
 }
 export function catInfo(key, companyId = cid()) {
-  return cats(companyId)[key] || BASE_CATS[key] || { t: 'Другое', color: '#7C8AA5' };
+  const info = cats(companyId)[key] || BASE_CATS[key] || { t: 'Другое', color: '#7C8AA5' };
+  // Базовые названия — метки приложения и переводятся. Категории, придуманные
+  // владельцем, перевода не имеют и пройдут через t() без изменений.
+  return { ...info, t: tr(info.t) };
 }
 export function catName(key, companyId = cid()) { return catInfo(key, companyId).t; }
 
@@ -1195,12 +1494,12 @@ export const DEFAULT_PLANS = () => ([
   },
   {
     id: 'PRO', name: 'PRO', price: 19900, period: 'month', active: true, color: '#4C6FFF',
-    limits: { staff: 10, services: 100, broadcasts: 20 },
-    feats: ['До 10 сотрудников', 'AI-помощник', 'Рассылки', 'Аналитика и финансы'],
+    limits: { staff: 10, services: 100, broadcasts: 20, onlyMine: true },
+    feats: ['До 10 сотрудников', 'AI-помощник', 'Рассылки', 'Аналитика и финансы', 'Только мой салон'],
   },
   {
     id: 'BUSINESS', name: 'BUSINESS', price: 39900, period: 'month', active: true, color: '#8B5CF6',
-    limits: { staff: 0, services: 0, broadcasts: 0 },
+    limits: { staff: 0, services: 0, broadcasts: 0, onlyMine: true },
     feats: ['Без ограничений', 'Несколько филиалов', 'API и интеграции', 'Приоритетная поддержка'],
   },
 ]);

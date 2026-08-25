@@ -7,14 +7,17 @@
   statsBetween, daysBetween, moneyOps, finCats, finCatName, finCatInfo, addFinCat, renameFinCat, removeFinCat,
   recurring, addRecurring, updateRecurring, removeRecurring, REPEAT, plans, planById, planPrice, PERIODS,
   setupSteps, markSetup, resetTips, tipSeen, markTip, appt, BRAND_COLORS, setCompanyColor,
+  canOnlyMine, catalogReady, catalogMissing, setLang, can,
 } from '../store.js';
 import {
   esc, money, moneyShort, hhmm, dateLabel, relPast, avatar, emptyState, sheet, toast, promptSheet,
   confirmSheet, demoNote, segmented, bars, sparkline, donut, progress, nMin, nAppt, nVisit, dayKey, startOfDay,
-  addDays, WD, WD_FULL, MONTHS, MON_SHORT, num, plural, wait, loadingBlock,
+  addDays, WD, WD_FULL, MONTHS, MON_SHORT, num, plural, wait, loadingBlock, t,
   pickImage, photoField, IMG_MAX, monthGrid, dateFull, brandGradient,
 } from '../ui.js';
 import { icon, catIcon } from '../icons.js';
+import { bookingLink } from './owner.js';
+import { LANGS, lang } from '../i18n.js';
 import { route, go, render } from '../router.js';
 import { on, fire } from '../bus.js';
 import { newApptFlow, addServiceSheet, blockFlow, openApptSheet, absenceFlow, tipOnce } from '../flows.js';
@@ -26,17 +29,18 @@ const rr = () => render(false);
    Ещё
    ========================================================= */
 // цвета плиток — только hex: из них считается полупрозрачная подложка иконки
+// шестой элемент — право; без него раздел виден всем
 const TILES = [
-  ['o.services', 'briefcase', 'Услуги', 'Цены и длительность', '#4C6FFF'],
-  ['o.team', 'users', 'Команда', 'Мастера и графики', '#12B76A'],
-  ['ai.home', 'sparkles', 'AI-помощник', 'Анализ и тексты', '#8B5CF6'],
-  ['o.finance', 'wallet', 'Финансы', 'Доходы и расходы', '#F79009'],
-  ['o.broadcasts', 'megaphone', 'Рассылки', 'Вернуть клиентов', '#EC4899'],
-  ['o.analytics', 'chart', 'Аналитика', 'Что растёт, что падает', '#0EA5E9'],
-  ['o.reviews', 'star', 'Отзывы', 'Оценки после визитов', '#F5A524'],
-  ['o.help', 'info', 'Обучение', 'Как всё устроено', '#12B76A'],
-  ['o.subscription', 'crown', 'Подписка', 'Тариф и оплата', '#F5A524'],
-  ['o.settings', 'gear', 'Настройки', 'Компания и профиль', '#7C8AA5'],
+  ['o.services', 'briefcase', 'Услуги', 'Цены и длительность', '#4C6FFF', 'services'],
+  ['o.team', 'users', 'Команда', 'Мастера и графики', '#12B76A', 'team'],
+  ['ai.home', 'sparkles', 'AI-помощник', 'Анализ и тексты', '#8B5CF6', 'analytics'],
+  ['o.finance', 'wallet', 'Финансы', 'Доходы и расходы', '#F79009', 'finance'],
+  ['o.broadcasts', 'megaphone', 'Рассылки', 'Вернуть клиентов', '#EC4899', 'clients'],
+  ['o.analytics', 'chart', 'Аналитика', 'Что растёт, что падает', '#0EA5E9', 'analytics'],
+  ['o.reviews', 'star', 'Отзывы', 'Оценки после визитов', '#F5A524', 'analytics'],
+  ['o.help', 'info', 'Обучение', 'Как всё устроено', '#12B76A', null],
+  ['o.subscription', 'crown', 'Подписка', 'Тариф и оплата', '#F5A524', 'billing'],
+  ['o.settings', 'gear', 'Настройки', 'Компания и профиль', '#7C8AA5', 'settings'],
 ];
 
 route('o.more', {
@@ -47,19 +51,19 @@ route('o.more', {
     return `
     <div class="top"><div class="grow"><div class="top-t">Ещё</div><div class="top-sub">${esc(c.name)}</div></div></div>
     <div class="mgrid">
-      ${TILES.map(t => `<button class="mcard" data-a="nav" data-r="${t[0]}">
+      ${TILES.filter(x => !x[5] || can(x[5])).map(t => `<button class="mcard" data-a="nav" data-r="${t[0]}">
         <div class="ic" style="background:${t[4]}1f;color:${t[4]}">${icon(t[1], 21)}</div>
         <div class="t">${t[2]}</div><div class="s">${t[3]}</div>
       </button>`).join('')}
     </div>
-    <div class="wrap sec">
+    ${!can('billing') ? '' : `<div class="wrap sec">
       <button class="card press" style="width:100%;padding:15px;display:flex;gap:12px;align-items:center;text-align:left" data-a="nav" data-r="o.subscription">
         <div class="tint" style="background:${days < 10 ? 'var(--dan-soft);color:var(--dan)' : 'var(--warn-soft);color:var(--warn)'};width:42px;height:42px">${icon('crown', 20)}</div>
         <div class="grow"><div class="b">Тариф ${esc(c.plan)}</div>
           <div class="sm ${days < 10 ? '' : 'muted'}" style="${days < 10 ? 'color:var(--dan)' : ''}">${days > 0 ? 'осталось ' + days + ' ' + plural(days, ['день', 'дня', 'дней']) : 'подписка истекла'}</div></div>
         <span class="bdg ${days < 10 ? 'dan' : 'ok'}">${days > 0 ? 'активен' : 'истёк'}</span>
       </button>
-    </div>
+    </div>`}
     <div class="wrap sec">
       <button class="btn gh" data-a="o.share">${icon('share', 18)}Поделиться страницей записи</button>
     </div>`;
@@ -71,6 +75,7 @@ route('o.more', {
    ========================================================= */
 
 route('o.services', {
+  perm: 'services',
   tab: 'o.more',
   fab: () => `<button class="fab" data-a="qa.svc">${icon('plus', 26, 2.4)}</button>`,
   render() {
@@ -231,6 +236,7 @@ on('sv.del', async ds => {
    Команда
    ========================================================= */
 route('o.team', {
+  perm: 'team',
   tab: 'o.team',
   mount() {
     tipOnce('team', {
@@ -294,6 +300,7 @@ on('tm.add', () => {
 });
 
 route('o.employee', {
+  perm: 'team',
   tab: 'o.team',
   render(p) {
     const e = emp(p.id);
@@ -702,6 +709,7 @@ function periodPicker(st, after) {
    ========================================================= */
 const fin = { preset: 30, from: null, to: null, group: null, tab: 'ops' };
 route('o.finance', {
+  perm: 'finance',
   tab: 'o.more',
   mount() {
     tipOnce('fin', {
@@ -1028,6 +1036,7 @@ on('rc.ok', ds => {
    ========================================================= */
 const an = { preset: 30, from: null, to: null, group: null };
 route('o.analytics', {
+  perm: 'analytics',
   tab: 'o.more',
   mount() {
     tipOnce('an', {
@@ -1276,6 +1285,7 @@ on('hp.support', () => demoNote('Поддержка',
    ========================================================= */
 const rvf = { emp: null, stars: 0 };
 route('o.reviews', {
+  perm: 'analytics',
   tab: 'o.more',
   render() {
     let list = reviews().slice().sort((a, b) => new Date(b.createdAt || b.date) - new Date(a.createdAt || a.date));
@@ -1339,6 +1349,7 @@ on('rvf.emp', ds => { rvf.emp = rvf.emp === ds.id ? null : ds.id; rr(); });
    Рассылки
    ========================================================= */
 route('o.broadcasts', {
+  perm: 'clients',
   tab: 'o.more',
   fab: () => `<button class="fab" data-a="bc.new">${icon('plus', 26, 2.4)}</button>`,
   render() {
@@ -1475,6 +1486,7 @@ export function broadcastFlow(pre = {}) {
    Подписка
    ========================================================= */
 route('o.subscription', {
+  perm: 'billing',
   tab: 'o.more',
   render() {
     const c = co();
@@ -1534,6 +1546,7 @@ on('sub.switch', async ds => {
    Настройки
    ========================================================= */
 route('o.settings', {
+  perm: 'settings',
   tab: 'o.more',
   render() {
     const c = co();
@@ -1559,12 +1572,22 @@ route('o.settings', {
 
     <div class="wrap sec"><div class="stack s">
       ${row('clock', 'Часы работы', 'Когда принимаете клиентов', 'set.hours')}
-      ${row('link', 'Страница записи', 't.me/' + c.tgLink, 'o.share')}
+      ${row('link', 'Страница записи', bookingLink(c).replace('https://', ''), 'o.share')}
       ${row('bell', 'Напоминания', 'За 24 часа и за 2 часа', 'set.reminders')}
       ${row('sparkles', 'AI-помощник', S.aiMode === 'live' ? 'Режим LIVE' : 'Режим DEMO', 'set.ai')}
     </div></div>
 
+    ${catalogSection(c)}
+
     <div class="wrap sec"><div class="stack s">
+      <div class="lrow" style="border-radius:16px;border:1px solid var(--bd)">
+        <div class="ic">${icon('msg', 18)}</div>
+        <div class="grow"><div class="tl">${t('Язык')}</div>
+          <div class="st">${esc((LANGS.find(l => l.id === lang()) || LANGS[0]).t)}</div></div>
+        <div class="seg" style="width:150px">
+          ${LANGS.map(l => `<button class="${lang() === l.id ? 'on' : ''}" data-a="set.lang" data-v="${l.id}">${esc(l.short)}</button>`).join('')}
+        </div>
+      </div>
       <div class="lrow" style="border-radius:16px;border:1px solid var(--bd)">
         <div class="ic">${icon(document.documentElement.dataset.theme === 'dark' ? 'moon' : 'sun', 18)}</div>
         <div class="grow"><div class="tl">Оформление</div><div class="st">${S.theme === 'auto' ? 'Как в Telegram' : S.theme === 'dark' ? 'Тёмное' : 'Светлое'}</div></div>
@@ -1582,11 +1605,48 @@ route('o.settings', {
     <div class="wrap sec"><div class="center tiny dim" data-a="set.secret" style="padding:10px;user-select:none">Zapis · демо-версия 2.0<br>Все данные хранятся только на вашем устройстве</div></div>`;
   },
 });
+/* Клиенты, пришедшие по ссылке салона, видят в приложении тихий вход
+   в каталог других салонов. Это приток клиентов из каталога в обе стороны,
+   но салону, который платит за привлечение, нужна возможность закрыть его
+   совсем — иначе рядом с его записями стоит ссылка на соседей. */
+function catalogSection(c) {
+  const allowed = canOnlyMine(c);
+  const on = allowed && !!c.onlyMine;
+  // Пока карточка не дозаполнена, салона в каталоге нет. Владелец должен
+  // узнать об этом здесь, а не гадать, почему его никто не находит.
+  const missing = catalogMissing(c);
+  const listed = catalogReady(c);
+  return `<div class="wrap sec"><div class="stack s">
+    ${listed ? '' : `<div class="lrow" style="border-radius:16px;border:1px solid var(--warn-soft);background:var(--warn-soft)">
+      <div class="ic" style="background:var(--warn);color:#fff">${icon('alert', 18)}</div>
+      <div class="grow"><div class="tl">Салона нет в каталоге</div>
+        <div class="st">Осталось заполнить: ${esc(missing.join(', '))}</div></div>
+    </div>`}
+    <div class="lrow" style="border-radius:16px;border:1px solid var(--bd)">
+      <div class="ic">${icon('search', 18)}</div>
+      <div class="grow"><div class="tl">Только мой салон</div>
+        <div class="st">${!allowed ? 'Доступно на тарифе PRO' : on ? 'Каталог скрыт' : 'Каталог виден клиентам'}</div></div>
+      <button class="sw ${on ? 'on' : ''}" data-a="set.onlyMine" ${allowed ? '' : 'disabled style="opacity:.4"'}></button>
+    </div>
+    <div class="tiny dim" style="padding:0 4px">${on
+      ? 'Ваши клиенты видят только ваш салон. Найти вас в каталоге посторонние по-прежнему могут.'
+      : 'Сейчас в «Моих записях» и профиле у клиента есть строка «Записаться в другом месте». На вашей странице её нет.'}</div>
+  </div></div>`;
+}
+
 const row = (ic, t, s, a, extra = '') => `<button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="${a}" ${extra}>
   <div class="ic">${icon(ic, 18)}</div>
   <div class="grow" style="text-align:left"><div class="tl">${t}</div><div class="st">${s}</div></div>
   <span class="chev">${icon('fwd', 17, 2)}</span></button>`;
 
+on('set.lang', ds => { setLang(ds.v); });
+on('set.onlyMine', ds => {
+  const c = co();
+  if (!canOnlyMine(c)) { toast('Доступно на тарифе PRO', 'dan'); return; }
+  c.onlyMine = !c.onlyMine;
+  emit();
+  toast(c.onlyMine ? 'Каталог скрыт от ваших клиентов' : 'Каталог снова виден клиентам');
+});
 on('set.theme', async ds => { S.theme = ds.v; const m = await import('../main.js'); m.applyTheme(); emit(); });
 on('set.company', () => {
   const c0 = co();

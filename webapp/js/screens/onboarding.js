@@ -1,9 +1,10 @@
-import { S, emit, now, today, createService, createEmployee } from '../store.js';
-import { esc, money, sheet, toast, wait, nMin, WD_FULL, loadingBlock, plural } from '../ui.js';
+import { S, emit, now, today, createService, createEmployee, setHome, ADDR_TODO, PHONE_TODO } from '../store.js';
+import { esc, money, sheet, toast, wait, nMin, WD_FULL, loadingBlock, plural, t } from '../ui.js';
 import { icon } from '../icons.js';
 import { route, go, render, resetStack } from '../router.js';
 import { on } from '../bus.js';
 import { haptic } from '../tg.js';
+import { BOT_USERNAME } from '../config.js';
 
 // Перед любой перерисовкой снимаем значения полей в состояние.
 // Иначе введённое имя пропадает при нажатии на категорию, длительность и т.п.
@@ -32,7 +33,7 @@ const CATS = [
 ];
 
 const ob = {
-  step: 0, name: '', cat: 0,
+  step: 0, name: '', cat: 0, plan: 'PRO',
   days: { 1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 0: false },
   from: '09:00', to: '20:00',
   svc: { name: '', price: '', dur: 60 },
@@ -93,23 +94,34 @@ function welcomeArt() {
   </svg>`;
 }
 
+/* Короткое «зачем это» на каждом шаге. Форма без объяснений заставляет
+   гадать, на что влияет поле, — а половина полей здесь влияет на то,
+   что потом увидит клиент. */
+function hint(text) {
+  return `<div class="card pad row" style="gap:11px;background:var(--p-soft);border-color:transparent;margin-top:2px">
+    <span style="color:var(--p);flex:none">${icon('info', 18)}</span>
+    <div class="sm" style="color:var(--tx-2);line-height:1.45">${text}</div>
+  </div>`;
+}
+
 function s1() {
   return `
-  <h1>Создадим ваш бизнес</h1>
-  <p class="sub">Пара шагов — и страница записи готова</p>
-  <div class="field"><label>Название</label><input class="inp" id="_n" value="${esc(ob.name)}" placeholder="Например, Beauty Studio"></div>
-  <div class="field"><label>Чем занимаетесь?</label>
+  <h1>${t('Создадим ваш бизнес')}</h1>
+  <p class="sub">${t('Пара шагов — и страница записи готова')}</p>
+  <div class="field"><label>${t('Название')}</label><input class="inp" id="_n" value="${esc(ob.name)}" placeholder="Например, Beauty Studio"></div>
+  <div class="field"><label>${t('Чем занимаетесь?')}</label>
     <div class="pick">${CATS.map((c, i) => `<button class="o ${ob.cat === i ? 'on' : ''}" data-a="ob.cat" data-i="${i}">${c[0]}</button>`).join('')}</div>
   </div>
+  ${hint('Название и направление клиент увидит первым делом на странице записи. Поменять их можно в любой момент в настройках.')}
   <div class="grow"></div>
-  <button class="btn p" data-a="ob.s2" style="margin-top:20px">Продолжить</button>
-  <button class="btn" style="background:transparent;margin-top:6px" data-a="ob.back">Назад</button>`;
+  <button class="btn p" data-a="ob.s2" style="margin-top:20px">${t('Продолжить')}</button>
+  <button class="btn" style="background:transparent;margin-top:6px" data-a="ob.back">${t('Назад')}</button>`;
 }
 
 function s2() {
   return `
-  <h1>Когда вы работаете?</h1>
-  <p class="sub">Клиенты увидят только свободное время</p>
+  <h1>${t('Когда вы работаете?')}</h1>
+  <p class="sub">${t('Клиенты увидят только свободное время')}</p>
   <div class="stack s">
     ${[1, 2, 3, 4, 5, 6, 0].map(d => `<div class="lrow" style="border-radius:14px;border:1px solid var(--bd)">
       <div class="grow"><div class="tl" style="text-transform:capitalize">${WD_FULL[d]}</div>
@@ -120,39 +132,41 @@ function s2() {
     <button class="btn sm gh" style="flex:1" data-a="ob.time" data-k="from">${icon('clock', 15)}с ${ob.from}</button>
     <button class="btn sm gh" style="flex:1" data-a="ob.time" data-k="to">до ${ob.to}</button>
   </div>
+  ${hint('Это часы салона. У каждого мастера будет свой график внутри них — на время, когда салон закрыт, клиент записаться не сможет.')}
   <div class="grow"></div>
-  <button class="btn p" data-a="ob.s3" style="margin-top:20px">Продолжить</button>
-  <button class="btn" style="background:transparent;margin-top:4px" data-a="ob.back">Назад</button>`;
+  <button class="btn p" data-a="ob.s3" style="margin-top:20px">${t('Продолжить')}</button>
+  <button class="btn" style="background:transparent;margin-top:4px" data-a="ob.back">${t('Назад')}</button>`;
 }
 
 function s3() {
   return `
-  <h1>Добавьте первую услугу</h1>
-  <p class="sub">Позже добавите остальные — это займёт минуту</p>
-  <div class="field"><label>Название</label><input class="inp" id="_sn" value="${esc(ob.svc.name)}" placeholder="Например, Маникюр"></div>
+  <h1>${t('Добавьте первую услугу')}</h1>
+  <p class="sub">${t('Позже добавите остальные — это займёт минуту')}</p>
+  <div class="field"><label>${t('Название')}</label><input class="inp" id="_sn" value="${esc(ob.svc.name)}" placeholder="Например, Маникюр"></div>
   <div class="inp-row">
-    <div class="field"><label>Цена, ₸</label><input class="inp" id="_sp" inputmode="numeric" value="${esc(ob.svc.price)}" placeholder="8000"></div>
-    <div class="field"><label>Время</label>
+    <div class="field"><label>${t('Цена, ₸')}</label><input class="inp" id="_sp" inputmode="numeric" value="${esc(ob.svc.price)}" placeholder="8000"></div>
+    <div class="field"><label>${t('Время')}</label>
       <div class="pick" style="margin-top:2px">${[30, 60, 90, 120].map(m => `<button class="o ${ob.svc.dur === m ? 'on' : ''}" data-a="ob.dur" data-m="${m}">${m}м</button>`).join('')}</div>
     </div>
   </div>
+  ${hint('Время услуги — это то, на сколько занят мастер. Из него считается, какие слоты клиент увидит свободными.')}
   <div class="grow"></div>
-  <button class="btn p" data-a="ob.s4" style="margin-top:20px">Продолжить</button>
-  <button class="btn" style="background:transparent;margin-top:4px" data-a="ob.back">Назад</button>`;
+  <button class="btn p" data-a="ob.s4" style="margin-top:20px">${t('Продолжить')}</button>
+  <button class="btn" style="background:transparent;margin-top:4px" data-a="ob.back">${t('Назад')}</button>`;
 }
 
 function s4() {
   return `
-  <h1>Добавьте сотрудника</h1>
-  <p class="sub">Если работаете один — этот шаг можно пропустить</p>
-  <div class="field"><label>Имя сотрудника</label><input class="inp" id="_en" value="${esc(ob.emp)}" placeholder="Например, Айгерим"></div>
+  <h1>${t('Добавьте сотрудника')}</h1>
+  <p class="sub">${t('Если работаете один — этот шаг можно пропустить')}</p>
+  <div class="field"><label>${t('Имя сотрудника')}</label><input class="inp" id="_en" value="${esc(ob.emp)}" placeholder="Например, Айгерим"></div>
   <div class="card pad row" style="gap:12px;background:var(--p-soft);border-color:transparent">
     <span style="color:var(--p)">${icon('info', 19)}</span>
     <div class="sm" style="color:var(--tx-2)">Каждый сотрудник получит свой график и свою страницу записи.</div>
   </div>
   <div class="grow"></div>
-  <button class="btn p" data-a="ob.finish" style="margin-top:20px">Добавить и завершить</button>
-  <button class="btn gh" style="margin-top:8px" data-a="ob.finishLater">Позже</button>`;
+  <button class="btn p" data-a="ob.finish" style="margin-top:20px">${t('Добавить и завершить')}</button>
+  <button class="btn gh" style="margin-top:8px" data-a="ob.finishLater">${t('Позже')}</button>`;
 }
 
 function s5() {
@@ -160,16 +174,18 @@ function s5() {
   return `
   <div class="succ" style="padding-top:70px">
     <div class="check">${icon('check', 46, 3)}</div>
-    <div class="t">Всё готово</div>
-    <div class="s">Ваша страница записи создана</div>
+    <div class="t">${t('Всё готово')}</div>
+    <div class="s">${t('Ваша страница записи создана')}</div>
   </div>
   <div class="card pad center" style="margin-top:10px">
     <div class="b" style="font-size:16px">${esc(c.name || ob.name)}</div>
-    <div class="sm muted" style="margin-top:2px">t.me/zapis_bot?startapp=${esc(ob.companyId || '')}</div>
+    <div class="sm muted" style="margin-top:2px">t.me/${esc(BOT_USERNAME)}?start=${esc(ob.companyId || '')}</div>
+    <div class="hr"></div>
+    <div class="sm" style="color:var(--tx-2)">${t('Тариф {p} · бесплатно 14 дней', { p: esc(c.plan || ob.plan) })}</div>
   </div>
   <div class="grow"></div>
-  <button class="btn p" data-a="ob.openPage" style="margin-top:22px">Открыть страницу записи</button>
-  <button class="btn gh" style="margin-top:8px" data-a="ob.openAdmin">Перейти в управление</button>`;
+  <button class="btn p" data-a="ob.openPage" style="margin-top:22px">${t('Открыть страницу записи')}</button>
+  <button class="btn gh" style="margin-top:8px" data-a="ob.openAdmin">${t('Перейти в управление')}</button>`;
 }
 
 /* ---------- действия ---------- */
@@ -181,27 +197,34 @@ on('ob.time', async ds => {
 });
 on('ob.dur', ds => { ob.svc.dur = +ds.m; rr(); });
 on('ob.begin', () => { ob.step = 1; rr(); });
+
+/** Старт с витрины: тариф уже выбран, приветствие человек только что видел. */
+export function startOnboarding(plan) {
+  ob.plan = plan || 'PRO';
+  ob.step = 1;
+  go('onb');
+}
 on('ob.back', () => { ob.step--; rr(); });
 on('ob.skip', () => { S.onboarded = true; emit(); resetStack('o.home'); });
 
 on('ob.s2', () => {
   capture();
   ob.name = (ob.name || '').trim();
-  if (!ob.name) { toast('Введите название', 'dan'); return; }
+  if (!ob.name) { toast(t('Введите название'), 'dan'); return; }
   ob.step = 2; rr();
 });
 on('ob.s3', () => { ob.step = 3; rr(); });
 on('ob.s4', () => {
   capture();
   ob.svc.name = (ob.svc.name || '').trim();
-  if (!ob.svc.name) { toast('Введите название услуги', 'dan'); return; }
+  if (!ob.svc.name) { toast(t('Введите название услуги'), 'dan'); return; }
   ob.step = 4; rr();
 });
 on('ob.finish', () => { capture(); ob.emp = (ob.emp || '').trim(); build(); });
 on('ob.finishLater', () => { ob.emp = ''; build(); });
 
 async function build() {
-  const s = sheet({ title: 'Создаём', body: loadingBlock('Настраиваем ваш бизнес…') });
+  const s = sheet({ title: t('Создаём'), body: loadingBlock(t('Настраиваем ваш бизнес…')) });
   await wait(1400);
 
   const cat = CATS[ob.cat];
@@ -212,9 +235,9 @@ async function build() {
 
   S.data.companies.push({
     id, name: ob.name, short: ob.name.split(' ')[0], cat: cat[0], color: cat[2], city: 'Алматы',
-    addr: 'Укажите адрес в настройках', phone: '+7 700 000 00 00', rating: 5.0, reviewsCount: 0,
-    about: '', plan: 'PRO', planUntil: new Date(now().getTime() + 14 * 86400000).toISOString(),
-    slug: id, tgLink: 'zapis_bot', initials, createdAt: now().toISOString(), hours, currency: '₸',
+    addr: ADDR_TODO, phone: PHONE_TODO, rating: 5.0, reviewsCount: 0,
+    about: '', plan: ob.plan || 'PRO', planUntil: new Date(now().getTime() + 14 * 86400000).toISOString(),
+    slug: id, tgLink: BOT_USERNAME, initials, createdAt: now().toISOString(), hours, currency: '₸',
     logo: null, cover: null, finCats: { income: {}, expense: {} }, setup: { hours: true },
   });
   const ownerId = id + '_owner';
@@ -224,7 +247,9 @@ async function build() {
     serviceIds: [], takesAppointments: true, access: 'owner', rating: '5.0',
     photo: null, since: null, showExp: true,
   });
-  S.session = { role: 'owner', companyId: id, employeeId: ownerId, clientId: null };
+  // сессию дополняем, а не подменяем: homeId, person и clientIds принадлежат
+  // человеку, а не роли, и от заведения бизнеса пропадать не должны
+  Object.assign(S.session, { role: 'owner', companyId: id, employeeId: ownerId, clientId: null });
   ob.companyId = id;
 
   createService({ name: ob.svc.name, price: +ob.svc.price || 0, duration: ob.svc.dur, employeeIds: [ownerId], companyId: id, cat: cat[1] });
@@ -246,7 +271,9 @@ on('ob.openPage', () => {
       tg: '', initials: 'ВК', color: '#EC4899', createdAt: now().toISOString(), note: '', ai: null, tags: [],
     });
   }
-  S.session.clientId = S.data.clients.find(x => x.companyId === ob.companyId).id;
+  // владелец смотрит свою страницу глазами клиента, пришедшего по его ссылке:
+  // привязка нужна, иначе первой вкладкой откроется каталог чужих салонов
+  setHome(ob.companyId);
   emit(); resetStack('cl.company');
 });
 on('ob.openAdmin', () => { emit(); resetStack('o.home'); });

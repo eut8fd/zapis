@@ -35,6 +35,7 @@ function filtered() {
 }
 
 route('o.clients', {
+  perm: 'clients',
   tab: 'o.clients',
   fab: () => `<button class="fab" data-a="qa.client">${icon('plus', 26, 2.4)}</button>`,
   render() {

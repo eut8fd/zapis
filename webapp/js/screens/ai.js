@@ -31,6 +31,7 @@ const CARDS = [
 ];
 
 route('ai.home', {
+  perm: 'analytics',
   tab: 'o.more',
   render() {
     const s7 = rangeStats(7);

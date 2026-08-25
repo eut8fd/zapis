@@ -1,7 +1,7 @@
-import { $, esc } from './ui.js';
+import { $, esc, t as tr } from './ui.js';
 import { icon } from './icons.js';
 import { haptic, setBackButton } from './tg.js';
-import { S, reportError } from './store.js';
+import { S, reportError, isBound, can, roleName, me } from './store.js';
 
 export const routes = {};
 export function route(name, def) { routes[name] = def; }
@@ -68,28 +68,60 @@ const TABS = {
     { r: 'e.clients', t: 'Клиенты', i: 'users' },
     { r: 'e.profile', t: 'Профиль', i: 'user' },
   ],
-  client: [
-    { r: 'cl.company', t: 'Салон', i: 'home' },
-    { r: 'cl.my', t: 'Мои записи', i: 'calendar' },
-    { r: 'cl.profile', t: 'Профиль', i: 'user' },
-  ],
   admin: [
     { r: 'sa.home', t: 'Обзор', i: 'chart' },
     { r: 'sa.companies', t: 'Компании', i: 'building' },
     { r: 'sa.settings', t: 'Система', i: 'gear' },
   ],
 };
-export const tabsFor = role => TABS[role] || TABS.owner;
+
+/* Первая вкладка клиента зависит от того, как он пришёл. Пришёл по ссылке
+   салона — вкладка принадлежит салону, и каталога на ней нет. Пришёл сам —
+   первым делом ему нужен поиск, а не чужой салон, выбранный за него. */
+const clientTabs = () => [
+  isBound()
+    ? { r: 'cl.company', t: 'Салон', i: 'home' }
+    : { r: 'cl.find', t: 'Поиск', i: 'search' },
+  { r: 'cl.my', t: 'Мои записи', i: 'calendar' },
+  { r: 'cl.profile', t: 'Профиль', i: 'user' },
+];
+
+/* Администратору салона открыт весь салон, поэтому у него есть «Ещё» —
+   но внутри он увидит только разрешённые разделы (см. TILES в more.js).
+   Без этой вкладки роль администратора была бы неотличима от мастера. */
+function employeeTabs() {
+  const base = TABS.employee.slice();
+  if (!can('allCalendar')) return base;
+  base.splice(3, 0, { r: 'o.more', t: 'Ещё', i: 'grid' });
+  return base;
+}
+
+export const tabsFor = role => (role === 'client' ? clientTabs()
+  : role === 'employee' ? employeeTabs()
+    : TABS[role] || TABS.owner);
 
 function tabbar() {
   const tabs = tabsFor(S.session.role);
   const cur = current();
   const def = routes[cur.r] || {};
-  const active = def.tab || cur.r;
+  // tab может быть функцией: у клиента один и тот же экран салона светит
+  // разную вкладку — свой салон это или открытый из каталога
+  const active = (typeof def.tab === 'function' ? def.tab() : def.tab) || cur.r;
   return `<nav class="tabbar">${tabs.map(t => `
     <button class="tab ${active === t.r ? 'on' : ''} ${active === t.r && tabPulse === t.r ? 'tab-pulse' : ''}" data-a="tab" data-r="${t.r}">
-      ${icon(t.i, 23, active === t.r ? 2.1 : 1.8)}<span class="lb">${esc(t.t)}</span>
+      ${icon(t.i, 23, active === t.r ? 2.1 : 1.8)}<span class="lb">${esc(tr(t.t))}</span>
     </button>`).join('')}</nav>`;
+}
+
+/* Раздел закрыт правами. Показываем не пустоту, а объяснение: человек
+   должен понять, что это не поломка, и к кому идти. */
+function denied() {
+  const who = roleName(me());
+  return `<div class="wrap"><div class="empty">
+    <div class="il">${icon('lock', 34, 1.7)}</div>
+    <div class="t">${tr('Раздел закрыт')}</div>
+    <div class="s">${tr('Ваша роль — {r}. Доступ к этому разделу открывает владелец в «Команде».', { r: who })}</div>
+  </div></div>`;
 }
 
 /* ---------- render ---------- */
@@ -101,11 +133,17 @@ export function render(fresh = false) {
   const app = $('#app');
   const noTab = def.noTab || !tabsFor(S.session.role).length;
   let html = '';
+  // Право проверяется здесь, а не в экране: сюда приходят и переходы по
+  // кнопкам, и адрес из строки браузера, и восстановление стека при запуске.
+  if (def.perm && !can(def.perm)) {
+    html = denied();
+  } else {
   try { html = def.render(e.p) || ''; }
   catch (err) {
     console.error('render error', e.r, err);
     try { reportError('Экран не отрисовался: ' + err.message, { stack: err.stack || '', where: e.r }); } catch (x) { }
     html = `<div class="wrap"><div class="empty"><div class="t">Что-то пошло не так</div><div class="s">${esc(err.message)}</div></div></div>`;
+  }
   }
   const motion = navMotion;
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -113,6 +151,11 @@ export function render(fresh = false) {
 
   const paint = () => {
     document.body.dataset.tab = noTab ? '0' : '1';
+    // Подсказки привязаны к экрану, но живут в #toasts, вне #app, и потому
+    // переживают переход: «Записаться — одна кнопка» всплывала уже поверх
+    // «Моих записей». Уходя с экрана, гасим их вместе с ним. Отметку
+    // «показано» не ставим — человек её так и не прочитал.
+    if (fresh) document.querySelectorAll('#toasts .tip').forEach(t => t.remove());
     // Telegram WebView по-разному реализует View Transitions: на части
     // устройств снимки мерцают и меняют размер fixed-кнопок. Однослойная
     // CSS-анимация предсказуема и не накладывает старый интерфейс на новый.

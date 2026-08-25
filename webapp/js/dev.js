@@ -1,5 +1,5 @@
 // Скрытая DEV-панель: роли, компании, тестовая дата, тестовые уведомления.
-import { S, emit, sub, now, allCompanies, emps, clients, staff, autoComplete, reset, nextAppt, co, client, apptTitle } from './store.js';
+import { S, emit, sub, now, allCompanies, emps, clients, staff, autoComplete, reset, nextAppt, co, client, apptTitle, setHome, homeId, ensurePerson, isManager, setRole } from './store.js';
 import { sheet, toast, esc, confirmSheet, hhmm, dateLabel, money, avatar, plural } from './ui.js';
 import { icon } from './icons.js';
 import { on } from './bus.js';
@@ -10,12 +10,23 @@ import { adminAllowed, unlockWithCode, lockAdmin, isWhitelisted } from './config
 import { tgUser } from './tg.js';
 import { promptSheet } from './ui.js';
 
+/* Клиент показан двумя персонами: от того, как человек попал в приложение,
+   зависит вся его часть — своя первая вкладка, свой каталог, своя запись. */
 const ROLES = [
-  ['client', 'Клиент', 'Записывается через ссылку', 'cl.company'],
-  ['employee', 'Сотрудник', 'Видит свои записи', 'e.home'],
+  ['client', 'Клиент салона', 'Пришёл по ссылке', 'cl.company'],
+  ['guest', 'Клиент с улицы', 'Ищет через каталог', 'cl.find'],
+  ['employee', 'Мастер', 'Видит свой день', 'e.home'],
+  ['manager', 'Администратор', 'Весь салон, без денег', 'e.home'],
   ['owner', 'Владелец', 'Управляет бизнесом', 'o.home'],
   ['admin', 'Super Admin', 'Панель SaaS', 'sa.home'],
 ];
+
+/** Какая персона сейчас выбрана — 'guest' у клиента без своего салона. */
+const persona = () => {
+  if (S.session.role === 'client') return homeId() ? 'client' : 'guest';
+  if (S.session.role === 'employee') return isManager() ? 'manager' : 'employee';
+  return S.session.role;
+};
 
 const TIME = [
   ['Сейчас', 0], ['+2 часа', 2 * 3600000], ['+1 день', 86400000],
@@ -44,7 +55,7 @@ function body() {
   <div class="role-grid" style="margin-bottom:18px">
     ${ROLES.map(r => {
     const locked = r[0] === 'admin' && !adminAllowed(tgUser());
-    return `<button class="role ${S.session.role === r[0] ? 'on' : ''}" data-a="dev.role" data-v="${r[0]}">
+    return `<button class="role ${persona() === r[0] ? 'on' : ''}" data-a="dev.role" data-v="${r[0]}">
       <div class="t">${r[1]} ${locked ? `<span style="color:var(--tx-3);vertical-align:-2px">${icon('lock', 13, 2.4)}</span>` : ''}</div>
       <div class="s">${locked ? 'нужен доступ' : r[2]}</div></button>`;
   }).join('')}
@@ -91,18 +102,41 @@ function body() {
 function redraw() { if (window.__dev) window.__dev.set({ title: 'Демо-панель', body: body() }); }
 
 function rootFor(role) {
-  return role === 'client' ? 'cl.company' : role === 'employee' ? 'e.home' : role === 'admin' ? 'sa.home' : 'o.home';
+  return role === 'guest' ? 'cl.find' : role === 'client' ? 'cl.company'
+    : (role === 'employee' || role === 'manager') ? 'e.home'
+      : role === 'admin' ? 'sa.home' : 'o.home';
 }
 
 export function switchRole(role, companyId) {
-  const cidNew = companyId || S.session.companyId;
-  S.session.role = role;
+  const guest = role === 'guest';
+  const manager = role === 'manager';
+  const real = guest ? 'client' : manager ? 'employee' : role;
+  // В списке панели только основные компании. Если сейчас открыт салон из
+  // каталога, переключаться надо на демонстрационный — иначе роль привяжется
+  // к компании, которой в списке нет, и выбор будет выглядеть случайным.
+  const cur = String(S.session.companyId || '');
+  const cidNew = companyId || (cur.startsWith('bg') ? 'c1' : cur);
+  S.session.role = real;
   S.session.companyId = cidNew;
   const st = staff(cidNew);
   const owner = emps(cidNew).find(e => e.isOwner) || st[0];
-  S.session.employeeId = role === 'owner' ? (owner ? owner.id : null) : (st[0] ? st[0].id : null);
+  // На роль сотрудника берём не владельца: в маленькой компании владелец сам
+  // принимает клиентов и попадает в staff(), а ему can() разрешает всё —
+  // и демонстрация прав превращалась в демонстрацию их отсутствия.
+  const worker = st.find(x => !x.isOwner) || st[0];
+  S.session.employeeId = real === 'owner' ? (owner ? owner.id : null) : (worker ? worker.id : null);
+  // Администратор и мастер — один и тот же экранный набор, разница в правах.
+  // Поэтому персону выставляем уровнем доступа выбранного сотрудника.
+  if (real === 'employee' && S.session.employeeId) setRole(S.session.employeeId, manager ? 'manager' : 'staff');
   const cl = clients(cidNew)[0];
   S.session.clientId = cl ? cl.id : null;
+  if (real === 'client') {
+    // персона клиента берётся заново целиком: смешивать историю человека
+    // из салона с историей человека с улицы нельзя, это разные демонстрации
+    S.session.homeId = null; S.session.person = null; S.session.clientIds = {};
+    if (guest) ensurePerson('Гость');
+    else setHome(cidNew);
+  }
   emit();
   resetStack(rootFor(role));
 }
@@ -138,7 +172,8 @@ on('sa.lock', () => {
 });
 on('sa.askCode', () => askAdminCode());
 on('dev.co', ds => {
-  switchRole(S.session.role, ds.id);
+  // смена компании не должна превращать человека с улицы в клиента салона
+  switchRole(persona(), ds.id);
   window.__dev && window.__dev.close();
   const c = allCompanies().find(x => x.id === ds.id);
   toast('Компания: ' + c.name);
