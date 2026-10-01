@@ -23,9 +23,13 @@ import sys
 import threading
 import time
 
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
+PORT = int(sys.argv[1] if len(sys.argv) > 1 else os.environ.get('PORT') or 8080)
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'webapp'))
-RUN = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '.run'))
+# Склад — изменяемые данные, и на хостинге он обязан лежать на диске,
+# который переживает перезапуск. DATA_DIR задаётся контейнером (как и
+# у bot/booking.py); без него остаётся прежний .run рядом с кодом.
+RUN = os.environ.get('DATA_DIR') or os.path.abspath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '.run'))
 STORE = os.path.join(RUN, 'shared.json')
 
 MIME = {

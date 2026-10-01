@@ -9,8 +9,11 @@ ENV PYTHONUNBUFFERED=1 \
 COPY bot/ /app/bot/
 COPY server/ /app/server/
 COPY webapp/ /app/webapp/
+COPY deploy/run.py /app/deploy/run.py
 
 RUN mkdir -p /data
 
-# По умолчанию запускается бот; статику поднимает отдельный сервис в compose
+# По умолчанию запускается бот; статику поднимает отдельный сервис в compose.
+# На Fly один контейнер держит оба процесса — там команда переопределена
+# в fly.toml на deploy/run.py.
 CMD ["python", "-u", "bot/bot.py"]

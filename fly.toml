@@ -1,0 +1,46 @@
+# Бот и общий склад на Fly.io.
+#
+# Разворачивается так:
+#   fly auth login                       — вход в аккаунт (откроется браузер)
+#   fly launch --no-deploy --copy-config — создать приложение с этим конфигом
+#   fly volumes create zapis_data -s 1   — диск под данные, 1 ГБ
+#   fly secrets set BOT_TOKEN=... WEBAPP_URL=https://eut8fd.github.io/zapis
+#   fly deploy
+#
+# После первого деплоя адрес склада — https://<имя-приложения>.fly.dev,
+# его нужно вписать в API_BASE в webapp/js/config.js, иначе Mini App
+# на Pages останется на localStorage и записи из чата бота не увидит.
+
+app = "zapis-bot"
+primary_region = "fra"
+
+[build]
+
+[env]
+  # Склад и бот держат изменяемые файлы здесь — это примонтированный диск.
+  DATA_DIR = "/data"
+  PORT = "8080"
+
+[processes]
+  # Один процесс поднимает оба: см. deploy/run.py.
+  # Dockerfile по умолчанию запускает только бота — это нужно docker-compose,
+  # где склад вынесен в отдельный сервис.
+  app = "python -u deploy/run.py"
+
+[[mounts]]
+  source = "zapis_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Машину усыплять нельзя: бот опрашивает Telegram сам и входящих
+  # запросов может не получать часами. Уснёт — перестанет отвечать людям.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

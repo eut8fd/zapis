@@ -1,0 +1,19 @@
+# В образ едут только бот, склад и приложение. Всё остальное — лишний вес
+# или, хуже, секреты: .env с токеном в слои образа попадать не должен,
+# на хостинге он задаётся переменными окружения.
+.git
+.github
+.env
+.env.*
+.run
+tools
+backend
+docs
+deploy/Caddyfile*
+scripts
+*.md
+__pycache__
+**/__pycache__
+*.pyc
+.pytest_cache
+node_modules
