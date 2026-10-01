@@ -29,24 +29,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Проверить, что нет синтаксических ошибок в модулях
+      # Приложение грузится браузером без сборки: один синтаксически битый
+      # файл рушит его целиком, и узнать об этом до публикации больше негде.
+      #
+      # Проверяем настоящим разбором ES-модуля: копия с расширением .mjs,
+      # дальше `node --check`. Так Node парсит файл как модуль и не выполняет
+      # его — иначе код сразу упёрся бы в document и localStorage, которых
+      # на сервере нет.
+      #
+      # Прошлая версия вырезала строки с import/export регуляркой и скармливала
+      # остаток в new Function. На многострочных импортах от них оставались
+      # хвосты вроде «} from '../store.js';», и проверка валилась на здоровом
+      # коде.
+      - name: Синтаксис модулей
         run: |
-          node --input-type=module -e "
-            import fs from 'fs';
-            const files = [];
-            const walk = d => fs.readdirSync(d, { withFileTypes: true }).forEach(e => {
-              const p = d + '/' + e.name;
-              if (e.isDirectory()) walk(p); else if (p.endsWith('.js')) files.push(p);
-            });
-            walk('webapp/js');
-            let bad = 0;
-            for (const f of files) {
-              try { new Function(fs.readFileSync(f, 'utf8').replace(/^(import|export)[^\n]*$/gm, '')); }
-              catch (e) { console.error('✗', f, e.message); bad++; }
-            }
-            console.log('проверено файлов:', files.length, '| ошибок:', bad);
-            if (bad) process.exit(1);
-          "
+          mkdir -p /tmp/syn
+          bad=0
+          total=0
+          while IFS= read -r f; do
+            total=$((total + 1))
+            cp "$f" /tmp/syn/check.mjs
+            if ! node --check /tmp/syn/check.mjs 2>/tmp/syn/err; then
+              echo "✗ $f"
+              sed 's/^/    /' /tmp/syn/err
+              bad=$((bad + 1))
+            fi
+          done < <(find webapp/js -name '*.js' | sort)
+          echo "проверено файлов: $total | с ошибками: $bad"
+          [ "$bad" -eq 0 ]
+        shell: bash
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
