@@ -162,22 +162,19 @@ export function clientStats(clientId) {
 }
 
 /* =========================================================
-   Клиент: свой салон, личность и каталог
+   Клиент: свой салон и личность
    ---------------------------------------------------------
-   Клиент бывает двух видов, и от этого зависит вся его часть:
-     • привязанный — пришёл по ссылке салона (?start=c1). Первая вкладка
-       навсегда принадлежит салону, входа в каталог на ней нет;
-     • свободный — открыл бота сам. Первая вкладка — поиск.
+   Клиент живёт ровно в одном салоне — том, чью ссылку он открыл
+   (?start=c1). Каталога и поиска чужих салонов в приложении нет:
+   приложение салона принадлежит салону, и уводить из него клиента
+   ему некуда.
 
-   homeId ставится один раз и дальше не меняется, даже если клиент
-   запишется в другом месте: салон, который привёл клиента, не должен
-   терять его из-за того, что человек сходил на массаж.
-
-   Один человек в двух салонах — это две карточки клиента: карточка
-   принадлежит компании, и чужой салон видеть её не должен. Поэтому
-   личность живёт в сессии (person), а clientIds — карта «салон → его
-   карточка в этом салоне». Карточка заводится только при первой записи:
-   от простого просмотра страницы салон не должен получать клиента.
+   homeId ставится один раз и дальше не меняется. Личность (person)
+   живёт в сессии отдельно от карточки клиента: карточка принадлежит
+   компании, и заводится она только при первой записи — от простого
+   просмотра страницы салон не должен получать клиента. clientIds —
+   карта «салон → карточка»; она пережила каталог, потому что в базе
+   тестировщика ещё могут лежать записи из двух салонов.
    ========================================================= */
 export const homeId = () => S.session.homeId || null;
 export const homeCo = () => (homeId() ? co(homeId()) : null);
@@ -185,11 +182,24 @@ export const isBound = () => !!homeCo();
 
 export const person = () => S.session.person || null;
 
-/** Личность: из Telegram, если приложение открыто из бота, иначе просто имя. */
-export function ensurePerson(name) {
-  if (S.session.person) return S.session.person;
+/** Личность: из Telegram, если приложение открыто из бота, иначе просто имя.
+    `tg` — username для ссылки t.me, `tgId` — числовой id: только по нему бот
+    может узнать человека и показать ему запись, сделанную здесь. */
+export function ensurePerson(name, ids = {}) {
+  const p = S.session.person;
+  if (p) {
+    // Личность могла завестись раньше, чем стал известен telegram-id:
+    // сессия переживает перезагрузку, а id появляется только внутри Telegram.
+    if (ids.tgId && !p.tgId) p.tgId = String(ids.tgId);
+    if (ids.tg && !p.tg) p.tg = String(ids.tg);
+    return p;
+  }
   const nm = String(name || '').trim() || 'Гость';
-  S.session.person = { name: nm, phone: '', initials: initialsOf(nm), color: '#4C6FFF', tg: '' };
+  S.session.person = {
+    name: nm, phone: '', initials: initialsOf(nm), color: '#4C6FFF',
+    tg: ids.tg ? String(ids.tg) : '',
+    tgId: ids.tgId ? String(ids.tgId) : '',
+  };
   return S.session.person;
 }
 
@@ -225,12 +235,18 @@ export function myClient(companyId = cid()) {
 
 /** Та же карточка, но заводится, если её ещё нет. Зовётся при записи. */
 export function ensureMyClient(companyId = cid()) {
-  const has = myClient(companyId);
-  if (has) return has;
   const p = person() || {};
+  const has = myClient(companyId);
+  if (has) {
+    // Карточка могла появиться до того, как приложение узнало telegram-id.
+    // Без него бот не свяжет запись с человеком и покажет «записей нет».
+    if (p.tgId && !has.tgId) has.tgId = String(p.tgId);
+    return has;
+  }
   const name = p.name || 'Гость';
   const rec = {
     id: uid('cl_'), companyId, name, phone: p.phone || '', tg: p.tg || '',
+    tgId: p.tgId || '',
     initials: p.initials || initialsOf(name), color: p.color || '#4C6FFF',
     createdAt: now().toISOString(), note: '', ai: null, tags: [],
   };
@@ -267,62 +283,13 @@ export function myStats() {
   return { visits: done.length, next, last: done[0], all: list };
 }
 
-/** Салоны, где человек уже записывался, — свежие первыми, без своего. */
-export function myCompanies() {
-  const seen = new Map();
-  myAppts().forEach(a => { if (!seen.has(a.companyId)) seen.set(a.companyId, a); });
-  return [...seen.keys()].filter(id => id !== homeId()).map(co).filter(Boolean);
-}
+/* ---------- справочник салонов ----------
+   Каталога для клиента в приложении нет: человек попадает в салон только
+   по его ссылке и другие салоны увидеть не может. Справочник остался
+   для бота — он читает оттуда названия, услуги и контакты, чтобы
+   отрисовать страницу салона по присланной ссылке (см. sync.js).
+------------------------------------------- */
 
-/* ---------- где я ----------
-   Координаты человека в базу не кладём: это его текущее местоположение,
-   а не данные демо. Живут в модуле до перезагрузки — ровно столько,
-   сколько нужно, чтобы отсортировать каталог.
-------------------------------- */
-let myGeo = null;
-export const geo = () => myGeo;
-
-/** Спросить геопозицию. Возвращает координаты либо null, если отказали. */
-export function askGeo() {
-  return new Promise(resolve => {
-    if (!navigator.geolocation) { resolve(null); return; }
-    navigator.geolocation.getCurrentPosition(
-      pos => { myGeo = { lat: pos.coords.latitude, lon: pos.coords.longitude }; emit(); resolve(myGeo); },
-      () => resolve(null),
-      { enableHighAccuracy: false, timeout: 8000, maximumAge: 300000 },
-    );
-  });
-}
-export function forgetGeo() { myGeo = null; emit(); }
-
-/** Расстояние по прямой, км. Формула гаверсинуса. */
-export function distanceKm(a, b) {
-  if (!a || !b || a.lat == null || b.lat == null) return null;
-  const R = 6371, rad = x => x * Math.PI / 180;
-  const dLat = rad(b.lat - a.lat), dLon = rad(b.lon - a.lon);
-  const h = Math.sin(dLat / 2) ** 2 +
-    Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLon / 2) ** 2;
-  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
-}
-
-/** Расстояние до салона от текущей позиции; null — позиции нет. */
-export const distanceTo = c => (myGeo && c ? distanceKm(myGeo, c) : null);
-
-/* ---------- каталог ---------- */
-
-/** Тариф разрешает закрыть каталог от своих клиентов? */
-export function canOnlyMine(c) {
-  const p = planById((c || {}).plan);
-  return !!(p && p.limits && p.limits.onlyMine);
-}
-
-/** Виден ли клиенту вход в каталог. Салон на PRO может его закрыть. */
-export function catalogVisible() {
-  const h = homeCo();
-  return !(h && h.onlyMine && canOnlyMine(h));
-}
-
-/** Салоны, в которые можно записаться: с услугами и не заблокированные. */
 /* Заготовки, которые онбординг подставляет вместо адреса и телефона.
    Держим их здесь, а не строкой в двух местах: по ним же проверяется,
    дозаполнил ли владелец карточку. */
@@ -358,83 +325,6 @@ export function catalogMissing(c = co()) {
 
 export function catalogCompanies() {
   return allCompanies().filter(catalogReady);
-}
-
-/**
- * Направления салона — по категориям его услуг, а не по вывеске.
- * Вывеска — свободный текст владельца, и «Спа-центр» со «Спа и массаж»
- * разъезжаются на два раздела, хотя это одно и то же. А салон красоты
- * делает и ногти, и волосы, и уместен сразу в обоих разделах.
- */
-export function companyDirs(companyId) {
-  return [...new Set(svcs(companyId).map(s => s.cat))];
-}
-
-/** Название и цвет направления берём у первого салона, где оно есть. */
-function dirInfo(key) {
-  const owner = catalogCompanies().find(c => companyDirs(c.id).includes(key));
-  return catInfo(key, owner ? owner.id : cid());
-}
-
-/** Разделы каталога с числом салонов в каждом. */
-export function catalogCats() {
-  const m = new Map();
-  catalogCompanies().forEach(c => companyDirs(c.id).forEach(k => m.set(k, (m.get(k) || 0) + 1)));
-  return [...m.entries()]
-    .map(([cat, n]) => ({ cat, n, ...dirInfo(cat) }))
-    .sort((a, b) => b.n - a.n || a.t.localeCompare(b.t));
-}
-
-export function catalogCities() {
-  return [...new Set(catalogCompanies().map(c => c.city))].sort((a, b) => a.localeCompare(b));
-}
-
-/**
- * Поиск по каталогу. Свой салон всегда идёт первым в выдаче: клиент попал
- * сюда из его же приложения, и терять позицию из-за этого салон не должен.
- */
-export function catalogSearch({ q = '', cat = '', city = '', near = false } = {}) {
-  const needle = String(q).trim().toLowerCase();
-  const list = catalogCompanies().filter(c => {
-    if (cat && !companyDirs(c.id).includes(cat)) return false;
-    if (city && c.city !== city) return false;
-    if (!needle) return true;
-    const hay = [c.name, c.cat, c.city, c.addr, ...svcs(c.id).map(s => s.name)].join(' ').toLowerCase();
-    return hay.includes(needle);
-  });
-  const home = homeId();
-  return list.sort((a, b) => {
-    if (a.id === home) return -1;
-    if (b.id === home) return 1;
-    // «Рядом» сортирует по расстоянию; салоны без координат уходят в конец,
-    // а не наверх с нулём — иначе они бы выглядели ближайшими
-    if (near && myGeo) {
-      const da = distanceTo(a), db = distanceTo(b);
-      if (da != null && db != null) return da - db;
-      if (da != null) return -1;
-      if (db != null) return 1;
-    }
-    return (b.rating || 0) - (a.rating || 0) || a.name.localeCompare(b.name);
-  });
-}
-
-/** Минимальная цена салона — «от 5 000 ₸» на карточке каталога. */
-export function minPrice(companyId) {
-  const list = svcs(companyId);
-  return list.length ? Math.min(...list.map(s => s.price)) : 0;
-}
-
-/** Ближайшее свободное окно во всём салоне — главный крючок карточки. */
-export function nextFreeInCompany(companyId, duration = 60, maxDays = 7) {
-  const ids = staff(companyId).map(e => e.id);
-  if (!ids.length) return null;
-  const base = today();
-  for (let d = 0; d < maxDays; d++) {
-    const date = new Date(base.getTime() + d * 86400000);
-    const s = slotsFor(ids, date, duration, { companyId }).find(x => x.free);
-    if (s) return { date, slot: s };
-  }
-  return null;
 }
 
 export function nextAppt(companyId = cid(), employeeId = null) {
@@ -667,6 +557,26 @@ export function updateEmployee(id, patch) {
 }
 export function removeEmployee(id) { const e = emp(id); if (e) { e.active = false; emit(); } }
 
+/**
+ * Есть ли за карточкой сотрудника живой человек.
+ *
+ * Карточка и человек — разные вещи: карточку заводит владелец, чтобы
+ * появился график и было кого ставить в записи, а доступ в приложение
+ * человек получает только по приглашению. Раньше интерфейс их не различал,
+ * и было непонятно, почему «сотрудник есть», а уведомления ему не приходят.
+ *   linked  — вошёл по ссылке, доступ есть
+ *   invited — ссылка выписана и ещё жива
+ *   none    — карточка ничья
+ */
+export function employeeAccess(e) {
+  if (!e) return 'none';
+  if (e.isOwner || e.linkedAt) return 'linked';
+  const live = (S.data.invites || []).some(
+    i => i.companyId === e.companyId && i.employeeId === e.id && inviteState(i) === 'активна',
+  );
+  return live ? 'invited' : 'none';
+}
+
 // Причины отсутствия. allDay — занимает весь рабочий день,
 // многодневные (отпуск, больничный) разворачиваются в блок на каждый день.
 export const ABSENCE = {
@@ -689,6 +599,22 @@ export function addBlock({ employeeId, start, end, reason = 'Перерыв', ki
 }
 
 /** Отсутствие на диапазон дней — по блоку на каждый день (§53, §54). */
+/**
+ * Записи мастера, попадающие в отрезок. По ним проверяют, можно ли
+ * занять время: блокировка поверх живой записи — это клиент, который
+ * придёт к закрытой двери.
+ */
+export function apptsInRange(employeeId, from, to, companyId = cid()) {
+  const a0 = new Date(from).getTime(), b0 = new Date(to).getTime();
+  return appts(companyId)
+    .filter(a => a.employeeId === employeeId && a.status === 'planned')
+    .filter(a => {
+      const s0 = new Date(a.start).getTime();
+      return s0 < b0 && s0 + a.duration * 60000 > a0;
+    })
+    .sort((a, b) => new Date(a.start) - new Date(b.start));
+}
+
 export function addAbsence({ employeeId, from, to, kind = 'vacation', companyId = cid() }) {
   const label = (ABSENCE[kind] || ABSENCE.other).t;
   const a = startOfDay(new Date(from)), b = startOfDay(new Date(to));
@@ -1030,6 +956,11 @@ export const PERMS = {
   team: 'Сотрудники и графики',
   finance: 'Финансы',
   analytics: 'Аналитика',
+  // Отзывы стоят отдельно от аналитики намеренно. Оценка — это разговор
+  // клиента с тем, кто отвечает за салон, а не рабочий отчёт: мастер не
+  // должен читать, что о нём написали, а администратор — разбирать чужие
+  // оценки. Поэтому право есть только у владельца (см. ROLES).
+  reviews: 'Отзывы клиентов',
   settings: 'Настройки компании',
   billing: 'Тариф и оплата',
 };
@@ -1087,10 +1018,14 @@ export function inviteState(inv) {
   return 'активна';
 }
 
-export function createInvite({ companyId = cid(), access = 'staff', role = 'Мастер', days = 7 } = {}) {
+export function createInvite({ companyId = cid(), access = 'staff', role = 'Мастер', days = 7,
+                               employeeId = null } = {}) {
   const rnd = () => Math.random().toString(36).slice(2, 8);
   const inv = {
     id: 'inv' + rnd() + rnd(),
+    // Приглашение можно выписать на уже заведённую карточку: тогда человек
+    // встанет за неё, а не появится вторым сотрудником с тем же именем.
+    employeeId,
     companyId, access, role: String(role || '').trim() || ROLES[access].t,
     createdAt: now().toISOString(),
     createdBy: (me() || {}).id || null,
@@ -1123,12 +1058,29 @@ export function acceptInvite(id, person = {}) {
   if (!c) return { ok: false, why: 'нет компании' };
 
   const name = String(person.name || '').trim() || 'Новый сотрудник';
-  const e = createEmployee({
-    name, role: inv.role, phone: person.phone || '', companyId: inv.companyId,
-  });
+
+  // Карточка могла быть заведена заранее — тогда за ней просто появляется
+  // человек. Без этого приглашение плодило второго сотрудника с тем же
+  // именем, а исходная карточка навсегда оставалась ничьей.
+  let e = null;
+  if (inv.employeeId) {
+    const existing = S.data.employees.find(x => x.id === inv.employeeId);
+    if (existing && existing.companyId === inv.companyId && existing.active !== false && !existing.linkedAt) {
+      e = existing;
+      if (person.phone) e.phone = person.phone;
+    }
+  }
+  if (!e) {
+    e = createEmployee({
+      name, role: inv.role, phone: person.phone || '', companyId: inv.companyId,
+    });
+  }
   e.access = inv.access;
   e.tg = person.tg || '';
   e.tgId = person.tgId || '';
+  // Отметка «за карточкой стоит живой человек»: по ней команда показывает,
+  // кому уже открыт доступ, а кому ещё нужно отправить ссылку.
+  e.linkedAt = now().toISOString();
   inv.usedAt = now().toISOString();
   inv.usedBy = e.id;
   logEvent('team', 'Сотрудник вошёл по приглашению', { companyId: inv.companyId, actor: name });
@@ -1190,8 +1142,10 @@ export function setupSteps(companyId = cid()) {
       done: svcs(companyId).length > 0, act: 'qa.svc', ic: 'briefcase',
     },
     {
-      k: 'team', t: 'Собрать команду', s: 'Мастера, их графики и услуги',
-      done: list.length > 0, act: 'tm.add', ic: 'users',
+      k: 'team', t: 'Пригласить команду', s: 'Ссылка-приглашение — человек заполнит всё сам',
+      // владелец в списке есть всегда, поэтому «команда собрана» — это
+      // хотя бы один человек кроме него
+      done: list.filter(e => !e.isOwner).length > 0, act: 'tm.invite', ic: 'userPlus',
     },
     {
       k: 'hours', t: 'Указать часы работы', s: 'Своё время на каждый день недели',
@@ -1340,6 +1294,24 @@ export function rangeStats(days, companyId = cid(), opts = {}) {
   return statsBetween(start, end, companyId, opts);
 }
 
+/**
+ * Свои цифры мастера за период: сколько визитов провёл и сколько заработал.
+ * Раньше их доставали из общей сводки по компании поиском по имени
+ * сотрудника — при двух Айгерим это бы развалилось.
+ */
+export function empStats(employeeId, days, companyId = cid()) {
+  const end = now();
+  const lo = new Date(startOfDay(end).getTime() - (days - 1) * 86400000);
+  const list = appts(companyId).filter(a => a.employeeId === employeeId
+    && new Date(a.start) >= lo && new Date(a.start) <= end);
+  const done = list.filter(a => a.status === 'done');
+  return {
+    visits: done.length,
+    sum: done.reduce((s, a) => s + a.price, 0),
+    planned: list.filter(a => a.status === 'planned').length,
+  };
+}
+
 export function todayStats(companyId = cid(), employeeId = null) {
   const list = dayAppts(now(), { companyId, employeeId });
   const done = list.filter(a => a.status === 'done');
@@ -1435,6 +1407,56 @@ export function clearResolvedErrors() {
   emit();
 }
 
+/* ---------- личные уведомления компании ----------
+   Блокировка, снятие блокировки, смена тарифа, ответ поддержки и жалоба
+   клиента раньше писались только в журнал Super Admin. Владелец компании
+   о них не узнавал вовсе: салон просто переставал принимать записи, и
+   почему — было негде посмотреть. Теперь у компании есть своя почта.
+--------------------------------------------------- */
+export const INBOX_KINDS = {
+  blocked: { t: 'Блокировка', icon: 'ban', color: '#F04462' },
+  unblocked: { t: 'Блокировка снята', icon: 'checkCircle', color: '#12B76A' },
+  plan: { t: 'Тариф', icon: 'card', color: '#0EA5E9' },
+  support: { t: 'Поддержка', icon: 'msg', color: '#8B5CF6' },
+  complaint: { t: 'Жалоба клиента', icon: 'shield', color: '#F79009' },
+  system: { t: 'Платформа', icon: 'bell', color: '#7C8AA5' },
+};
+
+export const companyInbox = (companyId = cid()) =>
+  (S.data.inbox || []).filter(m => m.companyId === companyId)
+    .sort((a, b) => new Date(b.at) - new Date(a.at));
+
+export const unreadInbox = (companyId = cid()) =>
+  companyInbox(companyId).filter(m => !m.readAt).length;
+
+export function notifyCompany({ companyId, kind = 'system', title, text = '', goTo = null, refId = null }) {
+  if (!companyId || !title) return null;
+  const rec = {
+    id: uid('in_'), companyId, kind, title, text, goTo, refId,
+    at: now().toISOString(), readAt: null,
+  };
+  S.data.inbox = S.data.inbox || [];
+  S.data.inbox.push(rec);
+  // Длину ограничиваем: в браузере это заодно и ротация.
+  if (S.data.inbox.length > 300) S.data.inbox = S.data.inbox.slice(-300);
+  emit();
+  return rec;
+}
+
+export function markInboxRead(id) {
+  const m = (S.data.inbox || []).find(x => x.id === id);
+  if (m && !m.readAt) { m.readAt = now().toISOString(); emit(); }
+}
+
+export function markInboxAllRead(companyId = cid()) {
+  let n = 0;
+  (S.data.inbox || []).forEach(m => {
+    if (m.companyId === companyId && !m.readAt) { m.readAt = now().toISOString(); n++; }
+  });
+  if (n) emit();
+  return n;
+}
+
 /* ---------- обращения в поддержку ---------- */
 export const TICKET_STATUS = {
   new: { t: 'Новое', color: '#F79009' },
@@ -1446,17 +1468,33 @@ export const TICKET_TOPICS = {
   billing: 'Оплата и тариф',
   howto: 'Как сделать',
   feature: 'Пожелание',
+  complaint: 'Жалоба на компанию',
+  other: 'Другое',
+};
+
+/** За что клиент может пожаловаться на салон. Список короткий намеренно:
+    длинный человек не читает, а выбирает первый пункт. */
+export const COMPLAINT_REASONS = {
+  noshow: 'Меня не приняли по записи',
+  price: 'Цена не совпала с указанной',
+  rude: 'Грубое обращение',
+  quality: 'Качество услуги',
+  fake: 'Салона не существует / неверные данные',
   other: 'Другое',
 };
 
 export const tickets = () => (S.data.tickets || []).slice()
   .sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt));
 
-export function addTicket({ companyId = cid(), topic = 'other', subject, text, author = null }) {
+export function addTicket({ companyId = cid(), topic = 'other', subject, text, author = null,
+                            from = 'company' }) {
   const rec = {
     id: uid('tk_'), companyId, topic, subject, status: 'new',
+    // Кто обратился: владелец компании или её клиент. Поддержке это первое,
+    // что нужно знать — от этого зависит, чью сторону она выясняет.
+    from,
     author: author || (me() || {}).name || 'Владелец',
-    messages: [{ from: 'company', text, at: now().toISOString() }],
+    messages: [{ from, text, at: now().toISOString() }],
     createdAt: now().toISOString(), updatedAt: now().toISOString(),
   };
   S.data.tickets = S.data.tickets || [];
@@ -1464,13 +1502,97 @@ export function addTicket({ companyId = cid(), topic = 'other', subject, text, a
   emit();
   return rec;
 }
+/**
+ * Жалоба клиента на компанию. Уходит тем же потоком, что и обращения
+ * владельцев, но помечена источником: в Super Admin видно, что это не
+ * вопрос компании о себе, а претензия к ней со стороны.
+ */
+export function addComplaint({ companyId, reason = 'other', text = '', appointmentId = null }) {
+  const c = co(companyId);
+  const who = (person() || {}).name || 'Клиент';
+  const rec = addTicket({
+    companyId,
+    topic: 'complaint',
+    subject: 'Жалоба: ' + (COMPLAINT_REASONS[reason] || COMPLAINT_REASONS.other),
+    text: text || COMPLAINT_REASONS[reason] || '',
+    author: who,
+    from: 'client',
+  });
+  rec.reason = reason;
+  rec.appointmentId = appointmentId;
+  // По кому жалоба — тот и должен о ней знать: иначе он узнает о проблеме
+  // только когда его заблокируют.
+  rec.authorTg = (person() || {}).tgId || '';
+  logEvent('moderation', 'Жалоба на компанию', {
+    companyId, actor: who, note: COMPLAINT_REASONS[reason] || reason,
+  });
+  notifyCompany({
+    companyId, kind: 'complaint',
+    title: 'Клиент пожаловался в поддержку',
+    text: (COMPLAINT_REASONS[reason] || 'Жалоба') + (text ? '. ' + text : '')
+      + '. Поддержка платформы разбирается.',
+    refId: rec.id,
+  });
+  emit();
+  return rec;
+}
+
+/**
+ * Вопрос клиента в поддержку платформы — не жалоба на салон, а «не приходят
+ * напоминания», «как отменить запись». Поток тот же, чтобы ответ вернулся
+ * туда же, в «Мои обращения»; отличает их тема, а не источник.
+ */
+export function addClientTicket({ topic = 'other', subject, text, companyId = cid() }) {
+  const p = person() || {};
+  const rec = addTicket({
+    companyId, topic,
+    subject: subject || TICKET_TOPICS[topic] || 'Вопрос',
+    text, author: p.name || 'Клиент', from: 'client',
+  });
+  // Без этого ответ поддержки не найдёт адресата: myTickets ищет по tgId.
+  rec.authorTg = p.tgId || '';
+  emit();
+  return rec;
+}
+
+/**
+ * Вопрос сотрудника в поддержку платформы. От обращения владельца отличается
+ * только автором: отвечает та же поддержка, ответ приходит в уведомления
+ * компании — отдельного ящика у мастера в демо нет.
+ */
+export function addStaffTicket({ topic = 'other', subject, text }) {
+  const who = (me() || {}).name || 'Сотрудник';
+  return addTicket({ topic, subject: subject || TICKET_TOPICS[topic] || 'Вопрос', text, author: who });
+}
+
 export function replyTicket(id, text, from = 'support') {
   const t = tickets().find(x => x.id === id); if (!t) return null;
   t.messages.push({ from, text, at: now().toISOString() });
   t.updatedAt = now().toISOString();
   if (from === 'support' && t.status === 'new') t.status = 'work';
+  // Ответ поддержки видит тот, кто писал. Обращение компании — владелец;
+  // жалобу клиента компании показывать нельзя, её автор увидит ответ
+  // у себя в профиле.
+  if (from === 'support' && t.from !== 'client') {
+    notifyCompany({
+      companyId: t.companyId, kind: 'support',
+      title: 'Ответ поддержки',
+      text: String(text).slice(0, 200),
+      goTo: 'o.support', refId: t.id,
+    });
+  }
   emit();
   return t;
+}
+
+/** Обращения этого человека как клиента: по ним он видит ответ поддержки. */
+export function myTickets() {
+  const p = person() || {};
+  const key = p.tgId || '';
+  const name = p.name || '';
+  return (S.data.tickets || []).filter(t => t.from === 'client'
+    && ((key && String(t.authorTg || '') === String(key)) || (!key && t.author === name)))
+    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
 }
 export function setTicketStatus(id, status) {
   const t = tickets().find(x => x.id === id); if (!t) return;
@@ -1509,6 +1631,17 @@ export function banEntity({ type = 'company', targetId, reason = 'other', note =
   const name = type === 'company' ? (co(targetId) || {}).name : (emp(targetId) || client(targetId) || {}).name;
   logEvent('moderation', 'Заблокировано: ' + (name || targetId) + ' — ' + (BAN_REASONS[reason] || reason),
     { companyId: type === 'company' ? targetId : null, level: 'warn' });
+  if (type === 'company') {
+    notifyCompany({
+      companyId: targetId, kind: 'blocked',
+      title: 'Компания заблокирована',
+      text: 'Причина: ' + (BAN_REASONS[reason] || reason)
+        + (note ? '. ' + note : '')
+        + (rec.until ? '. Блокировка действует до ' + new Date(rec.until).toLocaleDateString('ru-RU') : '')
+        + '. Клиенты не могут записаться. Напишите в поддержку, если считаете это ошибкой.',
+      goTo: 'o.support',
+    });
+  }
   emit();
   return rec;
 }
@@ -1518,6 +1651,13 @@ export function liftBan(type, targetId) {
   if (type === 'company') setCompanyStatus(targetId, null);
   const name = type === 'company' ? (co(targetId) || {}).name : (emp(targetId) || client(targetId) || {}).name;
   logEvent('moderation', 'Разблокировано: ' + (name || targetId), { companyId: type === 'company' ? targetId : null });
+  if (type === 'company') {
+    notifyCompany({
+      companyId: targetId, kind: 'unblocked',
+      title: 'Блокировка снята',
+      text: 'Компания снова видна в каталоге, клиенты могут записываться.',
+    });
+  }
   emit();
   return b;
 }
@@ -1598,12 +1738,12 @@ export const DEFAULT_PLANS = () => ([
   },
   {
     id: 'PRO', name: 'PRO', price: 19900, period: 'month', active: true, color: '#4C6FFF',
-    limits: { staff: 10, services: 100, broadcasts: 20, onlyMine: true },
-    feats: ['До 10 сотрудников', 'AI-помощник', 'Рассылки', 'Аналитика и финансы', 'Только мой салон'],
+    limits: { staff: 10, services: 100, broadcasts: 20 },
+    feats: ['До 10 сотрудников', 'AI-помощник', 'Рассылки', 'Аналитика и финансы'],
   },
   {
     id: 'BUSINESS', name: 'BUSINESS', price: 39900, period: 'month', active: true, color: '#8B5CF6',
-    limits: { staff: 0, services: 0, broadcasts: 0, onlyMine: true },
+    limits: { staff: 0, services: 0, broadcasts: 0 },
     feats: ['Без ограничений', 'Несколько филиалов', 'API и интеграции', 'Приоритетная поддержка'],
   },
 ]);

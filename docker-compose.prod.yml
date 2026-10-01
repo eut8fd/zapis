@@ -1,0 +1,114 @@
+# Production-контур по ТЗ 10.1: PostgreSQL как источник истины, Redis для
+# лимитов и координации, API и worker отдельными процессами, Caddy с TLS.
+#
+#   1) заполните .env (см. .env.example, раздел «production backend»)
+#   2) docker compose -f docker-compose.prod.yml run --rm migrate
+#   3) docker compose -f docker-compose.prod.yml up -d
+#
+# Миграции запускаются отдельным шагом намеренно: релиз должен уметь
+# остановиться между «схема обновлена» и «код выкачен».
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-zapis}
+      POSTGRES_USER: ${POSTGRES_USER:-zapis}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD}
+      # Локаль нужна для корректного сравнения кириллицы в поиске.
+      LANG: ru_RU.utf8
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-zapis} -d ${POSTGRES_DB:-zapis}']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes', '--maxmemory-policy', 'noeviction']
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    build: ./backend
+    profiles: ['tools']
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-zapis}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-zapis}
+    command: ['python', '-m', 'alembic', 'upgrade', 'head']
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-zapis}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-zapis}
+      REDIS_URL: redis://redis:6379/0
+    expose:
+      - '8000'
+    healthcheck:
+      test: ['CMD-SHELL', 'python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen(\"http://127.0.0.1:8000/api/v1/live\").status==200 else 1)"']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-zapis}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-zapis}
+      REDIS_URL: redis://redis:6379/0
+    command: ['python', '-m', 'app.workers.run']
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    build: .
+    restart: unless-stopped
+    command: ['python', '-u', 'server/serve.py', '8080']
+    expose:
+      - '8080'
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      DOMAIN: ${DOMAIN:?укажите DOMAIN в .env}
+    volumes:
+      - ./deploy/Caddyfile.prod:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - api
+      - web
+
+volumes:
+  db-data:
+  redis-data:
+  caddy-data:
+  caddy-config:

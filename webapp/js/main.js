@@ -1,5 +1,5 @@
 import { S, load, sub, emit, reportError, logEvent, setHome, viewCompany, ensurePerson, homeId } from './store.js';
-import { initTelegram, tgColorScheme, startParam, tgUser, tg } from './tg.js';
+import { initTelegram, tgColorScheme, startParam, tgUser, tgId, tgUsername, tg } from './tg.js';
 import { adminAllowed, unlockWithCode } from './config.js';
 import { bindDelegation, on } from './bus.js';
 import { render, bootRoute, go, back, routes } from './router.js';
@@ -73,11 +73,14 @@ async function boot() {
   const raw = (startParam() || new URLSearchParams(location.search).get('start') || '').toLowerCase();
   const [sp, section] = raw.split('_');
   const SECTIONS = {
-    client: { book: 'cl.book', my: 'cl.my', profile: 'cl.profile', find: 'cl.find' },
+    client: { book: 'cl.book', my: 'cl.my', profile: 'cl.profile' },
     owner: { cal: 'o.cal', clients: 'o.clients', sub: 'o.subscription', ai: 'ai.home', more: 'o.more' },
     employee: { cal: 'e.cal', clients: 'e.clients' },
   };
   const tgName = () => { const u = tgUser(); return u ? [u.first_name, u.last_name].filter(Boolean).join(' ') : ''; };
+  // Числовой id обязателен: бот узнаёт человека только по нему и без
+  // него не покажет ему запись, сделанную в приложении.
+  const tgIds = () => ({ tg: tgUsername(), tgId: tgId() });
   let def = { r: 'o.home', p: {} };
   // Приглашение в команду. Проверяем раньше салонов: идентификатор
   // приглашения ни с каким салоном не совпадёт, но порядок важен для
@@ -88,7 +91,7 @@ async function boot() {
   else if (S.data.companies.some(c => c.id === sp)) {
     S.session.role = 'client';
     setHome(sp);
-    ensurePerson(tgName());
+    ensurePerson(tgName(), tgIds());
     def = { r: SECTIONS.client[section] || 'cl.company', p: {} };
   } else if (sp === 'admin') {
     // панель Super Admin: только белый список Telegram ID или верный секретный код
@@ -100,13 +103,14 @@ async function boot() {
   }
   // пришёл заводить бизнес: сначала витрина, а не сразу форма
   else if (sp === 'create') { def = { r: 'biz.start', p: {} }; }
-  // человек открыл бота сам, без ссылки салона: салон за него не выбираем,
-  // первым делом ему нужен поиск
+  // человек открыл бота сам, без ссылки салона. Каталога, куда его можно
+  // было бы отправить выбирать, больше нет, поэтому оставляем его в том
+  // салоне, где он уже был; для первого входа это демо-салон из сессии.
   else if (sp === 'client' || sp === 'find') {
     S.session.role = 'client';
-    S.session.homeId = null;
-    ensurePerson(tgName());
-    def = { r: SECTIONS.client[section] || 'cl.find', p: {} };
+    if (!homeId()) setHome(S.session.companyId);
+    ensurePerson(tgName(), tgIds());
+    def = { r: SECTIONS.client[section] || 'cl.company', p: {} };
   }
   else if (sp === 'owner' || sp === 'biz' || sp === 'business') {
     S.session.role = 'owner';
@@ -123,12 +127,20 @@ async function boot() {
   else if (sp === 'onboarding' || !S.onboarded) { def = { r: 'onb', p: {} }; }
   else {
     const r = S.session.role;
-    const clientHome = homeId() ? 'cl.company' : 'cl.find';
-    def = { r: r === 'client' ? clientHome : r === 'employee' ? 'e.home' : r === 'admin' ? 'sa.home' : 'o.home', p: {} };
+    def = { r: r === 'client' ? 'cl.company' : r === 'employee' ? 'e.home' : r === 'admin' ? 'sa.home' : 'o.home', p: {} };
   }
-  // привязанный клиент всегда открывается на своём салоне, даже если в прошлый
-  // раз ушёл смотреть чужой: последний просмотренный салон — не его дом
-  if (S.session.role === 'client' && homeId()) viewCompany(homeId());
+  // Личность дозаполняем при любом входе клиента, а не только по ссылке
+  // салона: в приложение заходят и с кнопки меню, где start-параметра нет,
+  // а без telegram-id бот потом не узнает автора записи.
+  if (S.session.role === 'client') ensurePerson(tgName(), tgIds());
+
+  // Клиент всегда открывается на своём салоне. Своего салона может не быть
+  // только у старой сессии, заведённой во времена каталога, — тогда берём
+  // тот, что открыт сейчас: без салона клиентские экраны рисовать нечем.
+  if (S.session.role === 'client') {
+    if (!homeId()) setHome(S.session.companyId);
+    viewCompany(homeId());
+  }
 
   // ссылка из адресной строки не должна открывать экран чужой роли
   // Сотруднику открыты и разделы салона: настоящий гейт теперь не этот
@@ -142,9 +154,6 @@ async function boot() {
   };
   const h = location.hash.replace(/^#\/?/, '').split('?')[0];
   if (h && !(ROLE_OK[S.session.role] || /./).test(h)) location.hash = '';
-  // «свой салон» нельзя открыть тому, у кого своего салона нет: иначе
-  // старый адрес показал бы ему чужой салон как его собственный
-  if (S.session.role === 'client' && !homeId() && h === 'cl.company') location.hash = '';
 
   sub(() => render(false));
   // Справочник уходит на сервер после любого изменения данных, с задержкой:

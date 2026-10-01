@@ -7,13 +7,15 @@
   statsBetween, daysBetween, moneyOps, finCats, finCatName, finCatInfo, addFinCat, renameFinCat, removeFinCat,
   recurring, addRecurring, updateRecurring, removeRecurring, REPEAT, plans, planById, planPrice, PERIODS,
   setupSteps, markSetup, resetTips, tipSeen, markTip, appt, BRAND_COLORS, setCompanyColor,
-  canOnlyMine, catalogReady, catalogMissing, setLang, can,
-  createInvite, invites, inviteState, revokeInvite, ROLES as ACCESS,
+  catalogReady, catalogMissing, setLang, can, me,
+  createInvite, invites, inviteState, revokeInvite, employeeAccess, ROLES as ACCESS,
+  tickets, addTicket, replyTicket, TICKET_STATUS, TICKET_TOPICS,
+  companyInbox, unreadInbox, markInboxRead, markInboxAllRead, INBOX_KINDS,
 } from '../store.js';
 import {
   esc, money, moneyShort, hhmm, dateLabel, relPast, avatar, emptyState, sheet, toast, promptSheet,
   confirmSheet, demoNote, segmented, bars, sparkline, donut, progress, nMin, nAppt, nVisit, dayKey, startOfDay,
-  addDays, WD, WD_FULL, MONTHS, MON_SHORT, num, plural, wait, loadingBlock, t,
+  addDays, WD, WD_FULL, MONTHS, MON_SHORT, num, plural, wait, loadingBlock, t, prettyPhone,
   pickImage, photoField, IMG_MAX, monthGrid, dateFull, brandGradient,
 } from '../ui.js';
 import { icon, catIcon } from '../icons.js';
@@ -22,7 +24,10 @@ import { LANGS, lang } from '../i18n.js';
 import { pushInvite, patchInvite } from '../sync.js';
 import { route, go, render } from '../router.js';
 import { on, fire } from '../bus.js';
-import { newApptFlow, addServiceSheet, blockFlow, openApptSheet, absenceFlow, tipOnce } from '../flows.js';
+import {
+  newApptFlow, addServiceSheet, blockFlow, openApptSheet, absenceFlow, tipOnce,
+  timeSheet, rangeWheels, mountRangeWheels, hoursBetween, myDataSheet,
+} from '../flows.js';
 import { haptic, copy, openLink } from '../tg.js';
 import { BOT_USERNAME } from '../config.js';
 
@@ -40,8 +45,9 @@ const TILES = [
   ['o.finance', 'wallet', 'Финансы', 'Доходы и расходы', '#F79009', 'finance'],
   ['o.broadcasts', 'megaphone', 'Рассылки', 'Вернуть клиентов', '#EC4899', 'clients'],
   ['o.analytics', 'chart', 'Аналитика', 'Что растёт, что падает', '#0EA5E9', 'analytics'],
-  ['o.reviews', 'star', 'Отзывы', 'Оценки после визитов', '#F5A524', 'analytics'],
+  ['o.reviews', 'star', 'Отзывы', 'Оценки после визитов', '#F5A524', 'reviews'],
   ['o.help', 'info', 'Обучение', 'Как всё устроено', '#12B76A', null],
+  ['o.support', 'msg', 'Поддержка', 'Написать и посмотреть ответ', '#8B5CF6', null],
   ['o.subscription', 'crown', 'Подписка', 'Тариф и оплата', '#F5A524', 'billing'],
   ['o.settings', 'gear', 'Настройки', 'Компания и профиль', '#7C8AA5', 'settings'],
 ];
@@ -157,6 +163,49 @@ on('tm.invKill', async ds => {
   revokeInvite(ds.id);
   patchInvite(ds.id, { revokedAt: new Date().toISOString() });
   toast('Приглашение отозвано', 'dan');
+});
+
+/* Предложение открыть доступ конкретному сотруднику. Приглашение
+   выписывается на его карточку, поэтому вошедший встанет за неё, а не
+   появится вторым человеком с тем же именем. */
+function askInvite(e) {
+  const s = sheet({
+    title: 'Открыть доступ?',
+    body: `<div class="center" style="padding:2px 0 12px">
+        <div class="tint" style="width:52px;height:52px;margin:0 auto 10px;background:var(--p-soft);color:var(--p)">${icon('userPlus', 26)}</div>
+        <div class="b" style="font-size:16px">${esc(e.name)} в расписании</div>
+        <div class="sm muted" style="margin-top:2px">${esc(e.role)}</div>
+      </div>
+      <div class="card flat" style="padding:13px">
+        <div class="sm" style="color:var(--tx-2);line-height:1.5">
+          Сейчас это карточка в расписании: на неё можно ставить записи и задать график.
+          Чтобы человек увидел свой день в приложении и получал уведомления,
+          отправьте ему ссылку-приглашение.
+        </div>
+      </div>
+      <div class="tiny dim" style="margin-top:10px;padding:0 4px">Ссылка одноразовая и привяжется именно к этой карточке.</div>`,
+    footer: `<div class="btns">
+      <button class="btn gh" data-a="tm.inviteSkip" data-id="${e.id}">Позже</button>
+      <button class="btn p" data-a="tm.inviteFor" data-id="${e.id}">${icon('link', 18)}Создать ссылку</button>
+    </div>`,
+  });
+  window.__tmInv = { s, employee: e };
+}
+on('tm.inviteSkip', ds => {
+  window.__tmInv.s.close();
+  toast('Карточка создана, доступ можно открыть позже');
+  go('o.employee', { id: ds.id });
+});
+on('tm.inviteFor', ds => {
+  const e = emp(ds.id);
+  if (!e) return;
+  const inv = createInvite({ access: e.access || 'staff', role: e.role, days: 7, employeeId: e.id });
+  pushInvite(inv);
+  // Обработчик зовётся и из шторки после создания, и из карточки сотрудника,
+  // где шторки нет вовсе.
+  const open = window.__tmInv && window.__tmInv.s;
+  if (open) window.__tmInv.s.close();
+  setTimeout(() => showInvite(inv.id), open ? 260 : 0);
 });
 
 const inviteLink = id => 'https://t.me/' + BOT_USERNAME + '?start=' + id;
@@ -351,6 +400,15 @@ on('sv.del', async ds => {
 /* =========================================================
    Команда
    ========================================================= */
+/* Карточка сотрудника и человек за ней — разные вещи. Пока не отправлено
+   приглашение, это просто строка в расписании: уведомления ей слать некому
+   и в приложение она не заходит. Раньше это было никак не видно. */
+const ACCESS_LABEL = {
+  linked: '',
+  invited: ' · <span style="color:var(--warn)">ссылка отправлена</span>',
+  none: ' · <span style="color:var(--tx-3)">без доступа</span>',
+};
+
 route('o.team', {
   perm: 'team',
   tab: 'o.team',
@@ -361,7 +419,7 @@ route('o.team', {
       ic: 'users',
     });
   },
-  fab: () => `<button class="fab" data-a="tm.add">${icon('plus', 26, 2.4)}</button>`,
+  fab: () => `<button class="fab" data-a="tm.invite">${icon('userPlus', 24, 2.2)}</button>`,
   render() {
     const list = emps();
     return `
@@ -375,11 +433,12 @@ route('o.team', {
       ${list.map(e => {
       const t = todayStats(cid(), e.id);
       const w = workDay(e, now());
+      const acc = employeeAccess(e);
       return `<button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="nav" data-r="o.employee" data-id="${e.id}">
           ${avatar(e, 'm')}
           <div class="grow" style="text-align:left">
             <div class="tl">${esc(e.name)}${e.isOwner ? ' <span class="bdg p" style="margin-left:4px">вы</span>' : ''}</div>
-            <div class="st">${esc(e.role)}</div>
+            <div class="st">${esc(e.role)}${ACCESS_LABEL[acc] || ''}</div>
             <div class="row tiny" style="gap:8px;margin-top:3px;color:var(--tx-3)">
               <span class="row" style="gap:4px"><i class="dot ${w ? '' : 'off'}"></i>${w ? 'работает ' + w.from + '–' + w.to : 'выходной'}</span>
               ${e.takesAppointments ? `<span>· сегодня ${t.count}</span>` : ''}
@@ -389,35 +448,40 @@ route('o.team', {
         </button>`;
     }).join('')}
     </div>
-    ${emps().length <= 1 ? `<div class="wrap sec">${emptyState({ ic: 'users', title: 'Вы пока работаете один', text: 'Добавьте сотрудников, когда команда расширится.', action: 'Добавить сотрудника', act: 'tm.add' })}</div>` : ''}`;
+    ${emps().length <= 1 ? `<div class="wrap sec">${emptyState({ ic: 'users', title: 'Вы пока работаете один', text: 'Сотрудник заводит себя сам: отправьте ему ссылку — он заполнит имя и телефон и получит свой кабинет.', action: 'Пригласить по ссылке', act: 'tm.invite' })}</div>` : ''}`;
   },
 });
 
-on('tm.add', () => {
-  const st = { svcs: svcs().map(s => s.id) };
-  const s = sheet({
-    title: 'Новый сотрудник',
-    body: `<div class="field"><label>Имя</label><input class="inp" id="_n" placeholder="Например, Асель Нурланова"></div>
-      <div class="field"><label>Должность</label>
-        <div class="pick">${['Мастер маникюра', 'Парикмахер', 'Барбер', 'Бровист', 'Массажист', 'Администратор'].map((r, i) => `<button class="o ${i === 0 ? 'on' : ''}" data-a="tm.role" data-r="${esc(r)}">${r}</button>`).join('')}</div></div>
-      <div class="field"><label>Телефон</label><input class="inp" id="_p" placeholder="+7 ___ ___ __ __" inputmode="tel"></div>
-      <div class="field"><label>Роль</label>
-        <div class="pick">${Object.entries(ROLES).filter(([k]) => k !== 'owner').map(([k, r], i) => `<button class="o ${i === 0 ? 'on' : ''}" data-a="tm.access" data-v="${k}">${r.t}</button>`).join('')}</div></div>
-      <div class="tiny dim">После добавления сразу предложим настроить график и услуги.</div>`,
-    footer: `<button class="btn p" data-a="tm.ok">Добавить сотрудника</button>`,
-  });
-  window.__tm = { s, role: 'Мастер маникюра', access: 'staff', st };
-  on('tm.role', (ds, el) => { window.__tm.role = ds.r; s.el.querySelectorAll('[data-a="tm.role"]').forEach(o => o.classList.toggle('on', o === el)); });
-  on('tm.access', (ds, el) => { window.__tm.access = ds.v; s.el.querySelectorAll('[data-a="tm.access"]').forEach(o => o.classList.toggle('on', o === el)); });
-  on('tm.ok', () => {
-    const n = s.el.querySelector('#_n').value.trim();
-    if (!n) { toast('Введите имя', 'dan'); return; }
-    const e = createEmployee({ name: n, role: window.__tm.role, phone: s.el.querySelector('#_p').value.trim() });
-    setRole(e.id, window.__tm.access || 'staff');
-    s.close(); toast('Добавлен: ' + ROLES[window.__tm.access || 'staff'].t); go('o.employee', { id: e.id });
-  });
-  setTimeout(() => s.el.querySelector('#_n').focus(), 250);
-});
+/* Сотрудника заводит он сам, а не владелец за него. Раньше здесь была
+   форма «имя, должность, телефон» — и появлялась карточка, за которой нет
+   человека: он не видел своих записей, не получал уведомлений, а владелец
+   думал, что сотрудник добавлен. Единственный путь теперь —
+   ссылка-приглашение (tm.invite выше): человек открывает её, подставляет
+   имя и телефон из Telegram и сразу получает свой кабинет. */
+
+/* Строка «вход в приложение». Владелец должен видеть не роль, а факт:
+   зашёл этот человек или карточка до сих пор ничья. От этого зависит,
+   придут ли ему уведомления о записях. */
+function accessRow(e) {
+  if (e.isOwner) return '';
+  const acc = employeeAccess(e);
+  if (acc === 'linked') {
+    return `<div class="lrow" style="border-radius:16px;border:1px solid var(--bd);width:100%">
+      <div class="ic" style="background:var(--ok-soft);color:var(--ok)">${icon('checkCircle', 19)}</div>
+      <div class="grow"><div class="tl">Вход в приложение открыт</div>
+        <div class="st">Видит свои записи и получает уведомления</div></div>
+    </div>`;
+  }
+  const invited = acc === 'invited';
+  return `<button class="lrow press" style="border-radius:16px;border:1px ${invited ? 'solid' : 'dashed'} var(--bd-2);width:100%" data-a="tm.inviteFor" data-id="${e.id}">
+    <div class="ic" style="background:var(--warn-soft);color:var(--warn)">${icon('link', 19)}</div>
+    <div class="grow" style="text-align:left">
+      <div class="tl">${invited ? 'Ссылка отправлена' : 'Открыть вход в приложение'}</div>
+      <div class="st">${invited
+        ? 'Человек ещё не вошёл — можно выписать новую ссылку'
+        : 'Пока это карточка в расписании: уведомления слать некому'}</div>
+    </div>${icon('fwd', 18)}</button>`;
+}
 
 route('o.employee', {
   perm: 'team',
@@ -438,7 +502,7 @@ route('o.employee', {
       <div class="sm muted">${esc(e.role)}</div>
       <div class="row" style="justify-content:center;gap:6px;margin-top:8px;flex-wrap:wrap">
         <span class="bdg ${w ? 'ok' : ''}">${w ? 'сегодня ' + w.from + '–' + w.to : 'выходной'}</span>
-        ${e.rating ? `<span class="bdg warn">${icon('star', 11, 2.4)} ${e.rating}</span>` : ''}
+        ${can('reviews') && e.rating ? `<span class="bdg warn">${icon('star', 11, 2.4)} ${e.rating}</span>` : ''}
         ${expBadge(e)}
       </div>
     </div>
@@ -465,6 +529,7 @@ route('o.employee', {
         <div class="ic" style="background:var(--sf-3)">${icon('shield', 19)}</div>
         <div class="grow" style="text-align:left"><div class="tl">Роль: ${roleName(e)}</div>
           <div class="st">${ROLES[roleOf(e)].perms.length} ${plural(ROLES[roleOf(e)].perms.length, ['право', 'права', 'прав'])} доступа</div></div>${icon('fwd', 18)}</button>
+      ${accessRow(e)}
     </div></div>
 
     <div class="wrap sec">
@@ -675,10 +740,9 @@ route('o.schedule', {
         </div>`;
     }).join('')}
     </div>
-    <div class="wrap sec"><div class="btns">
-      <button class="btn gh" data-a="sch.copy" data-id="${e.id}">${icon('copy', 18)}Копировать график</button>
+    <div class="wrap sec">
       <button class="btn gh" data-a="sch.block" data-id="${e.id}">${icon('lock', 18)}Занять время</button>
-    </div></div>
+    </div>
     <div class="sec">
       <div class="sec-h"><div class="sec-t">Отсутствия и блокировки</div>
         <button class="sec-a" data-a="sch.away" data-id="${e.id}">${icon('plus', 14)} Отпуск / больничный</button></div>
@@ -700,53 +764,99 @@ on('sch.day', ds => {
 });
 on('sch.time', ds => {
   const e = emp(ds.id); const w = e.schedule[ds.d];
-  timePick(w[ds.k], v => { w[ds.k] = v; updateEmployee(ds.id, {}); toast('График обновлён'); });
-});
-on('sch.break', ds => {
-  const e = emp(ds.id); const w = e.schedule[ds.d];
-  const has = (w.breaks || []).length;
-  const s = sheet({
-    title: 'Перерыв',
-    body: has ? `<div class="stack s">${w.breaks.map((b, i) => `<div class="lrow" style="border-radius:14px;border:1px solid var(--bd)">
-        <div class="ic" style="background:var(--warn-soft);color:var(--warn)">${icon('coffee', 18)}</div>
-        <div class="grow"><div class="tl">${b.from} — ${b.to}</div></div>
-        <button class="ico-btn flat" data-a="br.del" data-id="${ds.id}" data-d="${ds.d}" data-i="${i}">${icon('trash', 17)}</button></div>`).join('')}</div>`
-      : `<div class="sm muted" style="padding-bottom:8px">Перерывов нет. Добавьте обед или паузу — это время не будет доступно для записи.</div>`,
-    footer: `<div class="pick">${[['12:00', '13:00'], ['13:00', '14:00'], ['14:00', '15:00'], ['15:00', '15:30']].map(b => `<button class="o" data-a="br.add" data-id="${ds.id}" data-d="${ds.d}" data-f="${b[0]}" data-t="${b[1]}">${b[0]}–${b[1]}</button>`).join('')}</div>`,
+  timeSheet({
+    title: ds.k === 'from' ? 'Начало дня' : 'Конец дня',
+    value: toMin(w[ds.k]),
+    onOk: v => {
+      // Конец раньше начала — это не график, а ошибка ввода.
+      if (ds.k === 'from' && v >= toMin(w.to)) { toast('Начало должно быть раньше конца', 'dan'); return; }
+      if (ds.k === 'to' && v <= toMin(w.from)) { toast('Конец должен быть позже начала', 'dan'); return; }
+      w[ds.k] = toHM(v);
+      updateEmployee(ds.id, {});
+      toast('График обновлён');
+    },
   });
-  window.__br = s;
 });
-on('br.add', ds => {
-  const e = emp(ds.id); const w = e.schedule[ds.d];
-  w.breaks = w.breaks || []; w.breaks.push({ from: ds.f, to: ds.t });
-  updateEmployee(ds.id, {}); window.__br.close(); toast('Перерыв добавлен');
+/* Перерыв — своё время, а не четыре готовых варианта. Обед у всех
+   свой, и «12:00–13:00 или 13:00–14:00» закрывало полтора случая
+   из десяти. Барабан тот же, что и в «Занять время». */
+on('sch.break', ds => {
+  const e = emp(ds.id), w = e.schedule[ds.d];
+  const day = { from: toMin(w.from), to: toMin(w.to) };
+  const st = { from: Math.min(day.from + 180, day.to - 60), to: 0, edit: 'from', adding: false };
+  st.to = st.from + 60;
+  const s2 = sheet({ title: 'Перерыв', body: '' });
+
+  const list = () => (w.breaks || []);
+  const overlap = (f, t2) => list().some(b => f < toMin(b.to) && t2 > toMin(b.from));
+
+  const sync = () => {
+    const bad = st.to <= st.from;
+    const out = st.from < day.from || st.to > day.to;
+    const ok = s2.el.querySelector('[data-a="br.ok"]');
+    if (!ok) return;
+    ok.disabled = bad || out || overlap(st.from, st.to);
+    ok.textContent = bad ? 'Конец раньше начала'
+      : out ? 'Выходит за рабочий день'
+        : overlap(st.from, st.to) ? 'Пересекается с другим перерывом'
+          : 'Добавить ' + toHM(st.from) + '–' + toHM(st.to);
+  };
+
+  const draw = () => {
+    if (!st.adding) {
+      s2.set({
+        title: 'Перерывы · ' + WD_FULL[ds.d],
+        body: `<div class="tiny dim" style="margin-bottom:12px">Рабочий день ${w.from} — ${w.to}. В перерыв клиенты записаться не смогут.</div>
+          ${list().length ? `<div class="stack s">${list().map((b, i) => `<div class="lrow" style="border-radius:14px;border:1px solid var(--bd)">
+              <div class="ic" style="background:var(--warn-soft);color:var(--warn)">${icon('coffee', 18)}</div>
+              <div class="grow"><div class="tl">${b.from} — ${b.to}</div>
+                <div class="st">${nMin(toMin(b.to) - toMin(b.from))}</div></div>
+              <button class="ico-btn flat" data-a="br.del" data-id="${ds.id}" data-d="${ds.d}" data-i="${i}">${icon('trash', 17)}</button>
+            </div>`).join('')}</div>`
+          : `<div class="card pad center sm muted">Перерывов нет</div>`}`,
+        footer: `<button class="btn p" data-a="br.new">${icon('plus', 18)}Добавить перерыв</button>`,
+      });
+      return;
+    }
+    s2.set({
+      title: 'Когда перерыв?',
+      back: () => { st.adding = false; draw(); },
+      body: rangeWheels(st, hoursBetween(day.from, day.to), [15, 30, 45, 60, 90]),
+      footer: `<button class="btn p" data-a="br.ok" data-id="${ds.id}" data-d="${ds.d}">Добавить</button>`,
+      mount: root => mountRangeWheels(root, st, sync),
+    });
+    sync();
+  };
+
+  on('br.new', () => { st.adding = true; draw(); });
+  on('rw.edit', d2 => { st.edit = d2.v; draw(); });
+  on('rw.len', d2 => { st.to = st.from + +d2.m; if (st.edit === 'to') draw(); else sync(); });
+  on('br.ok', d2 => {
+    if (st.to <= st.from || st.from < day.from || st.to > day.to || overlap(st.from, st.to)) return;
+    const e2 = emp(d2.id), w2 = e2.schedule[d2.d];
+    w2.breaks = w2.breaks || [];
+    w2.breaks.push({ from: toHM(st.from), to: toHM(st.to) });
+    w2.breaks.sort((x, y) => toMin(x.from) - toMin(y.from));
+    updateEmployee(d2.id, {});
+    st.adding = false;
+    draw();
+    toast('Перерыв добавлен');
+  });
+  on('br.del', d2 => {
+    const e2 = emp(d2.id), w2 = e2.schedule[d2.d];
+    w2.breaks.splice(+d2.i, 1);
+    updateEmployee(d2.id, {});
+    draw();
+    toast('Перерыв удалён');
+  });
+
+  draw();
 });
-on('br.del', ds => {
-  const e = emp(ds.id); const w = e.schedule[ds.d];
-  w.breaks.splice(+ds.i, 1); updateEmployee(ds.id, {}); window.__br.close(); toast('Перерыв удалён');
-});
-on('sch.copy', async ds => {
-  const e = emp(ds.id);
-  const src = e.schedule[1];
-  const ok = await confirmSheet({ title: 'Применить график понедельника?', text: `${src.on ? src.from + '–' + src.to : 'Выходной'} будет установлен на все будние дни.`, ok: 'Применить' });
-  if (!ok) return;
-  [2, 3, 4, 5].forEach(d => { e.schedule[d] = JSON.parse(JSON.stringify(src)); });
-  updateEmployee(ds.id, {}); toast('График обновлён');
-});
+
 on('sch.block', ds => blockFlow({ empId: ds.id }));
 on('sch.away', ds => absenceFlow({ empId: ds.id }));
 on('sch.unblock', ds => { removeBlock(ds.id); toast('Блокировка снята'); });
 
-export function timePick(current, cb) {
-  const times = [];
-  for (let h = 6; h <= 23; h++) { times.push(String(h).padStart(2, '0') + ':00'); times.push(String(h).padStart(2, '0') + ':30'); }
-  const s = sheet({
-    title: 'Выберите время',
-    body: `<div class="slots">${times.map(t => `<button class="slot ${t === current ? 'on' : ''}" data-a="tp.p" data-t="${t}">${t}</button>`).join('')}</div>`,
-  });
-  window.__tp = { s, cb };
-}
-on('tp.p', ds => { const { s, cb } = window.__tp; s.close(); cb(ds.t); });
 
 /* =========================================================
    Период: общий компонент для финансов и аналитики
@@ -1308,6 +1418,112 @@ const LESSONS = [
   },
 ];
 
+/* =========================================================
+   Поддержка компании
+   ---------------------------------------------------------
+   Раньше обращения существовали только со стороны Super Admin: он их
+   видел, но написать их было неоткуда. Владелец не мог ни спросить, ни
+   узнать ответ — в том числе на вопрос «почему меня заблокировали».
+   ========================================================= */
+route('o.support', {
+  tab: 'o.more',
+  fab: () => `<button class="fab" data-a="sp.new">${icon('plus', 26, 2.4)}</button>`,
+  render() {
+    const mine = tickets().filter(t => t.companyId === cid() && t.from !== 'client');
+    return `
+    <div class="top"><button class="ico-btn" data-a="back">${icon('back', 19)}</button>
+      <div class="grow"><div class="top-t">Поддержка</div>
+        <div class="top-sub">${mine.length ? mine.length + ' ' + plural(mine.length, ['обращение', 'обращения', 'обращений']) : 'Вопросы по платформе'}</div></div></div>
+
+    <div class="wrap stack s">
+      ${mine.length ? mine.map(tk => {
+        const st = TICKET_STATUS[tk.status] || TICKET_STATUS.new;
+        const last = tk.messages[tk.messages.length - 1];
+        const answered = last.from === 'support';
+        return `<button class="card press" style="width:100%;padding:13px 14px;text-align:left" data-a="sp.open" data-id="${tk.id}">
+          <div class="row between" style="gap:8px;margin-bottom:4px">
+            <b class="sm nowrap">${esc(tk.subject)}</b>
+            <span class="bdg" style="background:${st.color}1f;color:${st.color};flex:none">${st.t}</span>
+          </div>
+          <div class="tiny muted">${esc(TICKET_TOPICS[tk.topic] || tk.topic)} · ${relPast(new Date(tk.updatedAt), now())}</div>
+          <div class="tiny ${answered ? '' : 'dim'}" style="margin-top:5px;${answered ? 'color:var(--ok)' : ''}">
+            ${answered ? 'Поддержка ответила: ' : 'Вы: '}${esc(String(last.text).slice(0, 70))}${String(last.text).length > 70 ? '…' : ''}</div>
+        </button>`;
+      }).join('') : emptyState({
+        ic: 'msg', title: 'Обращений нет',
+        text: 'Напишите, если что-то не работает или непонятно. Ответ придёт сюда и в «Уведомления».',
+        action: 'Написать в поддержку', act: 'sp.new',
+      })}
+    </div>`;
+  },
+});
+
+on('sp.new', () => {
+  const st = { topic: 'bug' };
+  const s = sheet({
+    title: 'Новое обращение',
+    body: `<div class="field"><label>Тема</label>
+        <div class="pick">${Object.entries(TICKET_TOPICS).filter(([k]) => k !== 'complaint')
+          .map(([k, v]) => `<button class="o ${k === 'bug' ? 'on' : ''}" data-a="sp.topic" data-v="${k}">${esc(v)}</button>`).join('')}</div></div>
+      <div class="field"><label>Коротко о чём</label><input class="inp" id="_ss" placeholder="Например, не приходят напоминания"></div>
+      <div class="field"><label>Подробности</label>
+        <textarea class="inp" id="_st" style="min-height:110px" placeholder="Что происходит и что вы ожидали"></textarea></div>
+      <div class="tiny dim" style="padding:0 4px">Ответ придёт в «Уведомления» и сюда же, в обращение.</div>`,
+    footer: `<button class="btn p" data-a="sp.send">${icon('send', 18)}Отправить</button>`,
+  });
+  window.__sp = { s, st };
+});
+on('sp.topic', (ds, el) => {
+  window.__sp.st.topic = ds.v;
+  window.__sp.s.el.querySelectorAll('[data-a="sp.topic"]').forEach(o => o.classList.toggle('on', o === el));
+});
+on('sp.send', () => {
+  const { s, st } = window.__sp;
+  const subject = (s.el.querySelector('#_ss').value || '').trim();
+  const text = (s.el.querySelector('#_st').value || '').trim();
+  if (!subject) { toast('Укажите тему', 'dan'); return; }
+  if (!text) { toast('Опишите проблему', 'dan'); return; }
+  addTicket({ topic: st.topic, subject, text, from: 'company' });
+  s.close();
+  toast('Обращение отправлено');
+  rr();
+});
+on('sp.open', ds => {
+  const draw = () => {
+    const tk = tickets().find(x => x.id === ds.id);
+    if (!tk) return;
+    const st = TICKET_STATUS[tk.status] || TICKET_STATUS.new;
+    window.__spv.s.set({
+      title: tk.subject,
+      body: `<div class="row between" style="margin-bottom:12px">
+          <div class="tiny muted">${esc(TICKET_TOPICS[tk.topic] || tk.topic)}</div>
+          <span class="bdg" style="background:${st.color}1f;color:${st.color}">${st.t}</span>
+        </div>
+        <div class="stack s" style="margin-bottom:14px">
+          ${tk.messages.map(m => `<div class="tk-msg ${m.from === 'support' ? '' : 'ours'}">
+            <div class="sm" style="line-height:1.5">${esc(m.text)}</div>
+            <div class="tiny dim" style="margin-top:4px">${m.from === 'support' ? 'поддержка' : 'вы'} · ${relPast(new Date(m.at), now())}</div>
+          </div>`).join('')}
+        </div>
+        ${tk.status === 'closed' ? '<div class="tiny dim">Обращение закрыто.</div>'
+          : `<div class="field"><label>Дополнить</label>
+              <textarea class="inp" id="_sr" style="min-height:80px" placeholder="Ещё что-то важное"></textarea></div>`}`,
+      footer: tk.status === 'closed' ? '' :
+        `<button class="btn p" data-a="sp.reply" data-id="${tk.id}">${icon('send', 17)}Отправить</button>`,
+    });
+  };
+  window.__spv = { s: sheet({ title: '', body: '' }), draw };
+  draw();
+});
+on('sp.reply', ds => {
+  const el = window.__spv.s.el.querySelector('#_sr');
+  const text = (el.value || '').trim();
+  if (!text) { toast('Введите текст', 'dan'); return; }
+  replyTicket(ds.id, text, 'company');
+  window.__spv.draw();
+  toast('Отправлено');
+});
+
 route('o.help', {
   tab: 'o.more',
   render() {
@@ -1362,7 +1578,7 @@ route('o.help', {
 on('hp.step', ds => {
   const act = ds.act;
   if (act === 'o.share') { go('o.more'); setTimeout(() => fire('o.share'), 200); return; }
-  if (act === 'tm.add') { go('o.team'); setTimeout(() => fire('tm.add'), 200); return; }
+  if (act === 'tm.invite') { go('o.team'); setTimeout(() => fire('tm.invite'), 200); return; }
   fire(act);
 });
 on('hp.lesson', ds => {
@@ -1395,17 +1611,22 @@ on('hp.tips', async () => {
   if (!ok) return;
   resetTips(); toast('Подсказки включены');
 });
-on('hp.support', () => demoNote('Поддержка',
-  'В рабочей версии кнопка открывает чат с поддержкой прямо в Telegram.',
-  'В демо переписки нет — показываем, как это будет выглядеть.'));
+// Поддержка теперь настоящая: обращение уходит в Super Admin, ответ
+// возвращается сюда и в «Уведомления». Заглушка больше не нужна.
+on('hp.support', () => go('o.support'));
 
 /* =========================================================
    Отзывы (§80, §81)
-   Наружу не публикуются: это внутренний инструмент качества.
+   ---------------------------------------------------------
+   Наружу не публикуются и внутрь салона тоже не расходятся:
+   раздел открыт только владельцу (право reviews в store.js).
+   Мастер не должен читать, что о нём написали, — иначе честная
+   оценка превращается в разговор клиента с мастером, а не в
+   сигнал тому, кто может что-то поменять.
    ========================================================= */
 const rvf = { emp: null, stars: 0 };
 route('o.reviews', {
-  perm: 'analytics',
+  perm: 'reviews',
   tab: 'o.more',
   render() {
     let list = reviews().slice().sort((a, b) => new Date(b.createdAt || b.date) - new Date(a.createdAt || a.date));
@@ -1458,7 +1679,7 @@ route('o.reviews', {
         </div>`;
     }).join('') : `<div class="card pad center sm muted">По этому фильтру отзывов нет</div>`}
     </div>
-    <div class="wrap sec"><div class="tiny dim center">Отзывы видны только вам: на странице записи они не публикуются.</div></div>`}`;
+    <div class="wrap sec"><div class="tiny dim center" style="line-height:1.5">Оценку видит только владелец — ни мастера, ни администратор её не открывают. На странице записи отзывы не публикуются.</div></div>`}`;
   },
 });
 on('rvf.all', () => { rvf.emp = null; rvf.stars = 0; rr(); });
@@ -1686,6 +1907,10 @@ route('o.settings', {
     </div>
 
     <div class="wrap sec"><div class="stack s">
+      ${row('user', 'Мои данные', me() && me().phone ? esc(me().name) + ' · ' + esc(prettyPhone(me().phone)) : 'Имя и телефон — добавьте номер', 'set.me')}
+    </div></div>
+
+    <div class="wrap sec"><div class="stack s">
       ${row('building', 'О компании', 'Название, адрес, телефон и цвет', 'set.company')}
       ${row('image', 'Фото и логотип', c.logo || c.cover ? 'Показываются на странице записи' : 'Пока не загружены', 'set.photos')}
     </div></div>
@@ -1725,33 +1950,21 @@ route('o.settings', {
     <div class="wrap sec"><div class="center tiny dim" data-a="set.secret" style="padding:10px;user-select:none">Zapis · демо-версия 2.0<br>Все данные хранятся только на вашем устройстве</div></div>`;
   },
 });
-/* Клиенты, пришедшие по ссылке салона, видят в приложении тихий вход
-   в каталог других салонов. Это приток клиентов из каталога в обе стороны,
-   но салону, который платит за привлечение, нужна возможность закрыть его
-   совсем — иначе рядом с его записями стоит ссылка на соседей. */
+/* Салон попадает в справочник, из которого бот берёт его страницу
+   по присланной ссылке. Пока карточка не дозаполнена, страницы нет —
+   владелец должен узнать об этом здесь, а не гадать, почему ссылка
+   открывается пустой. Каталога для клиента в приложении нет, поэтому
+   и переключателя «только мой салон» больше не нужно. */
 function catalogSection(c) {
-  const allowed = canOnlyMine(c);
-  const on = allowed && !!c.onlyMine;
-  // Пока карточка не дозаполнена, салона в каталоге нет. Владелец должен
-  // узнать об этом здесь, а не гадать, почему его никто не находит.
+  if (catalogReady(c)) return '';
   const missing = catalogMissing(c);
-  const listed = catalogReady(c);
-  return `<div class="wrap sec"><div class="stack s">
-    ${listed ? '' : `<div class="lrow" style="border-radius:16px;border:1px solid var(--warn-soft);background:var(--warn-soft)">
+  return `<div class="wrap sec">
+    <div class="lrow" style="border-radius:16px;border:1px solid var(--warn-soft);background:var(--warn-soft)">
       <div class="ic" style="background:var(--warn);color:#fff">${icon('alert', 18)}</div>
-      <div class="grow"><div class="tl">Салона нет в каталоге</div>
+      <div class="grow"><div class="tl">Страница записи ещё не готова</div>
         <div class="st">Осталось заполнить: ${esc(missing.join(', '))}</div></div>
-    </div>`}
-    <div class="lrow" style="border-radius:16px;border:1px solid var(--bd)">
-      <div class="ic">${icon('search', 18)}</div>
-      <div class="grow"><div class="tl">Только мой салон</div>
-        <div class="st">${!allowed ? 'Доступно на тарифе PRO' : on ? 'Каталог скрыт' : 'Каталог виден клиентам'}</div></div>
-      <button class="sw ${on ? 'on' : ''}" data-a="set.onlyMine" ${allowed ? '' : 'disabled style="opacity:.4"'}></button>
     </div>
-    <div class="tiny dim" style="padding:0 4px">${on
-      ? 'Ваши клиенты видят только ваш салон. Найти вас в каталоге посторонние по-прежнему могут.'
-      : 'Сейчас в «Моих записях» и профиле у клиента есть строка «Записаться в другом месте». На вашей странице её нет.'}</div>
-  </div></div>`;
+  </div>`;
 }
 
 const row = (ic, t, s, a, extra = '') => `<button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="${a}" ${extra}>
@@ -1760,12 +1973,18 @@ const row = (ic, t, s, a, extra = '') => `<button class="lrow press" style="bord
   <span class="chev">${icon('fwd', 17, 2)}</span></button>`;
 
 on('set.lang', ds => { setLang(ds.v); });
-on('set.onlyMine', ds => {
-  const c = co();
-  if (!canOnlyMine(c)) { toast('Доступно на тарифе PRO', 'dan'); return; }
-  c.onlyMine = !c.onlyMine;
-  emit();
-  toast(c.onlyMine ? 'Каталог скрыт от ваших клиентов' : 'Каталог снова виден клиентам');
+/* Владелец — такой же сотрудник компании, и его имя видят клиенты
+   в записях. Раньше поменять его можно было только через «Команду». */
+on('set.me', () => {
+  const e = me(); if (!e) return;
+  myDataSheet({
+    name: e.name, phone: e.phone || '',
+    note: 'Имя видят клиенты в своих записях, телефон — поддержка платформы.',
+    onSave: v => updateEmployee(e.id, {
+      ...v,
+      initials: v.name.split(' ').filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase(),
+    }),
+  });
 });
 on('set.theme', async ds => { S.theme = ds.v; const m = await import('../main.js'); m.applyTheme(); emit(); });
 on('set.company', () => {
@@ -1948,12 +2167,16 @@ on('ch.day', ds => {
 });
 on('ch.time', ds => {
   const c = co();
-  timePick(c.hours[ds.d][ds.k], v => {
-    const w = c.hours[ds.d];
-    w[ds.k] = v;
-    // конец не может быть раньше начала
-    if (toMin(w.to) <= toMin(w.from)) w.to = toHM(Math.min(23 * 60 + 30, toMin(w.from) + 60));
-    emit(); window.__ch.draw(); toast('Часы обновлены');
+  timeSheet({
+    title: ds.k === 'from' ? 'Открытие' : 'Закрытие',
+    value: toMin(c.hours[ds.d][ds.k]),
+    onOk: v => {
+      const w = c.hours[ds.d];
+      w[ds.k] = toHM(v);
+      // конец не может быть раньше начала
+      if (toMin(w.to) <= toMin(w.from)) w.to = toHM(Math.min(23 * 60 + 30, toMin(w.from) + 60));
+      emit(); window.__ch.draw(); toast('Часы обновлены');
+    },
   });
 });
 on('ch.copy', ds => {
@@ -1993,8 +2216,8 @@ on('set.reminders', () => {
 });
 on('rm.t', (ds, el) => el.classList.toggle('on'));
 on('rm.test', () => demoNote('Напоминания',
-  'Бот действительно шлёт напоминания за 24 часа и за 2 часа — но только по записям, сделанным в чате бота: у него своя база. Записи из приложения живут в браузере этого устройства и до бота не доходят.',
-  'Очередь напоминаний видна в боте: меню бизнеса → «Очередь напоминаний». Как выглядит напоминание мастеру с AI-шпаргалкой — в демо-панели.'));
+  'Бот шлёт напоминания за 24 часа и за 2 часа — и по записям из чата, и по записям из приложения: они попадают в общий склад на сервере, и бот их видит.',
+  'Если сервер не запущен, приложение работает на localStorage — тогда до бота записи не доходят и напоминаний по ним не будет.'));
 on('set.ai', () => {
   const s = sheet({
     title: 'AI-помощник',

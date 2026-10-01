@@ -17,23 +17,32 @@
 import { S, catalogCompanies, svcs, staff, emit, allCompanies } from './store.js';
 
 const TIMEOUT = 6000;
+const MAX_FAILS = 3;       // столько неудач подряд — и до перезагрузки молчим
 let pushTimer = null;
 let lastPushed = '';
-let alive = true;          // сервер ответил хоть раз — иначе не тревожим его
+let alive = true;
+let fails = 0;
 
-async function req(url, opts = {}) {
+async function req(url, opts = {}, retry = true) {
   if (!alive) return null;
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), TIMEOUT);
   try {
     const r = await fetch(url, { ...opts, signal: ctl.signal });
     if (!r.ok) return null;
+    fails = 0;
     return await r.json();
   } catch (e) {
-    // Первая же неудача выключает синхронизацию до перезагрузки: сервера
-    // либо нет, либо он не наш, и долбиться в него на каждое сохранение
-    // бессмысленно.
-    alive = false;
+    // Одна осечка — не повод выключать синхронизацию. Раньше выключала:
+    // на старте приложение шлёт справочник и забирает записи одновременно,
+    // и переиспользованное соединение изредка обрывалось. После этого
+    // записи из Mini App молча переставали доходить до бота, а человек
+    // видел у него «Записей пока нет».
+    if (retry) {
+      await new Promise(r2 => setTimeout(r2, 300));
+      return req(url, opts, false);
+    }
+    if (++fails >= MAX_FAILS) alive = false;
     return null;
   } finally { clearTimeout(t); }
 }
@@ -94,17 +103,24 @@ export async function patchAppointment(id, patch) {
   });
 }
 
-/** Найти или завести карточку клиента по имени: записи из чата приходят
-    без clientId — в боте своих карточек клиентов нет. */
-function clientFor(companyId, name, tg) {
+/** Найти или завести карточку клиента: записи из чата приходят без clientId —
+    в боте своих карточек клиентов нет. Сначала ищем по telegram-id: имя
+    совпадает у разных людей, id — нет. */
+function clientFor(companyId, name, tgId, username) {
   const list = S.data.clients.filter(c => c.companyId === companyId);
-  const found = list.find(c => (tg && String(c.tg) === String(tg)) || c.name === name);
-  if (found) return found.id;
+  const found = list.find(c => (tgId && String(c.tgId) === String(tgId)))
+    || list.find(c => (username && String(c.tg).replace('@', '') === String(username).replace('@', '')))
+    || list.find(c => c.name === name);
+  if (found) {
+    if (tgId && !found.tgId) found.tgId = String(tgId);
+    return found.id;
+  }
   const initials = String(name || 'Клиент').split(' ').filter(Boolean)
     .slice(0, 2).map(w => w[0]).join('').toUpperCase();
   const rec = {
     id: 'cl_bot_' + Math.random().toString(36).slice(2, 8),
-    companyId, name: name || 'Клиент', phone: '', tg: tg ? String(tg) : '',
+    companyId, name: name || 'Клиент', phone: '',
+    tg: username ? String(username) : '', tgId: tgId ? String(tgId) : '',
     initials, color: '#06AED4', createdAt: new Date().toISOString(),
     note: '', ai: null, tags: [],
   };
@@ -141,7 +157,7 @@ export async function pullAppointments() {
     if ((a.serviceIds || []).some(x => !svcIds.has(x))) return;
     S.data.appointments.push({
       id: a.id, companyId: a.companyId,
-      clientId: a.clientId || clientFor(a.companyId, a.clientName, a.clientTg),
+      clientId: a.clientId || clientFor(a.companyId, a.clientName, a.clientTg, a.clientUsername),
       employeeId: a.employeeId, serviceIds: a.serviceIds || [],
       start: a.start, duration: a.duration || 60, price: a.price || 0,
       status: a.status || 'planned', note: a.note || '',

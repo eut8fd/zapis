@@ -34,6 +34,44 @@ export const nMin = m => m >= 60
     : Math.floor(m / 60) + ' ' + plural(Math.floor(m / 60), ['час', 'часа', 'часов']))
   : m + ' ' + t('мин');
 
+/* ---------------- Телефон ----------------
+   Пустую строку раньше сохраняли как «телефона нет», и салон лишался
+   единственного способа дозвониться, а человек об этом не узнавал.
+   Приводим к одному виду и проверяем длину: меньше десяти значащих
+   цифр — это не номер, а опечатка.
+------------------------------------------- */
+export function normPhone(v) {
+  let d = String(v || '').replace(/\D/g, '');
+  if (!d) return null;
+  // 8 700… и 7 700… — один и тот же номер, записанный по-разному
+  if (d.length === 11 && (d[0] === '8' || d[0] === '7')) d = '7' + d.slice(1);
+  else if (d.length === 10) d = '7' + d;
+  if (d.length < 11 || d.length > 15) return null;
+  return '+' + d;
+}
+
+/** Номер для показа: +7 700 123 45 67. */
+export function prettyPhone(v) {
+  const p = normPhone(v);
+  if (!p) return String(v || '');
+  const d = p.slice(1);
+  if (d.length === 11 && d[0] === '7') {
+    return `+7 ${d.slice(1, 4)} ${d.slice(4, 7)} ${d.slice(7, 9)} ${d.slice(9)}`;
+  }
+  return p;
+}
+
+/* ---------------- Ряд показателей ----------------
+   Подпись, крупное число, пояснение под ним. Пояснение здесь не
+   украшение: без него «5» и «39%» приходится разгадывать.
+--------------------------------------------------- */
+export function statBar(items) {
+  return `<div class="statbar">${items.map(i => `<div class="cell ${i[3] || ''}">
+    <span>${esc(i[0])}</span><strong${i[4] ? ` style="color:${i[4]}"` : ''}>${i[1]}</strong>
+    ${i[2] ? `<em>${esc(i[2])}</em>` : ''}${i[5] || ''}
+  </div>`).join('')}</div>`;
+}
+
 export function dateLabel(d, now) {
   const today = startOfDay(now), x = startOfDay(d);
   const diff = Math.round((x - today) / 86400000);
@@ -48,6 +86,18 @@ export function relPast(d, now) {
   if (days <= 0) return t('сегодня');
   if (days === 1) return t('вчера');
   const say = (n, forms) => t('{n} назад', { n: n + ' ' + plural(n, forms) });
+  if (days < 7) return say(days, ['день', 'дня', 'дней']);
+  if (days < 31) return say(Math.floor(days / 7), ['неделю', 'недели', 'недель']);
+  return say(Math.floor(days / 30), ['месяц', 'месяца', 'месяцев']);
+}
+/** То же, что relPast, но без «назад» — для узких плиток статистики.
+    Отрезать хвост строкой нельзя: в английском это «ago» в конце,
+    в казахском «бұрын», и replace(' назад') не находил ничего. */
+export function relShort(d, now) {
+  const days = Math.round((startOfDay(now) - startOfDay(d)) / 86400000);
+  if (days <= 0) return t('сегодня');
+  if (days === 1) return t('вчера');
+  const say = (n, forms) => n + ' ' + plural(n, forms);
   if (days < 7) return say(days, ['день', 'дня', 'дней']);
   if (days < 31) return say(Math.floor(days / 7), ['неделю', 'недели', 'недель']);
   return say(Math.floor(days / 30), ['месяц', 'месяца', 'месяцев']);
@@ -274,6 +324,7 @@ export function sheet(opts) {
       el.classList.remove('in'); mask.classList.remove('in');
       sheetStack = sheetStack.filter(s => s !== api);
       unlockScroll();
+      notifySheets();
       setTimeout(() => { el.remove(); mask.remove(); }, 440);
       if (api._o && api._o.onClose) api._o.onClose();
     }
@@ -293,11 +344,23 @@ export function sheet(opts) {
   api.set(opts);
   requestAnimationFrame(() => { mask.classList.add('in'); el.classList.add('in'); });
   sheetStack.push(api);
+  notifySheets();
   haptic('light');
   return api;
 }
 export function closeAllSheets() { sheetStack.slice().forEach(s => s.close()); }
 export const topSheet = () => sheetStack[sheetStack.length - 1] || null;
+
+/* Кнопка «назад» Telegram живёт в роутере, а шторки — здесь. Роутер
+   подписывается и обновляет кнопку, когда шторка появилась или закрылась:
+   без этого на корневом экране кнопки не было, и закрыть шторку системной
+   «назад» было нечем. */
+let sheetWatcher = null;
+export function onSheetsChanged(fn) { sheetWatcher = fn; }
+function notifySheets() {
+  if (!sheetWatcher) return;
+  try { sheetWatcher(sheetStack.length); } catch (e) { /* подписчик не должен ломать шторку */ }
+}
 
 export function confirmSheet({ title, text, ok = 'Подтвердить', cancel = 'Отмена', danger = false }) {
   return new Promise(res => {
@@ -317,7 +380,13 @@ export function confirmSheet({ title, text, ok = 'Подтвердить', cance
    модальная шторка при каждом входе раздражала бы сильнее,
    чем помогала. Отметку о показе ставит вызывающая сторона.
 --------------------------------------------------------------- */
-export function tipCard({ title, text, ic = 'info', onClose }) {
+/* Подсказка закрывается сама. Человек её прочитал и пошёл дальше —
+   висеть до конца сессии она не должна, особенно на экранах, где
+   перекрывает кнопки. Таймер останавливается, если по ней ведут пальцем:
+   длинный текст успевают дочитать. */
+export const TIP_LIFE = 9000;
+
+export function tipCard({ title, text, ic = 'info', onClose, life = TIP_LIFE }) {
   const host = $('#toasts');
   const el = document.createElement('div');
   el.className = 'tip';
@@ -336,6 +405,10 @@ export function tipCard({ title, text, ic = 'info', onClose }) {
     if (onClose) onClose();
   };
   el.querySelector('.tip-x').onclick = close;
+  let timer = life ? setTimeout(close, life) : null;
+  const hold = () => { if (timer) { clearTimeout(timer); timer = null; } };
+  el.addEventListener('pointerdown', hold, { passive: true });
+  el.addEventListener('touchstart', hold, { passive: true });
   requestAnimationFrame(() => el.classList.add('in'));
   haptic('light');
   return { close, el };
@@ -387,6 +460,7 @@ export function promptSheet({ title, label, value = '', placeholder = '', multil
 export function monthGrid(view, {
   selected = null, action = 'cal.pick', navAction = 'cal.month',
   avail = null, minDate = null, maxDate = null, showCounts = true,
+  range = null,          // { from, to } — закрасить выбранный отрезок целиком
 } = {}) {
   const y = view.getFullYear(), m = view.getMonth();
   const first = new Date(y, m, 1);
@@ -404,12 +478,20 @@ export function monthGrid(view, {
     const date = new Date(y, m, d);
     const key = dayKey(date);
     const isSel = selected && key === dayKey(selected);
+    // Без заливки промежутка человек видел только один край отрезка
+    // и не понимал, что именно он уже выбрал.
+    const lo_ = range && range.from ? startOfDay(range.from) : null;
+    const hi_ = range && range.to ? startOfDay(range.to) : null;
+    const inR = lo_ && hi_ && date >= lo_ && date <= hi_;
+    const edgeL = inR && dayKey(date) === dayKey(lo_);
+    const edgeR = inR && dayKey(date) === dayKey(hi_);
     const isToday = key === dayKey(new Date());
     const before = lo && date < lo, after = hi && date > hi;
     let free = null;
     if (!before && !after && avail) { try { free = avail(date); } catch (e) { free = null; } }
     const off = before || after || free === 0 || free === false;
-    cells.push(`<button class="mc-cell ${isSel ? 'on' : ''} ${off ? 'off' : ''} ${isToday ? 'today' : ''}"
+    cells.push(`<button class="mc-cell ${isSel ? 'on' : ''} ${off ? 'off' : ''} ${isToday ? 'today' : ''} ${
+      inR ? 'in-range' : ''} ${edgeL ? 'r-start' : ''} ${edgeR ? 'r-end' : ''}"
       ${off ? 'disabled' : `data-a="${action}" data-d="${date.getTime()}"`}>
       <span class="d">${d}</span>
       ${showCounts && typeof free === 'number' && free > 0 && !isSel ? '<i class="dot"></i>' : ''}
@@ -422,9 +504,89 @@ export function monthGrid(view, {
       <div class="mc-title">${MONTH_NAMES[m]} ${y}</div>
       <button class="ico-btn flat" ${canNext ? `data-a="${navAction}" data-d="${next.getTime()}"` : 'disabled'}>${icon('fwd', 18)}</button>
     </div>
-    <div class="mc-wd">${['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ', 'ВС'].map(w => `<span>${w}</span>`).join('')}</div>
+    <div class="mc-wd">${[1, 2, 3, 4, 5, 6, 0].map(i => `<span>${esc(WD[i].toUpperCase())}</span>`).join('')}</div>
     <div class="mc-grid">${cells.join('')}</div>
   </div>`;
+}
+
+/* Границы частей суток держим в одном месте: двадцать кнопок подряд
+   читаются плохо, а «вечер» человек ищет глазами именно как блок.
+   Разъехаться у разных экранов эти границы не должны. */
+export const SLOT_PARTS = [
+  ['Утро', x => x.min < 12 * 60],
+  ['День', x => x.min >= 12 * 60 && x.min < 17 * 60],
+  ['Вечер', x => x.min >= 17 * 60],
+];
+
+/**
+ * Время дня группами. Занятые слоты можно передать вместе со свободными —
+ * они рисуются гашёными и не нажимаются: владельцу полезно видеть, чем
+ * занят день, клиенту показываем только свободное.
+ */
+export function slotGroups(slots, action, picked) {
+  return SLOT_PARTS.map(([title, fits]) => {
+    const arr = slots.filter(fits);
+    if (!arr.length) return '';
+    return `<div class="slot-part">
+      <div class="slot-part-t">${t(title)}</div>
+      <div class="slots">${arr.map(x => `<button class="slot ${x.free ? '' : 'busy'} ${picked === x.min ? 'on' : ''}"
+        ${x.free ? `data-a="${action}" data-m="${x.min}" data-e="${x.empId || ''}"` : 'disabled'}>${x.t}</button>`).join('')}</div>
+    </div>`;
+  }).join('');
+}
+
+/* Плитка показателя: период сверху, крупно число, под ним единица
+   и деньги за тот же период. Три одинаковые в ряд читаются как ряд —
+   их сравнивают взглядом, а не разгадывают по отдельности. */
+export function mkpi(ic, label, value, unit, money) {
+  return `<div class="mkpi">
+    <div class="l">${icon(ic, 12, 2.2)}${label}</div>
+    <div class="v">${value}</div>
+    <div class="u">${unit}</div>
+    <div class="m">${moneyShort(money)} ₸</div>
+  </div>`;
+}
+
+/* ---------------- Барабан выбора ----------------
+   Как в будильнике телефона: список крутят пальцем, значение берётся
+   из позиции прокрутки. Сетка кнопок «9 10 11 12 13…» занимала пол-экрана
+   и всё равно не давала выбрать 12:35.
+
+   Высота строки WHEEL_H и отступы сверху-снизу в CSS должны совпадать:
+   именно на них держится попадание выбранного значения в центр.
+------------------------------------------------- */
+export const WHEEL_H = 40;
+
+export function wheel(id, values, selected, fmt = String) {
+  return `<div class="wheel" id="${id}">
+    <div class="wheel-pad"></div>
+    ${values.map(v => `<div class="wheel-i ${v === selected ? 'on' : ''}" data-v="${v}">${esc(fmt(v))}</div>`).join('')}
+    <div class="wheel-pad"></div>
+  </div>`;
+}
+
+/**
+ * Привязать барабан: прокрутить к текущему значению и слушать остановку.
+ * onChange зовётся не на каждый пиксель, а когда палец отпустили и
+ * прокрутка успокоилась, — иначе перерисовка догоняла бы движение.
+ */
+export function mountWheel(root, id, selected, onChange) {
+  const el = root.querySelector('#' + id);
+  if (!el) return;
+  const items = Array.from(el.querySelectorAll('.wheel-i'));
+  if (!items.length) return;
+  const idx = Math.max(0, items.findIndex(i => +i.dataset.v === selected));
+  el.scrollTop = idx * WHEEL_H;
+  let timer = null;
+  const settle = () => {
+    const i = Math.max(0, Math.min(items.length - 1, Math.round(el.scrollTop / WHEEL_H)));
+    const it = items[i];
+    items.forEach(x => x.classList.toggle('on', x === it));
+    onChange(+it.dataset.v);
+  };
+  el.addEventListener('scroll', () => { clearTimeout(timer); timer = setTimeout(settle, 110); }, { passive: true });
+  // Тап по строке — тоже выбор: не все догадываются, что список крутится.
+  items.forEach((it, i) => { it.onclick = () => el.scrollTo({ top: i * WHEEL_H, behavior: 'smooth' }); });
 }
 
 /* ---------------- Графики ---------------- */

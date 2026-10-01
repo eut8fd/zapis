@@ -129,6 +129,10 @@ svg{display:inline-block;vertical-align:middle;flex:none}
 .ico-btn:active{transform:scale(.9)}
 .ico-btn.flat{background:transparent;box-shadow:none;border-color:transparent}
 .ico-btn.p{background:var(--p);color:#fff;border-color:transparent}
+/* Переключатель языка: иконка и код рядом. .ico-btn — квадрат на один
+   элемент (grid + place-items), поэтому ширину и раскладку задаём сами. */
+.lang-btn{width:auto;padding:0 11px;display:inline-flex;align-items:center;gap:5px}
+.lang-btn span{font-size:12.5px;font-weight:700}
 
 /* ---------- tabbar ---------- */
 .tabbar{
@@ -169,6 +173,14 @@ svg{display:inline-block;vertical-align:middle;flex:none}
 .lrow .ic{width:36px;height:36px;border-radius:11px;display:grid;place-items:center;background:var(--sf-3);color:var(--tx-2);flex:none}
 .lrow .tl{font-weight:600;font-size:14.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lrow .st{font-size:12.5px;color:var(--tx-3);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Запасной выход: жалоба, поддержка, «создать свой бизнес». Такие строки
+   нужны раз в год, поэтому у них нет ни подложки, ни рамки — только текст
+   помельче. Заметнее их делать нельзя: человек пришёл записаться. */
+.quiet-row{width:100%;border-radius:14px;background:transparent;padding:11px 14px 11px 0}
+.quiet-row+.quiet-row{border-top:1px solid var(--bd)}
+.quiet-row .ic{background:transparent;color:var(--tx-3);width:30px;height:30px}
+.quiet-row .tl{font-weight:550;font-size:14px;color:var(--tx-2)}
+.quiet-row .st{font-size:12px}
 /* строка «иконка + текст» внутри карточек */
 .icoline{display:flex;align-items:center;gap:5px;min-width:0}
 .icoline>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -362,6 +374,23 @@ svg{display:inline-block;vertical-align:middle;flex:none}
 .up{color:var(--ok)}.down{color:var(--dan)}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+/* Плитка мастера на главной: период, число, единица, деньги.
+   Три одинаковые в ряд — их сравнивают взглядом, поэтому они не ездят
+   лентой и не меняют высоту от длины подписи. */
+.mkpi{
+  padding:12px 12px 11px;border-radius:var(--r-m);background:var(--sf);
+  border:1px solid var(--bd);box-shadow:var(--sh-1);min-width:0
+}
+.mkpi .l{
+  display:flex;align-items:center;gap:4px;font-size:11px;font-weight:650;
+  color:var(--tx-3);white-space:nowrap;overflow:hidden
+}
+.mkpi .v{font-size:23px;font-weight:780;letter-spacing:-.04em;margin-top:5px;line-height:1.05}
+.mkpi .u{font-size:11px;color:var(--tx-3);font-weight:600;margin-top:1px}
+.mkpi .m{
+  font-size:13px;font-weight:750;color:var(--p);margin-top:7px;
+  padding-top:7px;border-top:1px solid var(--bd);white-space:nowrap
+}
 .st-card{padding:14px;border-radius:var(--r-m);background:var(--sf);border:1px solid var(--bd)}
 .st-card .l{font-size:11.5px;color:var(--tx-3);font-weight:600}
 .st-card .v{font-size:19px;font-weight:750;letter-spacing:-.03em;margin-top:3px}
@@ -383,10 +412,13 @@ svg{display:inline-block;vertical-align:middle;flex:none}
 .hero-meta span{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
 
 /* ---------- appointment card ---------- */
-.appt{display:flex;gap:12px;padding:12px 14px;background:var(--sf);border-radius:var(--r-m);border:1px solid var(--bd);position:relative;overflow:hidden;transition:transform .14s var(--e)}
+/* align-items был не задан, и правая колонка (сумма) прилипала к верху
+   строки, пока середина занимала две строки. Плюс 3 пикселя цветной полосы
+   съедали отступ слева — число даты казалось сдвинутым. */
+.appt{display:flex;align-items:center;gap:12px;padding:12px 14px 12px 17px;background:var(--sf);border-radius:var(--r-m);border:1px solid var(--bd);position:relative;overflow:hidden;transition:transform .14s var(--e)}
 .appt:active{transform:scale(.98)}
 .appt::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--c,var(--p))}
-.appt .t{font-size:15px;font-weight:750;letter-spacing:-.02em;width:46px;flex:none}
+.appt .t{font-size:15px;font-weight:750;letter-spacing:-.02em;width:46px;flex:none;text-align:center;line-height:1.15}
 .appt .t small{display:block;font-size:11px;font-weight:600;color:var(--tx-3);letter-spacing:0}
 .appt .n{font-weight:650;font-size:14.5px}
 .appt .s{font-size:12.5px;color:var(--tx-3);margin-top:1px}
@@ -408,7 +440,18 @@ svg{display:inline-block;vertical-align:middle;flex:none}
 .cal-today{height:32px;padding:0 11px;border-radius:11px;color:var(--p);background:var(--p-soft);font-size:12px;font-weight:700;text-align:center;opacity:1;transform:none;animation:cal-today-in .24s var(--e-nav) both}
 .cal-today.is-current{visibility:hidden;pointer-events:none;opacity:0;transform:translateY(-4px) scale(.96);animation:none}
 @keyframes cal-today-in{from{opacity:0;transform:translateY(-4px) scale(.96)}to{opacity:1;transform:none}}
-.cal-view-switch{margin-bottom:10px}
+.cal-view-switch{margin-bottom:10px;display:flex;gap:8px;align-items:stretch}
+.cal-view-switch .seg{flex:1;min-width:0}
+/* Когда выбран свой отрезок, режимы день/неделя/месяц ничего не показывают —
+   гасим их, чтобы не спорили за внимание с активной кнопкой периода. */
+.cal-view-seg.muted-seg button{opacity:.55}
+.cal-period{
+  flex:none;max-width:52%;display:flex;align-items:center;gap:6px;padding:0 12px;height:40px;
+  border-radius:14px;background:var(--sf-2);color:var(--tx-2);
+  font-size:13px;font-weight:650;border:1.5px solid transparent;transition:.15s var(--e)
+}
+.cal-period span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cal-period.on{background:var(--p-soft);color:var(--p);border-color:var(--p)}
 .cal-view-switch .seg{padding:3px;border-radius:14px}
 .cal-view-switch .seg button{height:34px;border-radius:11px}
 .cal-view-seg button{min-width:0;padding:0 5px}
@@ -416,13 +459,19 @@ svg{display:inline-block;vertical-align:middle;flex:none}
 .cal-person{height:32px;background:transparent;box-shadow:none}
 .cal-person.on{background:var(--sf);color:var(--tx);border-color:var(--emp-color,var(--bd-2));box-shadow:var(--sh-1)}
 .cal-summary-wrap{margin-bottom:14px}
-.cal-summary{display:grid;grid-template-columns:repeat(4,1fr);background:var(--sf);border:1px solid var(--bd);border-radius:18px;padding:12px 4px;box-shadow:var(--sh-1)}
-.cal-stat{min-width:0;padding:0 9px;border-right:1px solid var(--bd)}
-.cal-stat:last-child{border-right:0}
-.cal-stat span{display:block;color:var(--tx-3);font-size:10.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.cal-stat strong{display:block;font-size:16px;font-weight:760;letter-spacing:-.02em;margin-top:2px;white-space:nowrap}
-.cal-load>i{display:block;height:3px;margin-top:4px;border-radius:3px;background:var(--sf-3);overflow:hidden}
-.cal-load>i b{display:block;height:100%;border-radius:inherit}
+/* Ряд показателей — общий: календарь владельца, профиль клиента.
+   Раньше назывался .cal-summary и жил только в календаре. */
+.statbar{display:grid;grid-template-columns:repeat(3,1fr);background:var(--sf);border:1px solid var(--bd);border-radius:18px;padding:12px 4px;box-shadow:var(--sh-1)}
+.statbar .cell{min-width:0;padding:0 9px;border-right:1px solid var(--bd)}
+.statbar .cell:last-child{border-right:0}
+.statbar .cell span{display:block;color:var(--tx-3);font-size:10.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.statbar .cell strong{display:block;font-size:19px;font-weight:770;letter-spacing:-.03em;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.statbar .cell em{
+  display:block;font-style:normal;font-size:10.5px;font-weight:600;color:var(--tx-3);
+  margin-top:3px;line-height:1.25
+}
+.statbar .load>i{display:block;height:3px;margin-top:5px;border-radius:3px;background:var(--sf-3);overflow:hidden}
+.statbar .load>i b{display:block;height:100%;border-radius:inherit}
 .cal-content{transform-origin:50% 0}
 .cal-content.cal-motion-switch{animation:cal-content-switch .24s var(--e-nav) both}
 .cal-content.cal-motion-prev{animation:cal-content-prev .26s var(--e-nav) both}
@@ -563,6 +612,81 @@ textarea.inp{height:auto;min-height:92px;padding:12px 14px;resize:none;line-heig
 .slot:active{transform:scale(.94)}
 .slot.on{background:var(--p);color:#fff;border-color:transparent;box-shadow:0 6px 16px -6px var(--p-glow)}
 .slot.busy{opacity:.32;pointer-events:none;text-decoration:line-through}
+/* Время по частям суток: «вечер» человек ищет глазами как блок,
+   а не вычитывает из двадцати кнопок подряд. */
+.slot-part+.slot-part{margin-top:14px}
+
+/* ---------- барабан выбора времени ---------- */
+/* Подложка выбранной строки лежит под барабанами, поэтому у самих
+   барабанов фона нет — иначе она бы под ними не просвечивала. */
+.wheel-box{
+  position:relative;display:grid;grid-template-columns:1fr 12px 1fr;align-items:center;
+  background:var(--sf-2);border-radius:16px;padding:0 6px;overflow:hidden
+}
+.wheel-box::before{
+  content:"";position:absolute;left:8px;right:8px;top:60px;height:40px;border-radius:12px;
+  background:var(--sf);box-shadow:var(--sh-1);pointer-events:none;z-index:0
+}
+.wheel{
+  position:relative;z-index:1;height:160px;overflow-y:auto;text-align:center;
+  scroll-snap-type:y mandatory;scrollbar-width:none;-webkit-overflow-scrolling:touch
+}
+.wheel::-webkit-scrollbar{display:none}
+.wheel-pad{height:60px}
+.wheel-i{
+  height:40px;line-height:40px;scroll-snap-align:center;
+  font-size:17px;font-weight:600;color:var(--tx-3);
+  transition:color .15s var(--e),font-size .15s var(--e)
+}
+.wheel-i.on{color:var(--tx);font-size:21px;font-weight:780}
+.wheel-sep{text-align:center;font-size:19px;font-weight:750;color:var(--tx-3);z-index:1}
+
+/* Две «кнопки» над барабаном: какое из значений он сейчас крутит. */
+.tp-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+.tp{
+  padding:9px 12px;border-radius:14px;background:var(--sf-2);
+  border:1.5px solid transparent;text-align:left;transition:.15s var(--e)
+}
+.tp.on{border-color:var(--p);background:var(--p-soft)}
+.tp .l{display:block;font-size:11px;font-weight:650;color:var(--tx-3)}
+.tp .v{display:block;font-size:19px;font-weight:780;letter-spacing:-.02em;margin-top:1px}
+.tp.on .v{color:var(--p)}
+
+/* ---------- онбординг ---------- */
+/* Строка-выбор: выглядит как поле, ведёт себя как кнопка. Нужна там,
+   где вариантов слишком много для чипсов. */
+.ob-pickrow{
+  display:flex;align-items:center;gap:10px;width:100%;height:46px;padding:0 14px;
+  border-radius:14px;background:var(--sf-2);border:1.5px solid transparent;
+  font-size:14.5px;font-weight:600;color:var(--tx);text-align:left
+}
+.ob-pickrow .grow{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ob-pickrow .dot,.ob-dot{width:10px;height:10px;border-radius:50%;flex:none}
+.ob-dot{margin-left:2px}
+/* День недели карточкой: подпись, время и переключатель не налезают
+   друг на друга — раньше всё жило одной строкой .lrow. */
+.ob-day{padding:12px 14px;border-radius:16px;border:1px solid var(--bd);background:var(--sf)}
+.ob-day.off{opacity:.62}
+.ob-day .nm{font-weight:650;font-size:14.5px;text-transform:capitalize}
+.ob-t{
+  flex:1;height:40px;border-radius:12px;background:var(--sf-2);
+  font-size:15px;font-weight:700;letter-spacing:-.01em;color:var(--tx)
+}
+
+/* ---------- чеклист настройки ---------- */
+.setup-list{display:flex;flex-direction:column}
+.setup-row{
+  display:flex;align-items:center;gap:11px;width:100%;padding:9px 0;text-align:left;
+  border-top:1px solid var(--bd)
+}
+.setup-row:first-child{border-top:0;padding-top:2px}
+.setup-row .mark{color:var(--tx-3);flex:none;display:flex}
+.setup-row.done .mark{color:var(--ok)}
+.setup-row .t{display:block;font-size:14px;font-weight:650}
+.setup-row .s{display:block;font-size:11.5px;color:var(--tx-3);margin-top:1px}
+.setup-row.done .t{color:var(--tx-3);text-decoration:line-through;text-decoration-thickness:1px}
+.setup-row.done .s{display:none}
+.slot-part-t{font-size:12px;font-weight:600;color:var(--tx-3);margin-bottom:7px}
 .hscroll{display:flex;gap:9px;overflow-x:auto;scrollbar-width:none;padding:2px 16px}
 .dcard{flex:none;width:56px;padding:9px 0;border-radius:16px;text-align:center;background:var(--sf-2);border:1.5px solid transparent;transition:.15s var(--e)}
 .dcard .w{font-size:10.5px;font-weight:700;color:var(--tx-3);text-transform:uppercase}
@@ -665,8 +789,9 @@ body[data-tab="0"] .tip{bottom:calc(var(--safe-b) + 16px)}
 .bars-x{display:flex;gap:6px;margin-top:6px}
 .bars-x span{flex:1;text-align:center;font-size:9.5px;color:var(--tx-3);font-weight:600}
 .prog{height:8px;border-radius:5px;background:var(--sf-3);overflow:hidden}
-.prog i{display:block;height:100%;border-radius:5px;background:var(--p);animation:pgw .6s var(--e)}
-@keyframes pgw{from{width:0}}
+/* Анимация проигрывалась заново при каждой перерисовке экрана, и полоса
+   выглядела вечно загружающейся. Ширина меняется плавно — этого хватает. */
+.prog i{display:block;height:100%;border-radius:5px;background:var(--p);transition:width .4s var(--e)}
 
 /* ---------- success ---------- */
 .succ{display:flex;flex-direction:column;align-items:center;padding:40px 24px;text-align:center;gap:8px}
@@ -777,6 +902,18 @@ body[data-tgback="1"] .top>.ico-btn[data-a="back"]{display:none}
 .mc-cell.today{box-shadow:inset 0 0 0 1.5px var(--bd-2)}
 .mc-cell.on{background:var(--p);color:#fff;box-shadow:0 6px 14px -6px var(--p-glow)}
 .mc-cell.off{color:var(--tx-3);opacity:.38;text-decoration:line-through;text-decoration-thickness:1px}
+/* Выбранный отрезок: заливка идёт сплошной лентой, края скругляются.
+   Скругление не у ячейки, а у подложки — иначе лента распадалась
+   на семь отдельных квадратов в каждой строке. */
+.mc-cell.in-range::after{
+  content:"";position:absolute;inset:2px -1px;background:var(--p-soft);z-index:0
+}
+.mc-cell .d,.mc-cell .dot{position:relative;z-index:1}
+.mc-cell.in-range.r-start::after{border-radius:11px 0 0 11px;left:2px}
+.mc-cell.in-range.r-end::after{border-radius:0 11px 11px 0;right:2px}
+.mc-cell.in-range.r-start.r-end::after{border-radius:11px}
+.mc-cell.in-range{color:var(--p);font-weight:700}
+.mc-cell.in-range.on{color:#fff}
 .mc-cell.mc-empty{pointer-events:none}
 .mc-cell .dot{width:4px;height:4px;border-radius:50%;background:var(--ok);position:absolute;bottom:6px}
 .mc-cell.on .dot{background:#fff}
@@ -829,32 +966,11 @@ body[data-tgback="1"] .top>.ico-btn[data-a="back"]{display:none}
 .mv-scale i.lv3{background:var(--heat-3)}
 .mv-away i{width:7px;height:7px;border-radius:50%;background:#06AED4}
 @media(max-width:380px){
-  .cal-stat{padding:0 6px}
-  .cal-stat strong{font-size:14px}
+  .statbar .cell{padding:0 6px}
+  .statbar .cell strong{font-size:16px}
   .mv-cell{min-height:52px}
 }
 
-/* --- каталог клиента --------------------------------------------------- */
-/* Плитка направления: имён салонов на этом экране нет, поэтому вся нагрузка
-   ложится на иконку и счётчик — они и должны читаться первыми. */
-.cat-tile{
-  display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;
-  padding:13px;border-radius:16px;border:1px solid var(--bd);background:var(--sf);
-  box-shadow:var(--sh-1)
-}
-.cat-tile .tint{margin-bottom:6px}
-.co-row{width:100%;padding:12px;display:flex;gap:12px;align-items:center;text-align:left}
-.own-tag{
-  flex:none;font-size:10.5px;font-weight:750;letter-spacing:.02em;
-  padding:2px 7px;border-radius:7px;background:var(--p-soft);color:var(--p)
-}
-/* Вход в каталог со «своих» экранов — намеренно тихий: строка текста,
-   а не карточка, и никаких чужих названий рядом. */
-.find-link{
-  display:flex;align-items:center;justify-content:center;gap:7px;width:100%;
-  padding:14px 8px;font-size:13.5px;font-weight:600;color:var(--tx-3)
-}
-.find-link:active{opacity:.6}
 /* Ролей в демо-панели нечётное число — последняя занимает всю строку,
    иначе рядом с ней зияет пустая клетка. */
 .role-grid .role:last-child:nth-child(odd){grid-column:1/-1}
@@ -862,6 +978,13 @@ body[data-tgback="1"] .top>.ico-btn[data-a="back"]{display:none}
 /* --- витрина для бизнеса ----------------------------------------------- */
 /* Экран продающий, поэтому воздуха больше, чем в рабочих разделах: он
    читается сверху вниз один раз, а не используется каждый день. */
+/* Плитка раздела: иконка сверху, под ней подпись в две строки. */
+.cat-tile{
+  display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;
+  padding:13px;border-radius:16px;border:1px solid var(--bd);background:var(--sf);
+  box-shadow:var(--sh-1)
+}
+.cat-tile .tint{margin-bottom:6px}
 .biz-hero{
   padding:calc(var(--safe-t) + 18px) 20px 4px;text-align:center;
   background:radial-gradient(120% 80% at 50% 0%,var(--p-soft) 0%,transparent 62%)
@@ -891,12 +1014,17 @@ body[data-tgback="1"] .top>.ico-btn[data-a="back"]{display:none}
 }
 
 /* Выделенный тариф не красим целиком: цветная плашка на всю карточку
-   спорит с кнопкой внутри неё. Достаточно рамки и метки. */
+   спорит с кнопкой внутри неё. Достаточно рамки и метки.
+
+   Метка лежит в потоке карточки, а не висит над её краем: у `.card`
+   стоит overflow:hidden ради скруглений, и вынесенная наружу плашка
+   обрезалась ровно по границе. */
 .biz-plan{position:relative}
 .biz-plan.on{border-color:transparent;box-shadow:inset 0 0 0 2px var(--p),var(--sh-2)}
 .biz-plan-tag{
-  position:absolute;top:-9px;right:14px;font-size:10px;font-weight:750;
-  letter-spacing:.02em;padding:3px 9px;border-radius:8px;background:var(--p);color:#fff
+  display:inline-block;margin-bottom:10px;font-size:10px;font-weight:750;
+  letter-spacing:.03em;text-transform:uppercase;padding:4px 10px;border-radius:8px;
+  background:var(--p);color:#fff
 }
 
 .biz-q{overflow:hidden}
@@ -921,4 +1049,13 @@ body[data-tgback="1"] .top>.ico-btn[data-a="back"]{display:none}
 .biz-how-n{
   width:26px;height:26px;flex:none;border-radius:9px;display:grid;place-items:center;
   font-size:12px;font-weight:750
+}
+
+/* Счётчик непрочитанного на колокольчике. Раньше сообщений платформы
+   не было вовсе, и показывать было нечего. */
+.bell-btn{position:relative;overflow:visible}
+.bell-dot{
+  position:absolute;top:-2px;right:-2px;min-width:16px;height:16px;padding:0 4px;
+  border-radius:9px;background:var(--dan);color:#fff;font-size:10px;font-weight:750;
+  font-style:normal;line-height:16px;text-align:center;border:2px solid var(--sf)
 }

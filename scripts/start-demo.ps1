@@ -88,21 +88,50 @@ if (-not $public) {
 
   Info 'поднимаю https-туннель…'
   $deadline = (Get-Date).AddSeconds(60)
+  $tunFail = ''
   while ((Get-Date) -lt $deadline -and -not $public) {
     Start-Sleep -Milliseconds 700
     foreach ($f in @($tunLog, "$tunLog.out")) {
       if (-not (Test-Path $f)) { continue }
       $raw = Get-Content $f -Raw -ErrorAction SilentlyContinue
       if ([string]::IsNullOrEmpty($raw)) { continue }
-      $m = [regex]::Match($raw, 'https://[a-z0-9-]+\.trycloudflare\.com')
-      if ($m.Success) { $public = $m.Value; break }
+      # api.trycloudflare.com — это служебный адрес, к которому cloudflared
+      # обращается сам; он же попадает в текст ошибки. Раньше первый матч
+      # хватал именно его, и в .env уезжал адрес, на котором приложения нет.
+      foreach ($m in [regex]::Matches($raw, 'https://[a-z0-9][a-z0-9-]*\.trycloudflare\.com')) {
+        if ($m.Value -notmatch '^https://api\.') { $public = $m.Value; break }
+      }
+      if ($public) { break }
+      # Отказ виден в логе сразу — ждать минуту незачем.
+      $err = [regex]::Match($raw, 'failed to request quick Tunnel.*')
+      if ($err.Success) { $tunFail = $err.Value.Trim(); break }
     }
+    if ($tunFail) { break }
   }
   if (-not $public) {
     Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
     if ($tunnel) { Stop-Process -Id $tunnel.Id -Force -ErrorAction SilentlyContinue }
+    if ($tunFail) {
+      Warn 'Cloudflare не выдал туннель:'
+      Warn "  $tunFail"
+      Write-Host ''
+      Write-Host '  Что делать:' -ForegroundColor White
+      Write-Host '    - повторить запуск: сеть до Cloudflare бывает недоступна пару минут;' -ForegroundColor DarkGray
+      Write-Host '    - или указать свой https-адрес: scripts\start-demo.ps1 -Url https://ваш.домен;' -ForegroundColor DarkGray
+      Write-Host '    - или поднять только локальный сервер без бота: scripts\start-demo.ps1 -NoTunnel.' -ForegroundColor DarkGray
+      Write-Host ''
+      throw 'Туннель не поднялся. .env не тронут.'
+    }
     throw "Туннель не поднялся за 60 сек. Лог: $tunLog"
   }
+}
+
+# Последняя защита: в .env и боту уходит только адрес самого туннеля.
+if ($public -notmatch '^https://') { throw "Некорректный публичный адрес: $public" }
+if ($public -match '^https://api\.trycloudflare\.com') {
+  Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+  if ($tunnel) { Stop-Process -Id $tunnel.Id -Force -ErrorAction SilentlyContinue }
+  throw 'Получен служебный адрес Cloudflare вместо туннеля — запустите ещё раз.'
 }
 Ok "публичный: $public"
 

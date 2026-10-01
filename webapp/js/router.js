@@ -1,7 +1,7 @@
-import { $, esc, t as tr } from './ui.js';
+import { $, esc, t as tr, topSheet, closeAllSheets, onSheetsChanged } from './ui.js';
 import { icon } from './icons.js';
 import { haptic, setBackButton } from './tg.js';
-import { S, reportError, isBound, can, roleName, me } from './store.js';
+import { S, reportError, can, roleName, me } from './store.js';
 
 export const routes = {};
 export function route(name, def) { routes[name] = def; }
@@ -37,18 +37,33 @@ export function go(r, p = {}, opts = {}) {
   syncHash(); render(true);
 }
 export function back() {
+  // Открытая шторка — это верхний слой интерфейса. Пока она есть, «назад»
+  // относится к ней: иначе кнопка Telegram уводила с экрана, а шторка
+  // оставалась висеть поверх чужого — человек оказывался не там, где был.
+  const sheet = topSheet();
+  if (sheet) { haptic('light'); sheet.close(); return; }
   if (stack.length > 1) { navMotion = 'back'; stack.pop(); haptic('light'); syncHash(); render(true); }
 }
-export function canBack() { return stack.length > 1; }
+export function canBack() { return stack.length > 1 || !!topSheet(); }
 export function resetStack(r, p = {}) { navMotion = 'replace'; stack = [{ r, p }]; syncHash(); render(true); }
 
-let ignoreHash = false;
-function syncHash() { ignoreHash = true; location.hash = toHash(current()); setTimeout(() => ignoreHash = false, 20); }
+// Шторка открылась или закрылась — системная кнопка «назад» должна это учесть.
+onSheetsChanged(() => setBackButton(canBack() ? back : null));
+
+function syncHash() { location.hash = toHash(current()); }
+
+const sameEntry = (a, b) => !!a && !!b && a.r === b.r && toHash(a) === toHash(b);
+
 window.addEventListener('hashchange', () => {
-  if (ignoreHash) return;
   const e = fromHash();
   if (!e) return;
-  if (stack.length > 1 && stack[stack.length - 2].r === e.r) { navMotion = 'back'; stack.pop(); }
+  // Раньше собственный syncHash отсекался флагом на 20 мс. В WebView
+  // Telegram событие иногда приходит позже, флаг успевал сброситься —
+  // и экран добавлялся в стек второй раз. После этого «назад» либо не
+  // делал ничего, либо прыгал через экран. Сравниваем с вершиной стека:
+  // это не зависит от того, когда браузер решит прислать событие.
+  if (sameEntry(current(), e)) return;
+  if (stack.length > 1 && sameEntry(stack[stack.length - 2], e)) { navMotion = 'back'; stack.pop(); }
   else { navMotion = 'forward'; stack.push(e); }
   render(true);
 });
@@ -63,7 +78,7 @@ const TABS = {
     { r: 'o.more', t: 'Ещё', i: 'grid' },
   ],
   employee: [
-    { r: 'e.home', t: 'Сегодня', i: 'home' },
+    { r: 'e.home', t: 'Главная', i: 'home' },
     { r: 'e.cal', t: 'Календарь', i: 'calendar' },
     { r: 'e.clients', t: 'Клиенты', i: 'users' },
     { r: 'e.profile', t: 'Профиль', i: 'user' },
@@ -75,13 +90,10 @@ const TABS = {
   ],
 };
 
-/* Первая вкладка клиента зависит от того, как он пришёл. Пришёл по ссылке
-   салона — вкладка принадлежит салону, и каталога на ней нет. Пришёл сам —
-   первым делом ему нужен поиск, а не чужой салон, выбранный за него. */
+/* У клиента ровно один салон — тот, чью ссылку он открыл. Поиска и
+   каталога нет: первая вкладка навсегда принадлежит этому салону. */
 const clientTabs = () => [
-  isBound()
-    ? { r: 'cl.company', t: 'Салон', i: 'home' }
-    : { r: 'cl.find', t: 'Поиск', i: 'search' },
+  { r: 'cl.company', t: 'Салон', i: 'home' },
   { r: 'cl.my', t: 'Мои записи', i: 'calendar' },
   { r: 'cl.profile', t: 'Профиль', i: 'user' },
 ];
@@ -104,8 +116,8 @@ function tabbar() {
   const tabs = tabsFor(S.session.role);
   const cur = current();
   const def = routes[cur.r] || {};
-  // tab может быть функцией: у клиента один и тот же экран салона светит
-  // разную вкладку — свой салон это или открытый из каталога
+  // tab может быть функцией: экран вправе решать, какую вкладку подсветить,
+  // уже во время отрисовки — например по правам текущей роли
   const active = (typeof def.tab === 'function' ? def.tab() : def.tab) || cur.r;
   return `<nav class="tabbar">${tabs.map(t => `
     <button class="tab ${active === t.r ? 'on' : ''} ${active === t.r && tabPulse === t.r ? 'tab-pulse' : ''}" data-a="tab" data-r="${t.r}">
@@ -156,6 +168,10 @@ export function render(fresh = false) {
     // «Моих записей». Уходя с экрана, гасим их вместе с ним. Отметку
     // «показано» не ставим — человек её так и не прочитал.
     if (fresh) document.querySelectorAll('#toasts .tip').forEach(t => t.remove());
+    // Шторка принадлежит экрану. Если переход случился не через «назад»
+    // (например, из самой шторки открыли другой раздел), она не должна
+    // остаться висеть поверх нового экрана.
+    if (fresh) closeAllSheets();
     // Telegram WebView по-разному реализует View Transitions: на части
     // устройств снимки мерцают и меняют размер fixed-кнопок. Однослойная
     // CSS-анимация предсказуема и не накладывает старый интерфейс на новый.

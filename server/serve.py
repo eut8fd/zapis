@@ -73,6 +73,13 @@ def write_store(data):
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     extensions_map = MIME
+    # HTTP/1.1 вместо умолчательного 1.0. При 1.0 сервер закрывает соединение
+    # после каждого ответа, а браузер продолжает считать его живым и шлёт
+    # в него следующий запрос — тот умирает с ERR_EMPTY_RESPONSE. На старте
+    # приложение отправляет справочник и забирает записи одновременно, и
+    # ронялся как раз справочник: бот оставался со старым списком салонов,
+    # а записи из Mini App до него не доходили.
+    protocol_version = 'HTTP/1.1'
 
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=ROOT, **kw)
@@ -133,9 +140,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return self._json({'error': 'unknown endpoint'}, 404)
 
     def do_PUT(self):                      # noqa: N802
+        # Тело читаем до любых проверок: при keep-alive непрочитанные байты
+        # достаются следующему запросу и ломают соединение.
+        body = self._body()
         if not self.path.startswith('/api/catalog'):
             return self._json({'error': 'unknown endpoint'}, 404)
-        body = self._body()
         if not isinstance(body, dict) or 'catalog' not in body:
             return self._json({'error': 'catalog expected'}, 400)
         with LOCK:
@@ -155,10 +164,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return None, 0
 
     def do_POST(self):                     # noqa: N802
+        body = self._body()
         key, cap = self._list_for(self.path)
         if not key:
             return self._json({'error': 'unknown endpoint'}, 404)
-        body = self._body()
         if not isinstance(body, dict) or not body.get('id'):
             return self._json({'error': 'record with id expected'}, 400)
         with LOCK:
@@ -171,11 +180,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return self._json({'ok': True, 'id': body['id']})
 
     def do_PATCH(self):                    # noqa: N802
+        body = self._body() or {}
         key, _ = self._list_for(self.path)
         if not key or self.path.rstrip('/').count('/') < 3:
             return self._json({'error': 'unknown endpoint'}, 404)
         aid = self.path.rsplit('/', 1)[-1].split('?')[0]
-        body = self._body() or {}
         with LOCK:
             data = read_store()
             found = None

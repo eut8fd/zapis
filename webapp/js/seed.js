@@ -167,12 +167,12 @@ const PLANS = () => ([
   },
   {
     id: 'PRO', name: 'PRO', price: 19900, period: 'month', active: true, color: '#4C6FFF',
-    limits: { staff: 10, services: 100, broadcasts: 20, onlyMine: true },
-    feats: ['До 10 сотрудников', 'AI-помощник', 'Рассылки', 'Аналитика и финансы', 'Только мой салон'],
+    limits: { staff: 10, services: 100, broadcasts: 20 },
+    feats: ['До 10 сотрудников', 'AI-помощник', 'Рассылки', 'Аналитика и финансы'],
   },
   {
     id: 'BUSINESS', name: 'BUSINESS', price: 39900, period: 'month', active: true, color: '#8B5CF6',
-    limits: { staff: 0, services: 0, broadcasts: 0, onlyMine: true },
+    limits: { staff: 0, services: 0, broadcasts: 0 },
     feats: ['Без ограничений', 'Несколько филиалов', 'API и интеграции', 'Приоритетная поддержка'],
   },
 ]);
@@ -297,6 +297,8 @@ function buildBackground(st, today) {
         initials: initials(nm), color: AV[(bi + i) % AV.length], phone: phone(r),
         schedule: WEEK_DEFAULT(), serviceIds: [], takesAppointments: true, tags,
         access: 'staff', rating: (4.5 + r() * .5).toFixed(1),
+        // Сид изображает работающий салон: люди за карточками уже стоят.
+        linkedAt: today.toISOString(),
         photo: null, since: today.getFullYear() - int(r, 1, 9), showExp: true,
       });
     }
@@ -455,6 +457,7 @@ export function buildSeed(anchor) {
       schedule: WEEK_DEFAULT(), serviceIds: [], takesAppointments: true, tags: s.tags,
       access: i === 0 ? 'manager' : 'staff',
       rating: (4.6 + r() * 0.4).toFixed(1),
+      linkedAt: today.toISOString(),
       photo: null, since: today.getFullYear() - int(r, 1, 11), showExp: true,
     }));
     if (co.id === 'c1') { emps[4].schedule[2].on = false; emps[1].schedule[6].on = false; }

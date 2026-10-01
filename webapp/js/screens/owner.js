@@ -3,16 +3,17 @@ import {
   now, today, todayStats, rangeStats, nextAppt, dayAppts, blocks, me, toHM, toMin, workDay, workWindow, companyHours,
   clientStats, emit, freeGaps, removeBlock, ABSENCE, absenceOn,
   markSetup, setupSteps, tipSeen, markTip, daysBetween,
+  companyInbox, unreadInbox, markInboxRead, markInboxAllRead, INBOX_KINDS,
 } from '../store.js';
 import {
-  esc, money, moneyShort, hhmm, dateLabel, dateFull, nMin, nAppt, avatar, greet, WD, WD_FULL, MONTHS,
+  esc, money, moneyShort, hhmm, dateLabel, dateFull, relPast, nMin, nAppt, avatar, greet, WD, WD_FULL, MONTHS,
   dayKey, startOfDay, addDays, emptyState, sheet, toast, segmented, sparkline, num, plural,
-  confirmSheet, monthGrid, MONTH_NAMES, MON_SHORT, tipCard,
+  confirmSheet, monthGrid, MONTH_NAMES, MON_SHORT, tipCard, mkpi, statBar,
 } from '../ui.js';
 import { icon } from '../icons.js';
-import { route, go, render } from '../router.js';
-import { on } from '../bus.js';
-import { openApptSheet, newApptFlow, blockFlow, quickAdd, dateStrip, absenceFlow, tipOnce } from '../flows.js';
+import { route, go, render, routes } from '../router.js';
+import { on, fire } from '../bus.js';
+import { openApptSheet, newApptFlow, blockFlow, quickAdd, absenceFlow, tipOnce, langBtn } from '../flows.js';
 import { haptic, copy, openLink } from '../tg.js';
 import { BOT_USERNAME } from '../config.js';
 
@@ -42,7 +43,7 @@ route('o.home', {
   render() {
     const c = co(), u = me();
     const t = todayStats();
-    const s7 = rangeStats(7);
+    const s7 = rangeStats(7), s30 = rangeStats(30);
     const nx = nextAppt();
     const list = t.list.filter(a => a.status !== 'cancelled');
 
@@ -53,31 +54,19 @@ route('o.home', {
         <div class="top-t nowrap" style="font-size:17px">${esc(c.name)}</div>
         <div class="top-sub">${greet(now().getHours())}, ${esc(u.name.split(' ')[0])}</div>
       </div>
-      <button class="ico-btn" data-a="nav" data-r="o.notifications">${icon('bell', 19)}</button>
+      ${langBtn()}
+      <button class="ico-btn bell-btn" data-a="nav" data-r="o.notifications">${icon('bell', 19)}${
+        unreadInbox() ? `<i class="bell-dot">${unreadInbox() > 9 ? '9+' : unreadInbox()}</i>` : ''}</button>
     </div>
 
-    <div class="kpis sec" style="margin-top:6px">
-      <div class="kpi">
-        <div class="l">${icon('calendar', 13, 2)}Сегодня</div>
-        <div class="v">${t.count}</div>
-        <div class="d dim">${plural(t.count, ['запись', 'записи', 'записей'])}</div>
-      </div>
-      <div class="kpi">
-        <div class="l">${icon('wallet', 13, 2)}Выручка</div>
-        <div class="v">${moneyShort(t.revenue)} ₸</div>
-        <div class="d dim">из ${moneyShort(t.potential)} ₸</div>
-      </div>
-      <div class="kpi">
-        <div class="l">${icon('users', 13, 2)}Клиенты</div>
-        <div class="v">${t.clients}</div>
-        <div class="d dim">сегодня</div>
-      </div>
-      <div class="kpi">
-        <div class="l">${icon('trendUp', 13, 2)}Неделя</div>
-        <div class="v">${moneyShort(s7.revenue)} ₸</div>
-        <div class="d ${s7.deltaRev >= 0 ? 'up' : 'down'}">${s7.deltaRev >= 0 ? '↑' : '↓'} ${Math.abs(s7.deltaRev)}%</div>
-      </div>
-    </div>
+    ${/* Было четыре плитки, они мерили разное разными единицами (записи,
+         деньги, людей, проценты) и уезжали за правый край. Теперь три
+         одинаковых: период — сколько записей — сколько денег. */''}
+    <div class="wrap sec" style="margin-top:6px"><div class="grid3">
+      ${mkpi('calendar', 'Сегодня', t.count, plural(t.count, ['запись', 'записи', 'записей']), t.revenue)}
+      ${mkpi('trendUp', 'Неделя', s7.count, plural(s7.count, ['запись', 'записи', 'записей']), s7.revenue)}
+      ${mkpi('chart', 'Месяц', s30.count, plural(s30.count, ['запись', 'записи', 'записей']), s30.revenue)}
+    </div></div>
 
     ${setupCard()}
 
@@ -107,23 +96,44 @@ route('o.home', {
 /* §97 — пошаговая настройка после регистрации.
    Пропадает сама, когда всё сделано: постоянный чеклист на главной
    у работающего салона только мешает. */
+/* Чеклист настройки. Раньше это была одна полоса и подпись «3 из 5»:
+   что именно из пяти уже сделано, было неизвестно, и человек, только
+   что заведший бизнес, видел непонятное большинство. Теперь список
+   открыт: галочка — сделано, кружок — нет, и каждая строка ведёт
+   ровно туда, где это делается. */
 function setupCard() {
   const steps = setupSteps();
   const left = steps.filter(s => !s.done);
   if (!left.length) return '';
   const done = steps.length - left.length;
   return `<div class="sec wrap">
-    <button class="card press" style="width:100%;padding:15px;text-align:left" data-a="nav" data-r="o.help">
-      <div class="row between" style="margin-bottom:8px">
+    <div class="card" style="padding:14px 15px">
+      <div class="row between" style="margin-bottom:10px">
         <div class="row" style="gap:9px"><span style="color:var(--p)">${icon('zap', 18)}</span>
           <b>Настройка бизнеса</b></div>
         <span class="bdg p">${done} из ${steps.length}</span>
       </div>
-      <div class="prog"><i style="width:${done / steps.length * 100}%;background:var(--p)"></i></div>
-      <div class="sm muted" style="margin-top:8px">Дальше: ${esc(left[0].t.toLowerCase())} — ${esc(left[0].s.toLowerCase())}</div>
-    </button>
+      <div class="prog" style="margin-bottom:12px"><i style="width:${done / steps.length * 100}%;background:var(--p)"></i></div>
+      <div class="setup-list">
+        ${steps.map(x => `<button class="setup-row ${x.done ? 'done' : ''}" ${x.done ? 'disabled' : `data-a="setup.go" data-k="${x.k}"`}>
+          <span class="mark">${icon(x.done ? 'checkCircle' : 'plus', 18, x.done ? 2 : 2.2)}</span>
+          <span class="grow">
+            <span class="t">${esc(x.t)}</span>
+            <span class="s">${esc(x.s)}</span>
+          </span>
+          ${x.done ? '' : `<span class="chev">${icon('fwd', 16, 2)}</span>`}
+        </button>`).join('')}
+      </div>
+    </div>
   </div>`;
 }
+on('setup.go', ds => {
+  const step = setupSteps().find(x => x.k === ds.k);
+  if (!step) return;
+  // Шаг знает своё действие: часть ведёт на экран, часть открывает шторку.
+  if (String(step.act).includes('.') && routes[step.act]) go(step.act);
+  else fire(step.act);
+});
 
 function nextCard(a) {
   const c = client(a.clientId), e = emp(a.employeeId);
@@ -269,7 +279,11 @@ export function calendarScreen({ scope = 'company', fixedEmp = null } = {}) {
         : `К месяцу ${MONTH_NAMES[cal.returnContext.date.getMonth()]} ${cal.returnContext.date.getFullYear()}`
     : '';
   const headerSub = returnLabel || sub;
-  const periodAction = cal.view === 'range' || !cal.rangeFrom || !cal.rangeTo ? 'cal.custom' : 'cal.view';
+  // «Период» — не такой же режим, как день/неделя/месяц: он не листается
+  // стрелками и требует выбора дат. Пока он стоял четвёртой кнопкой в том же
+  // переключателе, было непонятно ни что выбрано, ни куда жать. Теперь это
+  // отдельная кнопка рядом, и она показывает выбранный отрезок.
+  const rangeOn = cal.view === 'range';
 
   return `
   <div class="top blur cal-top">
@@ -286,12 +300,14 @@ export function calendarScreen({ scope = 'company', fixedEmp = null } = {}) {
   </div>
 
   <div class="wrap cal-view-switch">
-    <div class="seg cal-view-seg">
+    <div class="seg cal-view-seg ${rangeOn ? 'muted-seg' : ''}">
       <button data-a="cal.view" data-v="day" class="${cal.view === 'day' ? 'on' : ''}">День</button>
       <button data-a="cal.view" data-v="week" class="${cal.view === 'week' ? 'on' : ''}">Неделя</button>
       <button data-a="cal.view" data-v="month" class="${cal.view === 'month' ? 'on' : ''}">Месяц</button>
-      <button data-a="${periodAction}" data-v="range" class="${cal.view === 'range' ? 'on' : ''}">Период</button>
     </div>
+    <button class="cal-period ${rangeOn ? 'on' : ''}" data-a="cal.custom">
+      ${icon('calendar', 15, 2.2)}<span>${rangeOn ? rangeTitle(custom.from, custom.to) : 'Период'}</span>
+    </button>
   </div>
 
   ${!fixedEmp && list.length > 1 ? `<div class="chips cal-staff">
@@ -309,8 +325,10 @@ export function calendarScreen({ scope = 'company', fixedEmp = null } = {}) {
   </div>`;
 }
 
-/* §58 — показатели прямо в календаре: сколько записей, загрузка,
-   свободные окна и ожидаемая выручка за видимый период. */
+/* §58 — показатели прямо в календаре. Было четыре тесных колонки, одна
+   из них — «Окна», и что это такое, по слову не понять. Теперь три плитки
+   с подписью под числом: подпись и объясняет, и называет период, а окна
+   ушли строкой под загрузку — там они и читаются, рядом с процентом. */
 function periodStats(d, empId) {
   let days = [d];
   if (cal.view === 'week') {
@@ -335,14 +353,16 @@ function periodStats(d, empId) {
   });
   const load = workMin ? Math.round(busyMin / workMin * 100) : 0;
   const loadColor = load > 70 ? 'var(--ok)' : load > 40 ? 'var(--warn)' : 'var(--tx-2)';
-  return `<div class="wrap cal-summary-wrap">
-    <div class="cal-summary">
-      <div class="cal-stat"><span>Записи</span><strong>${cnt}</strong></div>
-      <div class="cal-stat cal-load"><span>Загрузка</span><strong style="color:${loadColor}">${load}%</strong><i><b style="width:${Math.min(100, load)}%;background:${loadColor}"></b></i></div>
-      <div class="cal-stat"><span>Окна</span><strong>${gaps}</strong></div>
-      <div class="cal-stat"><span>Доход</span><strong>${moneyShort(rev)} ₸</strong></div>
-    </div>
-  </div>`;
+  const when = cal.view === 'day' ? (dayKey(d) === dayKey(now()) ? 'сегодня' : 'за день')
+    : cal.view === 'week' ? 'за неделю' : cal.view === 'month' ? 'за месяц' : 'за период';
+  const planned = days.some(day => dayKey(day) >= dayKey(now()));
+  return `<div class="wrap cal-summary-wrap">${statBar([
+    ['Записи', cnt, when],
+    ['Загрузка', load + '%',
+      gaps ? 'свободно ' + gaps + ' ' + plural(gaps, ['окно', 'окна', 'окон']) : 'свободных окон нет',
+      'load', loadColor, `<i><b style="width:${Math.min(100, load)}%;background:${loadColor}"></b></i>`],
+    ['Доход', moneyShort(rev) + ' ₸', planned ? 'с учётом будущих' : 'выполнено'],
+  ])}</div>`;
 }
 
 function dayView(d, empId) {
@@ -658,7 +678,23 @@ on('cal.custom', () => {
         : { from: base, to: base };
   const pick = { side: 'from', from: initial.from, to: initial.to, month: initial.from };
   const sh = sheet({ title: 'Свой период', body: '' });
+  // Готовые отрезки закрывают девять случаев из десяти: «неделя», «месяц»,
+  // «прошлый месяц». Руками в календаре их собирать — лишняя работа.
+  const PRESETS = () => {
+    const t0 = today();
+    const wk = addDays(t0, -((t0.getDay() + 6) % 7));
+    const m0 = new Date(t0.getFullYear(), t0.getMonth(), 1);
+    const pm = new Date(t0.getFullYear(), t0.getMonth() - 1, 1);
+    return [
+      ['7 дней', addDays(t0, -6), t0],
+      ['30 дней', addDays(t0, -29), t0],
+      ['Эта неделя', wk, addDays(wk, 6)],
+      ['Этот месяц', m0, new Date(t0.getFullYear(), t0.getMonth() + 1, 0)],
+      ['Прошлый месяц', pm, new Date(t0.getFullYear(), t0.getMonth(), 0)],
+    ];
+  };
   const draw = () => {
+    const n = daysBetween(pick.from, pick.to);
     sh.set({
       title: pick.side === 'from' ? 'С какого дня?' : 'По какой день?',
       body: `<div class="inp-row cal-range-picks">
@@ -669,15 +705,28 @@ on('cal.custom', () => {
           <div class="tiny dim">По</div><div class="b">${dateFull(pick.to)}</div>
         </button>
       </div>
+      <div class="tiny dim center" style="margin:-4px 0 12px">
+        ${pick.side === 'from' ? 'Выберите начало — потом спросим про конец' : n + ' ' + plural(n, ['день', 'дня', 'дней']) + ' выбрано'}
+      </div>
       ${monthGrid(pick.month, {
         selected: pick.side === 'from' ? pick.from : pick.to,
         action: 'cr.pick', navAction: 'cr.month',
         minDate: pick.side === 'to' ? pick.from : null,
         showCounts: false,
-      })}`,
-      footer: `<button class="btn p" data-a="cr.ok">Показать период</button>`,
+        range: { from: pick.from, to: pick.to },
+      })}
+      <div class="pick" style="margin-top:14px;justify-content:center">
+        ${PRESETS().map((p, i) => `<button class="o" data-a="cr.preset" data-i="${i}">${p[0]}</button>`).join('')}
+      </div>`,
+      footer: `<button class="btn p" data-a="cr.ok">Показать ${n} ${plural(n, ['день', 'дня', 'дней'])}</button>`,
     });
   };
+  on('cr.preset', ds => {
+    const p = PRESETS()[+ds.i];
+    pick.from = startOfDay(p[1]); pick.to = startOfDay(p[2]);
+    pick.side = 'to'; pick.month = startOfDay(pick.to);
+    draw();
+  });
   on('cr.from', () => { pick.side = 'from'; pick.month = pick.from; draw(); });
   on('cr.to', () => { pick.side = 'to'; pick.month = pick.to; draw(); });
   on('cr.month', ds => { pick.month = startOfDay(new Date(+ds.d)); draw(); });
@@ -726,13 +775,15 @@ on('cal.pickDate', () => {
   draw();
 });
 
-/* §50 — тап по свободному времени: четыре понятных действия */
+/* §50 — тап по свободному времени. Действий три, а не четыре: «занять
+   время» и «перерыв» делали одно и то же — закрывали слот от записи, —
+   и выбирать между ними было гаданием. Теперь это одна кнопка, а перерыв
+   стал причиной внутри неё. */
 on('cal.slot', ds => {
   const m = +ds.m;
   const items = [
     ['calendarPlus', 'Создать запись', 'Клиент придёт в ' + toHM(m), 'cal.slotAdd', '#4C6FFF'],
-    ['lock', 'Заблокировать время', 'Занять слот под свои дела', 'cal.slotBlock', '#F79009'],
-    ['coffee', 'Добавить перерыв', 'Обед или пауза', 'cal.slotBreak', '#8B5CF6'],
+    ['lock', 'Заблокировать время', 'Перерыв, обед или личные дела', 'cal.slotBlock', '#F79009'],
     ['gift', 'Отметить отсутствие', 'Отпуск, больничный, выходной', 'cal.slotAway', '#06AED4'],
   ];
   const s2 = sheet({
@@ -746,8 +797,7 @@ on('cal.slot', ds => {
   window.__cs = s2;
 });
 on('cal.slotAdd', ds => { window.__cs && window.__cs.close(); setTimeout(() => newApptFlow({ date: cal.date, employeeId: cal.empId, startMin: +ds.m }), 260); });
-on('cal.slotBlock', ds => { window.__cs && window.__cs.close(); setTimeout(() => blockFlow({ date: cal.date, empId: cal.empId, startMin: +ds.m, kind: 'busy' }), 260); });
-on('cal.slotBreak', ds => { window.__cs && window.__cs.close(); setTimeout(() => blockFlow({ date: cal.date, empId: cal.empId, startMin: +ds.m, kind: 'break' }), 260); });
+on('cal.slotBlock', ds => { window.__cs && window.__cs.close(); setTimeout(() => blockFlow({ date: cal.date, empId: cal.empId, startMin: +ds.m }), 260); });
 on('cal.slotAway', () => { window.__cs && window.__cs.close(); setTimeout(() => absenceFlow({ date: cal.date, empId: cal.empId }), 260); });
 
 on('cal.unblock', async ds => {
@@ -764,12 +814,46 @@ on('cal.unblock', async ds => {
 /* уведомления (демо) */
 route('o.notifications', {
   noTab: false, tab: 'o.home',
+  mount() {
+    // Открыли экран — значит прочитали. Счётчик на колокольчике гаснет.
+    if (unreadInbox()) setTimeout(() => markInboxAllRead(), 600);
+  },
   render() {
     const n = now();
+    const mail = companyInbox();
     const soon = appts().filter(a => a.status === 'planned' && new Date(a.start) > n).sort((a, b) => new Date(a.start) - new Date(b.start)).slice(0, 6);
-    return `<div class="top"><button class="ico-btn" data-a="back">${icon('back', 19)}</button><div class="top-t">Уведомления</div></div>
-    <div class="wrap stack s">
-      ${soon.map(a => {
+
+    return `<div class="top"><button class="ico-btn" data-a="back">${icon('back', 19)}</button>
+      <div class="grow"><div class="top-t">Уведомления</div>
+        <div class="top-sub">${mail.length ? 'От платформы и по записям' : 'Ближайшие записи'}</div></div></div>
+
+    ${mail.length ? `<div class="sec">
+      <div class="sec-h"><div class="sec-t">От платформы</div>
+        ${unreadInbox() ? `<span class="bdg p">${unreadInbox()} новых</span>` : ''}</div>
+      <div class="wrap stack s">
+        ${mail.slice(0, 20).map(m => {
+      const k = INBOX_KINDS[m.kind] || INBOX_KINDS.system;
+      return `<button class="card press" style="width:100%;padding:13px 14px;text-align:left;${m.readAt ? '' : 'border-color:' + k.color}" data-a="nt.read" data-id="${m.id}" data-go="${m.goTo || ''}">
+            <div class="row" style="gap:10px;align-items:flex-start">
+              <div class="ic" style="background:${k.color}1f;color:${k.color};flex:none">${icon(k.icon, 18)}</div>
+              <div class="grow" style="min-width:0">
+                <div class="row between" style="gap:8px">
+                  <b class="sm">${esc(m.title)}</b>
+                  ${m.readAt ? '' : `<span class="bdg" style="background:${k.color}1f;color:${k.color};flex:none">новое</span>`}
+                </div>
+                <div class="tiny" style="color:var(--tx-2);margin-top:4px;line-height:1.45">${esc(m.text)}</div>
+                <div class="tiny dim" style="margin-top:5px">${esc(k.t)} · ${relPast(new Date(m.at), n)}</div>
+              </div>
+            </div>
+          </button>`;
+    }).join('')}
+      </div>
+    </div>` : ''}
+
+    <div class="sec">
+      ${mail.length ? '<div class="sec-h"><div class="sec-t">Ближайшие записи</div></div>' : ''}
+      <div class="wrap stack s">
+        ${soon.map(a => {
       const c = client(a.clientId);
       return `<button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="ap.card" data-id="${a.id}">
           <div class="ic" style="background:var(--p-soft);color:var(--p)">${icon('bell', 18)}</div>
@@ -777,7 +861,14 @@ route('o.notifications', {
             <div class="tl">${esc(c.name)} · ${hhmm(new Date(a.start))}</div>
             <div class="st">${dateLabel(new Date(a.start), n)} · ${esc(apptTitle(a))}</div>
           </div>${icon('fwd', 16)}</button>`;
-    }).join('') || emptyState({ ic: 'bell', title: 'Уведомлений нет', text: 'Здесь появятся напоминания о ближайших записях.' })}
+    }).join('') || (mail.length ? '' : emptyState({ ic: 'bell', title: 'Уведомлений нет', text: 'Здесь появятся сообщения платформы и напоминания о ближайших записях.' }))}
+      </div>
     </div>`;
   },
+});
+
+on('nt.read', ds => {
+  markInboxRead(ds.id);
+  if (ds.go) go(ds.go);
+  else rr();
 });

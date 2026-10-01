@@ -5,17 +5,19 @@ import {
   now, today, slotsFor, slotFree, toMin, toHM, createAppointment, cancelAppointment, completeAppointment,
   moveAppointment, createClient, createService, updateService, addBlock, addAbsence, ABSENCE, clientStats, updateClient,
   nextFreeFor, workDay, workWindow, cats, addCat, addReview, reviewFor, tipSeen, markTip,
-  canTouchAppt, bookableStaff, can,
+  canTouchAppt, bookableStaff, can, setLang, me, apptsInRange, sub,
 } from './store.js';
+import { LANGS, lang } from './i18n.js';
 import {
-  sheet, toast, confirmSheet, esc, money, hhmm, dateLabel, dateFull, nMin, avatar, WD, dayKey,
+  t, sheet, toast, confirmSheet, esc, money, hhmm, dateLabel, dateFull, nMin, avatar, WD, MON_SHORT, dayKey,
   startOfDay, addDays, emptyState, promptSheet, wait, loadingBlock, relPast, plural, monthGrid,
+  WD_FULL, slotGroups, wheel, mountWheel, normPhone, prettyPhone,
   pickImage, photoField, IMG_MAX, tipCard,
 } from './ui.js';
 import { icon, catIcon } from './icons.js';
 import { on } from './bus.js';
 import { go, current } from './router.js';
-import { haptic, openLink, copy } from './tg.js';
+import { haptic, openLink, copy, tgUsername, canRequestPhone, requestPhone } from './tg.js';
 import { parseNote, demoVoice } from './ai-engine.js';
 
 /* =========================================================
@@ -37,6 +39,157 @@ export function tipOnce(key, { title, text, ic = 'info', delay = 700 } = {}) {
 }
 
 /* =========================================================
+   Переключатель языка
+   ---------------------------------------------------------
+   Язык лежал только в настройках и в профиле. Человек, которому
+   приложение открылось на чужом языке, до настроек не доходит —
+   он их не находит. Поэтому кнопка стоит в шапке главного экрана,
+   рядом с названием: видно сразу, меняется в два касания.
+
+   Класс приходит снаружи: в цветной шапке салона кнопка белая
+   поверх фотографии, на обычном экране — обычная.
+   ========================================================= */
+export function langBtn(cls = '') {
+  const cur = LANGS.find(l => l.id === lang()) || LANGS[0];
+  return `<button class="ico-btn lang-btn ${cls}" data-a="lang.open" title="${esc(t('Язык'))}">
+    ${icon('globe', 16)}<span>${esc(cur.short)}</span>
+  </button>`;
+}
+
+on('lang.open', () => {
+  const s = sheet({
+    title: t('Язык'),
+    body: `<div class="stack s">
+      ${LANGS.map(l => `<button class="lrow press" style="border-radius:16px;border:1.5px solid ${lang() === l.id ? 'var(--p)' : 'var(--bd)'};width:100%;${lang() === l.id ? 'background:var(--p-soft)' : ''}" data-a="lang.set" data-v="${l.id}">
+        <div class="ic" style="${lang() === l.id ? 'background:var(--p);color:#fff' : ''}">${esc(l.short)}</div>
+        <div class="grow" style="text-align:left"><div class="tl">${esc(l.t)}</div></div>
+        ${lang() === l.id ? `<span style="color:var(--p)">${icon('checkCircle', 19)}</span>` : ''}
+      </button>`).join('')}
+    </div>`,
+  });
+  window.__lang = s;
+});
+on('lang.set', ds => {
+  // Шторку закрываем до смены языка: setLang перерисовывает экран под ней,
+  // и оставшаяся сверху шторка со старыми подписями выглядит как сбой.
+  if (window.__lang) { window.__lang.close(); window.__lang = null; }
+  setLang(ds.v);
+});
+
+/* =========================================================
+   Обращение в поддержку платформы
+   ---------------------------------------------------------
+   Одна шторка на всех: клиент, мастер, владелец пишут об одном и том же —
+   «не работает», «как сделать», «хочу вот так». Отличается только то,
+   куда уходит готовый текст, — это и передаёт вызывающий.
+   ========================================================= */
+export const SUPPORT_TOPICS = {
+  bug: 'Что-то не работает',
+  howto: 'Как сделать',
+  feature: 'Пожелание',
+  other: 'Другое',
+};
+
+export function supportSheet({ title = 'Написать в поддержку', note = '', onSend } = {}) {
+  const st = { topic: 'bug' };
+  const s = sheet({
+    title: t(title),
+    body: `<div class="field"><label>${t('Тема')}</label>
+        <div class="pick">${Object.entries(SUPPORT_TOPICS).map(([k, v]) =>
+      `<button class="o ${k === st.topic ? 'on' : ''}" data-a="sup.topic" data-v="${k}">${t(v)}</button>`).join('')}</div></div>
+      <div class="field"><label>${t('Подробности')}</label>
+        <textarea class="inp" id="_sup" style="min-height:110px" placeholder="${esc(t('Что происходит и чего вы ждали'))}"></textarea></div>
+      ${note ? `<div class="tiny dim" style="padding:0 4px">${t(note)}</div>` : ''}`,
+    footer: `<button class="btn p" data-a="sup.send">${icon('send', 18)}${t('Отправить')}</button>`,
+    onClose: () => { window.__sup = null; },
+  });
+  window.__sup = { s, st, onSend };
+  return s;
+}
+on('sup.topic', (ds, el) => {
+  const w = window.__sup; if (!w) return;
+  w.st.topic = ds.v;
+  w.s.el.querySelectorAll('[data-a="sup.topic"]').forEach(o => o.classList.toggle('on', o === el));
+});
+on('sup.send', () => {
+  const w = window.__sup; if (!w) return;
+  const text = (w.s.el.querySelector('#_sup').value || '').trim();
+  if (!text) { toast(t('Опишите, что случилось'), 'dan'); return; }
+  w.onSend({ topic: w.st.topic, subject: SUPPORT_TOPICS[w.st.topic], text });
+  window.__sup = null;
+  w.s.close();
+  toast(t('Обращение отправлено'));
+});
+
+/* =========================================================
+   Мои данные
+   ---------------------------------------------------------
+   Одна шторка на все роли: имя и телефон есть и у клиента, и у мастера,
+   и у владельца, а раньше поменять их мог только клиент.
+
+   Телефон обязателен и проверяется. До этого пустая строка спокойно
+   сохранялась — в базе оставался человек без единого способа с ним
+   связаться, и никто об этом не знал. Номер берём из Telegram одним
+   нажатием: там он уже подтверждён, и опечатки исключены.
+   ========================================================= */
+export function myDataSheet({ name = '', phone = '', tg = '', note = '', onSave } = {}) {
+  const st = { name, phone };
+  const uname = String(tg || tgUsername() || '').replace(/^@/, '');
+  const s = sheet({ title: t('Мои данные'), body: '' });
+
+  const capture = () => {
+    const n = s.el.querySelector('#_mdn'), p = s.el.querySelector('#_mdp');
+    if (n) st.name = n.value;
+    if (p) st.phone = p.value;
+  };
+
+  const draw = () => {
+    const ok = !!normPhone(st.phone);
+    s.set({
+      title: t('Мои данные'),
+      body: `
+        ${uname ? `<div class="lrow" style="border-radius:16px;border:1px solid var(--bd);margin-bottom:12px">
+          <div class="ic" style="background:var(--p-soft);color:var(--p)">${icon('msg', 18)}</div>
+          <div class="grow"><div class="tl">@${esc(uname)}</div>
+            <div class="st">${t('Из вашего профиля Telegram')}</div></div>
+        </div>` : ''}
+        <div class="field"><label>${t('Как к вам обращаться?')}</label>
+          <input class="inp" id="_mdn" value="${esc(st.name)}" placeholder="${esc(t('Имя'))}"></div>
+        <div class="field"><label>${t('Телефон')}</label>
+          <input class="inp" id="_mdp" type="tel" inputmode="tel" value="${esc(st.phone)}" placeholder="+7 700 000 00 00">
+          ${st.phone && !ok ? `<div class="tiny" style="color:var(--dan);margin-top:6px;padding:0 4px">${t('Проверьте номер: нужны все цифры')}</div>` : ''}
+        </div>
+        ${canRequestPhone() ? `<button class="btn gh sm" data-a="md.tg" style="margin-bottom:12px">${icon('phone', 16)}${t('Взять телефон из Telegram')}</button>` : ''}
+        ${note ? `<div class="tiny dim" style="padding:0 4px">${t(note)}</div>` : ''}`,
+      footer: `<button class="btn p" data-a="md.ok">${t('Сохранить')}</button>`,
+    });
+  };
+
+  on('md.tg', async () => {
+    capture();
+    const v = await requestPhone();
+    if (!v) { toast(t('Telegram не дал номер — введите вручную'), 'dan'); return; }
+    st.phone = prettyPhone(v);
+    draw();
+    toast(t('Телефон получен'));
+  });
+  on('md.ok', () => {
+    capture();
+    const nm = (st.name || '').trim();
+    if (!nm) { toast(t('Введите имя'), 'dan'); return; }
+    const ph = normPhone(st.phone);
+    if (!ph) { toast(t('Введите телефон — по нему с вами свяжутся'), 'dan'); return; }
+    s.close();
+    onSave({ name: nm, phone: prettyPhone(ph) });
+    toast(t('Сохранено'));
+  });
+
+  draw();
+  setTimeout(() => { const i = s.el.querySelector('#_mdn'); if (i) i.focus(); }, 240);
+  return s;
+}
+
+/* =========================================================
    Карточка записи
    ========================================================= */
 export function openApptSheet(id) {
@@ -46,8 +199,11 @@ export function openApptSheet(id) {
   const isPast = en < now();
   const S_ = { planned: ['p', 'Запланирована'], done: ['ok', 'Выполнена'], cancelled: ['dan', 'Отменена'] }[a.status];
   const ai = c && c.ai;
-  const review = a.status === 'done' ? reviewFor(a.id) : null;
-  const reviewBlock = a.status === 'done' ? (review ? `
+  // Оценку видит только владелец. Мастер открывает ту же карточку записи,
+  // и без этой проверки он читал бы отзыв о себе прямо здесь — мимо
+  // закрытого для него раздела «Отзывы».
+  const review = a.status === 'done' && can('reviews') ? reviewFor(a.id) : null;
+  const reviewBlock = a.status === 'done' && can('reviews') ? (review ? `
     <div class="appt-review received">
       <div class="appt-review-head">
         <div class="appt-review-icon">${icon('star', 18, 2)}</div>
@@ -191,34 +347,187 @@ on('ap.note', async ds => {
 });
 
 /* =========================================================
-   Перенос записи
+   Выбор даты и времени — две шторки подряд
+   ---------------------------------------------------------
+   Сначала месяц, потом время выбранного дня. В одном окне это не
+   помещается: человек листает шторку вверх-вниз, сводя дату со слотом,
+   и промахивается. Два коротких шага влезают в экран целиком, а «назад»
+   в шапке возвращает к календарю.
+
+   Компонент общий: им пользуются перенос у клиента, перенос у бизнеса
+   и новая запись. Действия называются ps.* — одновременно открытым
+   таким выбором может быть только один.
+   ========================================================= */
+export function pickSlot({
+  sheet: host = null,          // продолжить в уже открытой шторке
+  title = 'Выберите дату',
+  timeTitle = 'Выберите время',
+  head = '',                   // строка или функция: контекст над календарём
+  date = null,
+  min = null,                  // время уже известно — открываемся сразу на нём
+  months = 4,
+  slotsOn,                     // (date) -> [{ min, t, free, empId }]
+  showBusy = false,            // бизнесу полезно видеть, чем занят день
+  okLabel = null,              // (min, date) -> подпись кнопки
+  from = null,                 // время, которое меняем: показываем «было → станет»
+  confirm = null,              // { title, ok, note } — спросить перед сохранением
+  done = null,                 // { title, text, note } — показать итог после
+  onPick,                      // ({ date, min, empId }) -> void
+  onBack = null,               // «назад» с первого шага
+} = {}) {
+  const s = host || sheet({ title: t(title), body: '' });
+  const st = {
+    date: date && startOfDay(date) >= today() ? startOfDay(date) : today(),
+    month: null, min: min != null ? min : null, empId: null,
+  };
+  st.month = startOfDay(st.date);
+  // Время могли передать снаружи — владелец ткнул в свободный слот календаря.
+  // Если к этому моменту оно занято, не делаем вид, что выбор уже сделан:
+  // иначе кнопка зовёт сохранить то, чего нельзя, и человек упирается в отказ.
+  if (st.min != null && !slotsOn(st.date).some(x => x.min === st.min && x.free)) st.min = null;
+  const maxDate = addDays(today(), months * 30);
+  const top = () => (typeof head === 'function' ? head() : head);
+  // Текущее время записи — подсказка на шагах выбора. На подтверждении
+  // его заменяет строка «Было», а на итоге оно уже неверно: запись уехала.
+  const fromLine = () => (from
+    ? `<div class="tiny dim" style="margin:-4px 2px 14px">${t('Сейчас')}: ${dateLabel(from, now())}, ${hhmm(from)}</div>`
+    : '');
+
+  const drawDate = () => s.set({
+    title: t(title),
+    back: onBack,
+    body: `${top()}${fromLine()}
+      ${monthGrid(st.month, {
+        selected: st.date, action: 'ps.date', navAction: 'ps.month',
+        avail: d => slotsOn(d).filter(x => x.free).length, minDate: today(), maxDate,
+      })}
+      <div class="mc-legend">
+        <span><i></i>${t('есть свободное время')}</span>
+        <span style="opacity:.6">${t('зачёркнуто — мест нет')}</span>
+      </div>`,
+  });
+
+  // Своё же время выбрать можно (ignoreId держит его свободным), но
+  // переносить запись на то место, где она и стоит, незачем.
+  const isSame = () => !!from && st.min != null
+    && dayKey(st.date) === dayKey(from) && st.min === from.getHours() * 60 + from.getMinutes();
+
+  const drawTime = () => {
+    const all = slotsOn(st.date);
+    const free = all.filter(x => x.free);
+    s.set({
+      title: t(timeTitle),
+      back: drawDate,
+      body: `${top()}${fromLine()}
+        <div class="b sm" style="margin-bottom:10px">${dateLabel(st.date, now())}, ${WD_FULL[st.date.getDay()]}</div>
+        ${free.length ? slotGroups(showBusy ? all : free, 'ps.slot', st.min)
+          : `<div class="empty" style="padding:18px 8px">
+              <div class="t" style="font-size:15px">${t(all.length ? 'На этот день мест нет' : 'В этот день не работаем')}</div>
+              <div class="s">${t('Выберите другую дату — свободное время найдётся.')}</div></div>`}`,
+      footer: `<button class="btn p" data-a="ps.ok" ${st.min == null || isSame() ? 'disabled' : ''}>${
+        st.min == null ? t('Выберите время')
+          : isSame() ? t('Это текущее время')
+            : (okLabel ? okLabel(st.min, st.date) : t('Готово'))}</button>`,
+    });
+  };
+
+  /* Время выбрано — показываем, что именно поменяется. Перенос не
+     спрашивают «точно?» ради формальности: человек мог промахнуться по
+     соседнему слоту, и сверить старое с новым ему негде. */
+  const at = () => {
+    const d = new Date(st.date);
+    d.setHours(Math.floor(st.min / 60), st.min % 60, 0, 0);
+    return d;
+  };
+  const whenRow = (label, d, strong) => `<div class="row between" style="padding:9px 0">
+      <span class="sm muted">${t(label)}</span>
+      <b class="${strong ? '' : 'sm'}" style="${strong ? 'color:var(--p)' : 'color:var(--tx-3);text-decoration:line-through'}">${
+        dateLabel(d, now())}, ${hhmm(d)}</b>
+    </div>`;
+
+  const drawConfirm = () => {
+    const d = at();
+    s.set({
+      title: t((confirm && confirm.title) || 'Проверьте время'),
+      back: drawTime,
+      body: `${top()}
+        <div class="card flat" style="padding:4px 14px">
+          ${from ? whenRow('Было', from, false) + '<div class="hr"></div>' : ''}
+          ${whenRow(from ? 'Станет' : 'Когда', d, true)}
+        </div>
+        ${confirm && confirm.note ? `<div class="tiny dim" style="margin-top:10px;padding:0 4px">${t(confirm.note)}</div>` : ''}`,
+      footer: `<div class="btns">
+        <button class="btn gh" data-a="ps.back">${t('Назад')}</button>
+        <button class="btn p" data-a="ps.apply">${t((confirm && confirm.ok) || 'Подтвердить')}</button>
+      </div>`,
+    });
+  };
+
+  const drawDone = () => {
+    const d = at();
+    s.set({
+      title: '',
+      body: `<div class="succ" style="padding:14px 8px 18px">
+          <div class="check">${icon('check', 44, 3)}</div>
+          <div class="t" style="font-size:21px">${t((done && done.text) || 'Готово')}</div>
+          <div class="s">${dateLabel(d, now())}, ${hhmm(d)}</div>
+        </div>
+        ${top()}
+        ${done && done.note ? `<div class="tiny dim center" style="padding:0 4px 4px">${t(done.note)}</div>` : ''}`,
+      footer: `<button class="btn p" data-a="ps.close">${t('Готово')}</button>`,
+    });
+  };
+
+  on('ps.date', ds => { st.date = startOfDay(new Date(+ds.d)); st.min = null; drawTime(); });
+  on('ps.month', ds => { st.month = startOfDay(new Date(+ds.d)); drawDate(); });
+  on('ps.slot', ds => { st.min = +ds.m; st.empId = ds.e || null; haptic('select'); drawTime(); });
+  // Пока шторка открыта, время мог занять кто-то другой — проверяем и
+  // перед подтверждением, и перед самим сохранением.
+  const stillFree = () => {
+    const x = slotsOn(st.date).find(y => y.min === st.min && y.free);
+    if (!x) { toast(t('Это время уже заняли'), 'dan'); st.min = null; drawTime(); }
+    return x || null;
+  };
+  on('ps.ok', () => {
+    if (st.min == null || !stillFree()) return;
+    if (confirm) { drawConfirm(); return; }
+    fire();
+  });
+  on('ps.back', () => drawTime());
+  on('ps.apply', () => fire());
+  on('ps.close', () => s.close());
+
+  function fire() {
+    const x = stillFree(); if (!x) return;
+    onPick({ date: at(), min: st.min, empId: st.empId || x.empId || null });
+    if (done) drawDone(); else s.close();
+  }
+
+  const redraw = () => (st.min == null ? drawDate() : drawTime());
+  redraw();
+  return { sheet: s, redraw };
+}
+
+/* =========================================================
+   Перенос записи (бизнес)
    ========================================================= */
 export function moveFlow(id) {
   const a = appt(id); if (!a) return;
-  let date = startOfDay(new Date(a.start));
-  if (date < today()) date = today();
-  let pick = null;
-  const s = sheet({ title: 'Перенести запись', body: '' });
-  const draw = () => {
-    const slots = slotsFor([a.employeeId], date, a.duration, { ignoreId: a.id });
-    s.set({
-      title: 'Перенести запись',
-      body: `
-        <div class="sm muted" style="margin-bottom:12px">${esc(client(a.clientId).name)} · ${esc(apptTitle(a))} · ${nMin(a.duration)}</div>
-        <div style="margin:0 -18px 14px">${dateStrip(date, 'mv.date', 14)}</div>
-        ${slots.length ? `<div class="slots">${slots.map(x => `<button class="slot ${x.free ? '' : 'busy'} ${pick === x.min ? 'on' : ''}" data-a="mv.slot" data-m="${x.min}" data-f="${x.free ? 1 : 0}">${x.t}</button>`).join('')}</div>`
-          : `<div class="empty" style="padding:24px"><div class="t" style="font-size:15px">Выходной</div><div class="s">У мастера в этот день нет рабочих часов</div></div>`}`,
-      footer: `<button class="btn p" data-a="mv.ok" ${pick == null ? 'disabled' : ''}>Перенести${pick != null ? ' на ' + toHM(pick) : ''}</button>`,
-    });
-  };
-  on('mv.date', ds => { date = new Date(+ds.d); pick = null; draw(); });
-  on('mv.slot', ds => { if (ds.f !== '1') return; pick = +ds.m; haptic('select'); draw(); });
-  on('mv.ok', () => {
-    const d = new Date(date); d.setHours(Math.floor(pick / 60), pick % 60, 0, 0);
-    moveAppointment(id, d, null);
-    s.close(); toast('Запись перенесена на ' + dateLabel(d, now()).toLowerCase() + ', ' + toHM(pick));
+  const c = client(a.clientId), e0 = emp(a.employeeId), cur = new Date(a.start);
+  // Своё же время не считаем занятым: иначе вернуться на него, передумав,
+  // было бы нельзя, а день выглядел бы плотнее, чем он есть.
+  const slotsOn = d => slotsFor([a.employeeId], d, a.duration, { ignoreId: a.id });
+  const head = `<div class="card flat" style="padding:11px 13px;margin-bottom:12px">
+      <div class="b sm nowrap">${esc(c ? c.name : 'Клиент')} · ${esc(apptTitle(a))}</div>
+      <div class="tiny muted">${esc(e0 ? e0.name : '')} · ${nMin(a.duration)}</div>
+    </div>`;
+  pickSlot({
+    title: 'Перенести запись', head, date: cur, from: cur, slotsOn, showBusy: true,
+    okLabel: min => t('Перенести на {t}', { t: toHM(min) }),
+    confirm: { title: 'Перенести запись?', ok: 'Перенести', note: 'Старое время снова станет свободным.' },
+    done: { text: 'Запись перенесена', note: 'Клиента предупредите сами — в демо уведомление не уходит.' },
+    onPick: ({ date }) => moveAppointment(id, date, null),
   });
-  draw();
 }
 
 /* =========================================================
@@ -250,8 +559,12 @@ on('fab', () => quickAdd());
 
 /* =========================================================
    Полоса дат
+   ---------------------------------------------------------
+   Осталась только у блокировки времени: там дата — одно поле формы
+   рядом с мастером и интервалом, и ради неё разворачивать календарь
+   не нужно. Выбор даты и времени для записи живёт в pickSlot.
    ========================================================= */
-export function dateStrip(selected, action, days = 14, from = null) {
+function dateStrip(selected, action, days = 14, from = null) {
   const base = from || today();
   const cells = [];
   for (let i = 0; i < days; i++) {
@@ -259,7 +572,7 @@ export function dateStrip(selected, action, days = 14, from = null) {
     const on = dayKey(d) === dayKey(selected);
     cells.push(`<button class="dcard ${on ? 'on' : ''}" data-a="${action}" data-d="${d.getTime()}">
       <div class="w">${WD[d.getDay()]}</div><div class="n">${d.getDate()}</div>
-      <div class="m">${i === 0 ? 'сегодня' : ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'][d.getMonth()]}</div>
+      <div class="m">${i === 0 ? t('сегодня') : MON_SHORT[d.getMonth()]}</div>
     </button>`);
   }
   return `<div class="hscroll">${cells.join('')}</div>`;
@@ -332,49 +645,55 @@ export function newApptFlow(pre = {}) {
     };
   }
 
-  // если на выбранный день свободных слотов нет — сразу показываем ближайший рабочий день
-  function ensureDate() {
-    if (state._auto || pre.date || pre.startMin != null) return;
-    state._auto = true;
-    const cands = bookableStaff().filter(e => !state.serviceIds.length || state.serviceIds.every(id => (svc(id) || { employeeIds: [] }).employeeIds.includes(e.id)));
-    const ids = state.employeeId ? [state.employeeId] : cands.map(e => e.id);
-    for (let i = 0; i < 14; i++) {
-      const d = addDays(today(), i);
-      if (slotsFor(ids, d, duration()).some(x => x.free)) { state.date = d; return; }
-    }
+  /* Шаг «когда» — общий выбор даты и времени (pickSlot): сначала месяц,
+     потом слоты. Мастер выбирается здесь же, чипсами над календарём:
+     от него зависит, в какие дни вообще есть окна. */
+  let picker = null;
+
+  function cands() {
+    return bookableStaff().filter(e => !state.serviceIds.length
+      || state.serviceIds.every(id => (svc(id) || { employeeIds: [] }).employeeIds.includes(e.id)));
   }
 
-  function stepTime() {
-    ensureDate();
-    const cands = bookableStaff().filter(e => !state.serviceIds.length || state.serviceIds.every(id => (svc(id) || { employeeIds: [] }).employeeIds.includes(e.id)));
-    const empIds = state.employeeId ? [state.employeeId] : cands.map(e => e.id);
-    const slots = slotsFor(empIds, state.date, duration());
+  function whenHead() {
     const cl = client(state.clientId);
-    return {
-      title: 'Когда?',
-      back: () => { state.step = 2; draw(); },
-      body: `
-        <div class="row" style="gap:10px;margin-bottom:12px;padding:10px 12px;background:var(--sf-2);border-radius:14px">
-          ${avatar(cl, 's')}
-          <div class="grow"><div class="b sm">${esc(cl ? cl.name : '')}</div>
-          <div class="tiny muted nowrap">${esc(state.serviceIds.map(id => (svc(id) || {}).name).join(' + '))}</div></div>
-          <div class="b sm">${money(price())}</div>
-        </div>
-        <div class="chips" style="padding-left:0;padding-right:0;margin-bottom:12px">
-          <button class="chip p ${!state.employeeId ? 'on' : ''}" data-a="na.emp" data-id="">Любой мастер</button>
-          ${cands.map(e => `<button class="chip p ${state.employeeId === e.id ? 'on' : ''}" data-a="na.emp" data-id="${e.id}">${esc(e.name.split(' ')[0])}</button>`).join('')}
-        </div>
-        <div style="margin:0 -18px 14px">${dateStrip(state.date, 'na.date', 14)}</div>
-        ${slots.length ? `<div class="slots">${slots.map(x => `<button class="slot ${x.free ? '' : 'busy'} ${state.min === x.min ? 'on' : ''}" data-a="na.slot" data-m="${x.min}" data-f="${x.free ? 1 : 0}" data-e="${x.empId || ''}">${x.t}</button>`).join('')}</div>`
-          : `<div class="empty" style="padding:22px"><div class="t" style="font-size:15px">Выходной день</div><div class="s">Выберите другую дату</div></div>`}`,
-      footer: `<button class="btn p" data-a="na.create" ${state.min == null ? 'disabled' : ''}>
-        ${state.min == null ? 'Выберите время' : 'Создать запись · ' + dateLabel(state.date, now()).toLowerCase() + ', ' + toHM(state.min)}</button>`,
-    };
+    return `
+      <div class="row" style="gap:10px;margin-bottom:12px;padding:10px 12px;background:var(--sf-2);border-radius:14px">
+        ${avatar(cl, 's')}
+        <div class="grow" style="min-width:0"><div class="b sm nowrap">${esc(cl ? cl.name : '')}</div>
+        <div class="tiny muted nowrap">${esc(state.serviceIds.map(id => (svc(id) || {}).name).join(' + '))}</div></div>
+        <div class="b sm">${money(price())}</div>
+      </div>
+      <div class="chips" style="padding-left:0;padding-right:0;margin-bottom:12px">
+        <button class="chip p ${!state.employeeId ? 'on' : ''}" data-a="na.emp" data-id="">${t('Любой мастер')}</button>
+        ${cands().map(e => `<button class="chip p ${state.employeeId === e.id ? 'on' : ''}" data-a="na.emp" data-id="${e.id}">${esc(e.name.split(' ')[0])}</button>`).join('')}
+      </div>`;
+  }
+
+  function stepWhen() {
+    picker = pickSlot({
+      sheet: s, head: whenHead, date: state.date, min: state.min, showBusy: true,
+      title: 'Когда?', timeTitle: 'Выберите время',
+      onBack: () => { picker = null; state.step = 2; draw(); },
+      slotsOn: d => {
+        const ids = state.employeeId ? [state.employeeId] : cands().map(e => e.id);
+        return slotsFor(ids, d, duration());
+      },
+      okLabel: (min, d) => t('Создать запись · {d}', { d: dateLabel(d, now()).toLowerCase() + ', ' + toHM(min) }),
+      onPick: ({ date, min, empId }) => {
+        const id = state.employeeId || empId;
+        if (!id) { toast(t('Нет свободного мастера'), 'dan'); return; }
+        createAppointment({ clientId: state.clientId, employeeId: id, serviceIds: state.serviceIds, start: date, source: 'owner' });
+        s.close();
+        toast(t('Запись создана на {d}', { d: dateLabel(date, now()).toLowerCase() + ', ' + toHM(min) }));
+      },
+    });
   }
 
   function draw() {
-    const v = state.step === 1 ? stepClient() : state.step === 2 ? stepService() : stepTime();
-    s.set(v);
+    if (state.step === 3) { stepWhen(); return; }
+    picker = null;
+    s.set(state.step === 1 ? stepClient() : stepService());
   }
   function drawSoft() {
     // перерисовка списка клиентов без потери фокуса
@@ -402,17 +721,11 @@ export function newApptFlow(pre = {}) {
     if (i >= 0) state.serviceIds.splice(i, 1); else state.serviceIds.push(ds.id);
     haptic('select'); draw();
   });
-  on('na.next3', () => { state.step = 3; state.min = null; draw(); });
-  on('na.emp', ds => { state.employeeId = ds.id || null; state.min = null; draw(); });
-  on('na.date', ds => { state.date = new Date(+ds.d); state.min = null; draw(); });
-  on('na.slot', ds => { if (ds.f !== '1') return; state.min = +ds.m; if (ds.e) state.employeeId = ds.e; haptic('select'); draw(); });
-  on('na.create', () => {
-    const d = new Date(state.date); d.setHours(Math.floor(state.min / 60), state.min % 60, 0, 0);
-    const empId = state.employeeId || (slotsFor(bookableStaff().map(e => e.id), state.date, duration()).find(x => x.min === state.min) || {}).empId;
-    if (!empId) { toast('Нет свободного мастера', 'dan'); return; }
-    createAppointment({ clientId: state.clientId, employeeId: empId, serviceIds: state.serviceIds, start: d, source: 'owner' });
-    s.close();
-    toast('Запись создана на ' + dateLabel(d, now()).toLowerCase() + ', ' + toHM(state.min));
+  on('na.next3', () => { state.step = 3; draw(); });
+  on('na.emp', ds => {
+    state.employeeId = ds.id || null;
+    // мастер меняет и занятость дней, и список времени — перерисовываем шаг
+    if (picker) picker.redraw(); else draw();
   });
 
   draw();
@@ -422,88 +735,285 @@ export function newApptFlow(pre = {}) {
 /* =========================================================
    Блокировка времени
    ========================================================= */
+/* =========================================================
+   Отрезок времени барабанами
+   ---------------------------------------------------------
+   «Начало — Конец» плюс быстрые длительности. Один и тот же выбор
+   нужен и в «Занять время», и в перерыве расписания, поэтому разметка
+   и привязка барабанов живут здесь, а не копируются по экранам.
+
+   Действия называются rw.* — одновременно открытым такой выбор бывает
+   только один, и каждый вызывающий вешает свои обработчики.
+   ========================================================= */
+export const RANGE_MINS = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55];
+const pad2 = n => String(n).padStart(2, '0');
+// «1 ч 30 мин» в ряду кнопок переносило строку и добавляло окну прокрутку.
+// В чипсе длительности хватает короткой записи: рядом всё равно стоит время.
+export const shortLen = m => (m < 60 ? m + ' ' + t('мин')
+  : Math.floor(m / 60) + ' ' + t('ч') + (m % 60 ? ' ' + (m % 60) : ''));
+
+export function hoursBetween(fromMin, toMin_) {
+  const out = [];
+  for (let h = Math.floor(fromMin / 60); h <= Math.ceil(toMin_ / 60); h++) out.push(h);
+  return out;
+}
+
+export function rangeWheels(st, hours, lens = [15, 30, 60, 90, 120]) {
+  const cur = st.edit === 'from' ? st.from : st.to;
+  return `
+    <div class="tp-row">
+      <button class="tp ${st.edit === 'from' ? 'on' : ''}" data-a="rw.edit" data-v="from">
+        <span class="l">${t('Начало')}</span><span class="v" id="_rwf">${toHM(st.from)}</span></button>
+      <button class="tp ${st.edit === 'to' ? 'on' : ''}" data-a="rw.edit" data-v="to">
+        <span class="l">${t('Конец')}</span><span class="v" id="_rwt">${toHM(st.to)}</span></button>
+    </div>
+    <div class="wheel-box">
+      ${wheel('_rwh', hours, Math.floor(cur / 60), pad2)}
+      <div class="wheel-sep">:</div>
+      ${wheel('_rwm', RANGE_MINS, cur % 60, pad2)}
+    </div>
+    ${lens.length ? `<div class="pick" style="margin-top:12px">
+      ${lens.map(m => `<button class="o ${st.to - st.from === m ? 'on' : ''}" data-a="rw.len" data-m="${m}">${shortLen(m)}</button>`).join('')}
+    </div>` : ''}`;
+}
+
+/** Обновить цифры и чипсы на месте: перерисовка сбросила бы барабан. */
+export function syncRangeWheels(root, st) {
+  const f = root.querySelector('#_rwf'), t2 = root.querySelector('#_rwt');
+  if (f) f.textContent = toHM(st.from);
+  if (t2) t2.textContent = toHM(st.to);
+  root.querySelectorAll('[data-a="rw.len"]').forEach(x => x.classList.toggle('on', +x.dataset.m === st.to - st.from));
+}
+
+export function mountRangeWheels(root, st, after) {
+  const cur = st.edit === 'from' ? st.from : st.to;
+  const set = m => {
+    if (st.edit === 'from') {
+      // тянем конец за началом, сохраняя длительность: человек двигает
+      // отрезок по дню, а не задаёт его каждый раз заново
+      const dur = Math.max(5, st.to - st.from);
+      st.from = m; st.to = m + dur;
+    } else st.to = m;
+    syncRangeWheels(root, st);
+    if (after) after();
+  };
+  mountWheel(root, '_rwh', Math.floor(cur / 60),
+    h => set(h * 60 + (st.edit === 'from' ? st.from : st.to) % 60));
+  mountWheel(root, '_rwm', cur % 60, mi => {
+    const base = st.edit === 'from' ? st.from : st.to;
+    set(Math.floor(base / 60) * 60 + mi);
+  });
+}
+
+/* Одно время, а не отрезок: начало и конец рабочего дня. */
+export function timeSheet({ title = 'Выберите время', value = 12 * 60, hours = null, onOk } = {}) {
+  const st = { v: value };
+  const HH = hours || hoursBetween(0, 23 * 60);
+  const s = sheet({ title: t(title), body: '' });
+  s.set({
+    title: t(title),
+    body: `<div class="wheel-box">
+      ${wheel('_th', HH, Math.floor(st.v / 60), pad2)}
+      <div class="wheel-sep">:</div>
+      ${wheel('_tm', RANGE_MINS, st.v % 60, pad2)}
+    </div>`,
+    footer: `<button class="btn p" data-a="tw.ok">${t('Готово')} · <span id="_tv">${toHM(st.v)}</span></button>`,
+    mount: root => {
+      const upd = () => { const el = root.querySelector('#_tv'); if (el) el.textContent = toHM(st.v); };
+      mountWheel(root, '_th', Math.floor(st.v / 60), h => { st.v = h * 60 + st.v % 60; upd(); });
+      mountWheel(root, '_tm', st.v % 60, mi => { st.v = Math.floor(st.v / 60) * 60 + mi; upd(); });
+    },
+  });
+  window.__tw = { s, st, onOk };
+  return s;
+}
+on('tw.ok', () => {
+  const w = window.__tw; if (!w) return;
+  window.__tw = null;
+  w.s.close();
+  w.onOk(w.st.v);
+});
+
+/* =========================================================
+   Занятое время уже занято
+   ---------------------------------------------------------
+   Отпуск или блокировку нельзя поставить поверх записи: клиент придёт,
+   а мастера нет. Но и просто запретить мало — человек тогда вручную
+   ищет эти записи по календарю. Поэтому показываем их списком здесь же
+   и даём перенести или отменить, не выходя из шторки. Список
+   пересчитывается после каждого действия: как только он пуст, можно
+   продолжать.
+   ========================================================= */
+export function conflictSheet({ title = 'На это время есть записи', text = '', list, onResolved } = {}) {
+  const s = sheet({ title: t(title), body: '' });
+  let off = null;
+  const close = () => { if (off) { off(); off = null; } };
+
+  const draw = () => {
+    const cur = list();
+    if (!cur.length) {
+      s.set({
+        title: t('Время свободно'),
+        body: `<div class="succ" style="padding:10px 8px 16px">
+            <div class="check">${icon('check', 44, 3)}</div>
+            <div class="t" style="font-size:20px">${t('Записей на это время больше нет')}</div>
+          </div>`,
+        footer: `<button class="btn p" data-a="cf.ok">${t('Продолжить')}</button>`,
+      });
+      return;
+    }
+    s.set({
+      title: t(title),
+      body: `${text ? `<div class="sm" style="color:var(--tx-2);margin-bottom:12px">${t(text)}</div>` : ''}
+        <div class="stack s">${cur.map(a => {
+        const c = client(a.clientId), d = new Date(a.start);
+        return `<div class="card" style="padding:0">
+            <div class="row" style="gap:11px;padding:12px 14px;align-items:center">
+              ${avatar(c, 'm')}
+              <div class="grow" style="min-width:0">
+                <div class="b sm nowrap">${esc(c ? c.name : 'Клиент')}</div>
+                <div class="tiny muted nowrap">${dateLabel(d, now())}, ${hhmm(d)} · ${esc(apptTitle(a))}</div>
+              </div>
+            </div>
+            <div class="upc-acts">
+              <button class="press" data-a="cf.move" data-id="${a.id}">${icon('history', 16)}${t('Перенести')}</button>
+              <button class="press dan" data-a="cf.cancel" data-id="${a.id}">${icon('xCircle', 16)}${t('Отменить')}</button>
+            </div>
+          </div>`;
+      }).join('')}</div>`,
+      footer: '',
+    });
+  };
+
+  // Перенос и отмена меняют данные — список должен пересчитаться сам,
+  // иначе после переноса здесь висела бы уже неактуальная запись.
+  off = sub(() => { if (!s._closed) draw(); });
+  const prevClose = s.close;
+  s.close = () => { close(); prevClose(); };
+  draw();
+  window.__cf = { s, onResolved };
+  return s;
+}
+on('cf.move', ds => moveFlow(ds.id));
+on('cf.cancel', async ds => {
+  const a = appt(ds.id); if (!a) return;
+  const c = client(a.clientId), d = new Date(a.start);
+  const ok = await confirmSheet({
+    title: 'Отменить запись?',
+    text: `${c ? c.name : 'Клиент'}\n${apptTitle(a)}\n${dateLabel(d, now())}, ${hhmm(d)}\n\nПредупредите клиента — в демо уведомление не уходит.`,
+    ok: 'Отменить запись', cancel: 'Оставить', danger: true,
+  });
+  if (!ok) return;
+  cancelAppointment(ds.id, 'owner');
+  toast('Запись отменена', 'dan');
+});
+on('cf.ok', () => {
+  const w = window.__cf; if (!w) return;
+  window.__cf = null;
+  w.s.close();
+  w.onResolved();
+});
+
 export function blockFlow(pre = {}) {
+  // Мастер распоряжается только своим временем: выбор сотрудника —
+  // это управление чужим расписанием, и оно есть только у тех,
+  // кому открыт весь календарь.
+  const canPickEmp = can('allCalendar');
+  const meEmp = me();
+  const start0 = pre.startMin != null ? pre.startMin : 13 * 60;
   const st = {
-    empId: pre.empId || staff()[0].id,
+    empId: canPickEmp ? (pre.empId || staff()[0].id) : ((meEmp && meEmp.id) || staff()[0].id),
     date: pre.date ? startOfDay(pre.date) : today(),
-    from: pre.startMin != null ? pre.startMin : 13 * 60,
-    len: 60,
-    kind: pre.kind || 'busy',
+    kind: pre.kind || 'break',
     allDay: false,
-    custom: false,          // §52 — произвольное время вместо готовых вариантов
-    to: (pre.startMin != null ? pre.startMin : 13 * 60) + 60,
+    from: start0,
+    to: start0 + 60,
+    edit: 'from',                 // какое из двух значений крутит барабан
   };
   const s = sheet({ title: 'Занять время', body: '' });
   const KINDS = ['break', 'busy', 'other'];
 
-  const draw = () => {
+  const window_ = () => {
     const e = emp(st.empId);
-    // окно с учётом часов салона — блокировать время, когда салон закрыт, незачем
     const w = e ? workWindow(e, st.date) : null;
-    const dayFrom = w ? toMin(w.from) : 9 * 60, dayTo = w ? toMin(w.to) : 20 * 60;
+    return { w, from: w ? toMin(w.from) : 9 * 60, to: w ? toMin(w.to) : 20 * 60 };
+  };
+
+  /* Перерисовывать всё окно на каждый поворот барабана нельзя: он
+     сбросится к началу прямо под пальцем. Поэтому цифры и подписи
+     обновляем на месте. */
+  const sync = () => {
+    const bad = !st.allDay && st.to <= st.from;
+    syncRangeWheels(s.el, st);
+    const ok = s.el.querySelector('[data-a="bl.ok"]');
+    if (ok) {
+      ok.disabled = bad;
+      ok.textContent = bad ? t('Конец раньше начала')
+        : st.allDay ? t('Занять весь день')
+          : t('Занять {a}–{b}', { a: toHM(st.from), b: toHM(st.to) });
+    }
+  };
+
+  const draw = () => {
+    const { w, from: dayFrom, to: dayTo } = window_();
     if (st.allDay) { st.from = dayFrom; st.to = dayTo; }
-    const endMin = st.custom || st.allDay ? st.to : st.from + st.len;
+    const HOURS = hoursBetween(dayFrom, dayTo);
 
     s.set({
-      title: 'Занять время',
+      title: t('Занять время'),
       body: `
-      <div class="field"><label>Мастер</label>
-        <div class="pick">${staff().map(x => `<button class="o ${st.empId === x.id ? 'on' : ''}" data-a="bl.emp" data-id="${x.id}">${esc(x.name.split(' ')[0])}</button>`).join('')}</div>
-      </div>
-      <div class="field"><label>Причина</label>
+      <div class="field"><label>${t('Причина')}</label>
         <div class="pick">${KINDS.map(k => `<button class="o ${st.kind === k ? 'on' : ''}" data-a="bl.kind" data-k="${k}">${ABSENCE[k].t}</button>`).join('')}</div>
       </div>
-      <div class="field"><label>Дата</label><div style="margin:0 -18px">${dateStrip(st.date, 'bl.date', 14)}</div></div>
+      ${canPickEmp ? `<div class="field"><label>${t('Мастер')}</label>
+        <div class="pick">${staff().map(x => `<button class="o ${st.empId === x.id ? 'on' : ''}" data-a="bl.emp" data-id="${x.id}">${esc(x.name.split(' ')[0])}</button>`).join('')}</div>
+      </div>` : ''}
+      <div class="field"><label>${t('Дата')}</label><div style="margin:0 -18px">${dateStrip(st.date, 'bl.date', 14)}</div></div>
 
       <div class="lrow" style="border-radius:14px;border:1px solid var(--bd);margin-bottom:14px">
-        <div class="grow"><div class="tl">Весь день</div>
-          <div class="st">${w ? w.from + ' — ' + w.to : 'мастер не работает в этот день'}</div></div>
+        <div class="grow"><div class="tl">${t('Весь день')}</div>
+          <div class="st">${w ? w.from + ' — ' + w.to : t('в этот день мастер не работает')}</div></div>
         <button class="sw ${st.allDay ? 'on' : ''}" data-a="bl.allday"></button>
       </div>
 
-      ${st.allDay ? '' : `
-      <div class="field"><label>Начало</label>
-        <div class="pick">${[9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19].map(h => `<button class="o ${st.from === h * 60 ? 'on' : ''}" data-a="bl.from" data-m="${h * 60}">${toHM(h * 60)}</button>`).join('')}</div>
-      </div>
-      <div class="field"><label>Длительность</label>
-        <div class="pick">
-          ${[15, 30, 60, 90, 120, 240].map(m => `<button class="o ${!st.custom && st.len === m ? 'on' : ''}" data-a="bl.len" data-m="${m}">${nMin(m)}</button>`).join('')}
-          <button class="o ${st.custom ? 'on' : ''}" data-a="bl.custom">Своё время</button>
-        </div>
-      </div>
-      ${st.custom ? `<div class="inp-row" style="margin-bottom:14px">
-        <div class="field" style="margin:0"><label>С</label><input class="inp" id="_bf" value="${toHM(st.from)}" placeholder="12:17"></div>
-        <div class="field" style="margin:0"><label>По</label><input class="inp" id="_bt" value="${toHM(st.to)}" placeholder="12:47"></div>
-      </div>` : ''}`}
+      ${st.allDay ? '' : rangeWheels(st, HOURS)}
 
-      <div class="tiny dim">В это время клиенты не смогут записаться к мастеру.</div>`,
-      footer: `<button class="btn p" data-a="bl.ok">Занять ${st.allDay ? 'весь день' : toHM(st.from) + '–' + toHM(endMin)}</button>`,
+      <div class="tiny dim" style="margin-top:14px">${t('В это время клиенты не смогут записаться.')}</div>`,
+      footer: `<button class="btn p" data-a="bl.ok">${st.allDay ? t('Занять весь день') : t('Занять {a}–{b}', { a: toHM(st.from), b: toHM(st.to) })}</button>`,
+      mount: root => { if (!st.allDay) mountRangeWheels(root, st, sync); },
     });
+    sync();
   };
 
-  const readCustom = () => {
-    if (!st.custom) return;
-    const f = s.el.querySelector('#_bf'), t = s.el.querySelector('#_bt');
-    if (f && /^\d{1,2}:\d{2}$/.test(f.value)) st.from = toMin(f.value);
-    if (t && /^\d{1,2}:\d{2}$/.test(t.value)) st.to = toMin(t.value);
-  };
-
-  on('bl.emp', ds => { readCustom(); st.empId = ds.id; draw(); });
-  on('bl.kind', ds => { readCustom(); st.kind = ds.k; draw(); });
-  on('bl.date', ds => { readCustom(); st.date = new Date(+ds.d); draw(); });
-  on('bl.allday', () => { readCustom(); st.allDay = !st.allDay; draw(); });
-  on('bl.from', ds => { st.from = +ds.m; st.to = st.from + st.len; st.custom = false; draw(); });
-  on('bl.len', ds => { st.len = +ds.m; st.to = st.from + st.len; st.custom = false; draw(); });
-  on('bl.custom', () => { readCustom(); st.custom = true; st.to = st.from + st.len; draw(); });
+  on('bl.kind', ds => { st.kind = ds.k; draw(); });
+  on('bl.emp', ds => { st.empId = ds.id; draw(); });
+  on('bl.date', ds => { st.date = startOfDay(new Date(+ds.d)); draw(); });
+  on('bl.allday', () => { st.allDay = !st.allDay; draw(); });
+  on('rw.edit', ds => { st.edit = ds.v; draw(); });
+  on('rw.len', ds => {
+    st.to = st.from + +ds.m;
+    // барабан крутит «конец» — его надо подвинуть, иначе цифры разойдутся
+    if (st.edit === 'to') draw(); else sync();
+  });
   on('bl.ok', () => {
-    readCustom();
-    const endMin = st.custom || st.allDay ? st.to : st.from + st.len;
-    if (endMin <= st.from) { toast('Конец должен быть позже начала', 'dan'); return; }
-    const a = new Date(st.date); a.setHours(Math.floor(st.from / 60), st.from % 60, 0, 0);
-    const b = new Date(st.date); b.setHours(Math.floor(endMin / 60), endMin % 60, 0, 0);
-    addBlock({ employeeId: st.empId, start: a, end: b, reason: ABSENCE[st.kind].t, kind: st.kind, allDay: st.allDay });
-    s.close();
-    toast(st.allDay ? 'День занят' : 'Время занято ' + toHM(st.from) + '–' + toHM(endMin));
+    if (!st.allDay && st.to <= st.from) { toast(t('Конец должен быть позже начала'), 'dan'); return; }
+    const a2 = new Date(st.date); a2.setHours(Math.floor(st.from / 60), st.from % 60, 0, 0);
+    const b2 = new Date(st.date); b2.setHours(Math.floor(st.to / 60), st.to % 60, 0, 0);
+    const save = () => {
+      addBlock({ employeeId: st.empId, start: a2, end: b2, reason: ABSENCE[st.kind].t, kind: st.kind, allDay: st.allDay });
+      s.close();
+      toast(st.allDay ? t('День занят') : t('Время занято {a}–{b}', { a: toHM(st.from), b: toHM(st.to) }));
+    };
+    // Поверх живой записи время не занимаем: клиент придёт к закрытой двери.
+    if (apptsInRange(st.empId, a2, b2).length) {
+      conflictSheet({
+        text: 'Пока на это время записан клиент, занять его нельзя. Перенесите запись или отмените — и возвращайтесь.',
+        list: () => apptsInRange(st.empId, a2, b2),
+        onResolved: save,
+      });
+      return;
+    }
+    save();
   });
   draw();
   return s;
@@ -513,8 +1023,11 @@ export function blockFlow(pre = {}) {
    Отсутствие: отпуск, больничный, выходной (§53–§56)
    ========================================================= */
 export function absenceFlow(pre = {}) {
+  // Как и с блокировкой: отпуск себе мастер ставит сам, чужой — нет.
+  const canPickEmp = can('allCalendar');
+  const meEmp = me();
   const st = {
-    empId: pre.empId || staff()[0].id,
+    empId: canPickEmp ? (pre.empId || staff()[0].id) : ((meEmp && meEmp.id) || staff()[0].id),
     kind: 'vacation',
     from: pre.date ? startOfDay(pre.date) : today(),
     to: pre.date ? startOfDay(pre.date) : today(),
@@ -538,9 +1051,9 @@ export function absenceFlow(pre = {}) {
           minDate: st.picking === 'to' ? st.from : null,
         })
         : `
-        <div class="field"><label>Кто отсутствует</label>
+        ${canPickEmp ? `<div class="field"><label>Кто отсутствует</label>
           <div class="pick">${staff().map(x => `<button class="o ${st.empId === x.id ? 'on' : ''}" data-a="ab.emp" data-id="${x.id}">${esc(x.name.split(' ')[0])}</button>`).join('')}</div>
-        </div>
+        </div>` : ''}
         <div class="field"><label>Причина</label>
           <div class="pick">${KINDS.map(k => `<button class="o ${st.kind === k ? 'on' : ''}" data-a="ab.kind" data-k="${k}"
             style="${st.kind === k ? 'background:' + ABSENCE[k].color + '1f;color:' + ABSENCE[k].color + ';border-color:' + ABSENCE[k].color : ''}">${ABSENCE[k].t}</button>`).join('')}</div>
@@ -571,10 +1084,25 @@ export function absenceFlow(pre = {}) {
     st.picking = null; draw();
   });
   on('ab.ok', () => {
-    const rows = addAbsence({ employeeId: st.empId, from: st.from, to: st.to, kind: st.kind });
-    s.close();
-    const e = emp(st.empId);
-    toast(`${ABSENCE[st.kind].t}: ${e ? e.name.split(' ')[0] : ''}, ${rows.length} ${plural(rows.length, ['день', 'дня', 'дней'])}`);
+    const lo = startOfDay(st.from);
+    const hi = new Date(startOfDay(st.to).getTime() + 86399999);
+    const save = () => {
+      const rows = addAbsence({ employeeId: st.empId, from: st.from, to: st.to, kind: st.kind });
+      s.close();
+      const e = emp(st.empId);
+      toast(`${ABSENCE[st.kind].t}: ${e ? e.name.split(' ')[0] : ''}, ${rows.length} ${plural(rows.length, ['день', 'дня', 'дней'])}`);
+    };
+    // Отпуск поверх записей — та же беда, только на несколько дней сразу.
+    if (apptsInRange(st.empId, lo, hi).length) {
+      conflictSheet({
+        title: 'На эти дни есть записи',
+        text: 'Отметить отсутствие можно, когда день свободен. Перенесите эти записи или отмените — список обновится сам.',
+        list: () => apptsInRange(st.empId, lo, hi),
+        onResolved: save,
+      });
+      return;
+    }
+    save();
   });
   draw();
   return s;
@@ -708,22 +1236,26 @@ export function addServiceSheet(pre = {}) {
 
 /* =========================================================
    Оценка визита клиентом (§80, §81)
-   Результат остаётся внутри системы: на страницу записи
-   отзывы не выводятся, их видит только бизнес.
+   Результат остаётся внутри системы: на страницу записи отзывы
+   не выводятся, а внутри салона их открывает только владелец.
+   Клиенту мы это прямо и обещаем — иначе честной оценки мастера,
+   к которому человек придёт ещё раз, ждать не приходится.
    ========================================================= */
 export function reviewSheet(apptId, opts = {}) {
   const a = appt(apptId); if (!a) return;
-  if (reviewFor(apptId)) { toast('Вы уже оценили этот визит'); return; }
+  if (reviewFor(apptId)) { toast(t('Вы уже оценили этот визит')); return; }
   const e = emp(a.employeeId);
   const st = { rating: 0, text: '' };
-  const s = sheet({ title: 'Как всё прошло?', body: '' });
+  const s = sheet({ title: t('Как всё прошло?'), body: '' });
 
   const LABELS = ['', 'Плохо', 'Так себе', 'Нормально', 'Хорошо', 'Отлично'];
-  const capture = () => { const t = s.el.querySelector('#_rv'); if (t) st.text = t.value; };
+  // не t: теперь так называется переводчик из ui, и локальная переменная
+  // с тем же именем перекрывала бы его на всю функцию
+  const capture = () => { const ta = s.el.querySelector('#_rv'); if (ta) st.text = ta.value; };
 
   const draw = () => {
     s.set({
-      title: 'Как всё прошло?',
+      title: t('Как всё прошло?'),
       body: `
         <div class="card flat" style="padding:12px 14px;margin-bottom:16px;display:flex;gap:12px;align-items:center">
           ${avatar(e, 'm')}
@@ -732,21 +1264,21 @@ export function reviewSheet(apptId, opts = {}) {
         </div>
         <div class="center" style="margin-bottom:6px">
           <div class="stars">${[1, 2, 3, 4, 5].map(n => `<button class="star ${st.rating >= n ? 'on' : ''}" data-a="rv.set" data-n="${n}">${icon('star', 34, 1.6)}</button>`).join('')}</div>
-          <div class="sm ${st.rating ? 'b' : 'dim'}" style="margin-top:8px;height:20px">${st.rating ? LABELS[st.rating] : 'Нажмите на звёзды'}</div>
+          <div class="sm ${st.rating ? 'b' : 'dim'}" style="margin-top:8px;height:20px">${st.rating ? t(LABELS[st.rating]) : t('Нажмите на звёзды')}</div>
         </div>
-        <div class="field"><label>Комментарий (необязательно)</label>
-          <textarea class="inp" id="_rv" placeholder="Что понравилось или что стоит улучшить">${esc(st.text)}</textarea></div>
-        <div class="tiny dim">Оценку видит только салон — публично она нигде не показывается.</div>`,
-      footer: `<button class="btn p" data-a="rv.ok" ${st.rating ? '' : 'disabled'}>Отправить отзыв</button>`,
+        <div class="field"><label>${t('Комментарий (необязательно)')}</label>
+          <textarea class="inp" id="_rv" placeholder="${esc(t('Что понравилось или что стоит улучшить'))}">${esc(st.text)}</textarea></div>
+        <div class="tiny dim">${t('Оценку видит только владелец салона — ни мастер, ни другие клиенты её не увидят. Она очень важна и помогает улучшить сервис.')}</div>`,
+      footer: `<button class="btn p" data-a="rv.ok" ${st.rating ? '' : 'disabled'}>${t('Отправить отзыв')}</button>`,
     });
   };
   on('rv.set', ds => { capture(); st.rating = +ds.n; haptic('select'); draw(); });
   on('rv.ok', () => {
     capture();
-    if (!st.rating) { toast('Поставьте оценку', 'dan'); return; }
+    if (!st.rating) { toast(t('Поставьте оценку'), 'dan'); return; }
     addReview({ apptId, rating: st.rating, text: st.text, companyId: a.companyId });
     s.close();
-    toast('Спасибо за отзыв!');
+    toast(t('Спасибо за отзыв!'));
     if (opts.after) opts.after();
   });
   draw();

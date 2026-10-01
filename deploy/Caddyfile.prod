@@ -1,0 +1,27 @@
+# Production: статика Mini App и backend за одним доменом.
+# HTTPS выпускается и продлевается автоматически.
+{$DOMAIN} {
+	encode zstd gzip
+
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer-when-downgrade
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	}
+
+	# API отдаётся тем же доменом: Mini App работает без CORS-префлайта,
+	# а заголовки не пересекают origin. Сюда же приходит Telegram webhook —
+	# он живёт по /api/v1/telegram/... и отдельного блока не требует.
+	handle /api/* {
+		# Заголовки прокси нужны backend для rate limit по адресу клиента.
+		reverse_proxy api:8000 {
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
+	handle {
+		reverse_proxy web:8080
+	}
+}

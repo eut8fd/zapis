@@ -23,6 +23,40 @@ const PLAN_IDS = () => plans().map(p => p.id);
 /* =========================================================
    Обзор
    ========================================================= */
+/* Что требует ответа прямо сейчас. Раньше жалобы и обращения лежали
+   в «Системе» третьим пунктом вглубь: узнать о них можно было, только
+   если специально пойти искать. На обзоре они первым экраном. */
+function needsAttention() {
+  const all = tickets();
+  // Не по from: клиент теперь пишет и обычные вопросы о приложении,
+  // а жалоба на компанию — это тема, а не источник.
+  const complaints = all.filter(t => t.topic === 'complaint' && t.status !== 'closed');
+  const support = all.filter(t => t.topic !== 'complaint' && t.status !== 'closed');
+  const errs = (S.data.errors || []).filter(e => !e.fixed).length;
+  if (!complaints.length && !support.length && !errs) return '';
+
+  const row = (n, title, sub, color, ic, act) => n ? `
+    <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="${act}">
+      <div class="ic" style="background:${color}1f;color:${color}">${icon(ic, 19)}</div>
+      <div class="grow" style="text-align:left"><div class="tl">${title}</div><div class="st">${sub}</div></div>
+      <span class="bdg" style="background:${color}1f;color:${color}">${n}</span>
+      <span class="chev">${icon('fwd', 17, 2)}</span>
+    </button>` : '';
+
+  return `<div class="wrap sec">
+    <div class="sec-h" style="padding:0 0 8px"><div class="sec-t">Требует внимания</div></div>
+    <div class="stack s">
+      ${row(complaints.length, 'Жалобы на компании', 'Клиенты жалуются — нужно разобрать', '#F04462', 'shield', 'sa.toComplaints')}
+      ${row(support.length, 'Обращения в поддержку', 'Вопросы владельцев и клиентов', '#8B5CF6', 'msg', 'sa.toTickets')}
+      ${row(errs, 'Ошибки приложения', 'Сбои у пользователей', '#F79009', 'alert', 'sa.toErrors')}
+    </div>
+  </div>`;
+}
+
+on('sa.toComplaints', () => { tkf.status = 'complaint'; go('sa.tickets'); });
+on('sa.toTickets', () => { tkf.status = 'open'; go('sa.tickets'); });
+on('sa.toErrors', () => go('sa.errors'));
+
 route('sa.home', {
   tab: 'sa.home',
   render() {
@@ -51,6 +85,8 @@ route('sa.home', {
         </div>
       </div>
     </div>
+
+    ${needsAttention()}
 
     <div class="wrap sec"><div class="grid2">
       <div class="st-card"><div class="l">Компании</div><div class="v">${s.companies}</div>
@@ -962,13 +998,19 @@ route('sa.tickets', {
   render() {
     const all = tickets();
     const open = all.filter(t => t.status !== 'closed');
-    const list = tkf.status === 'open' ? open : tkf.status === 'all' ? all : all.filter(t => t.status === tkf.status);
+    const list = tkf.status === 'open' ? open
+      : tkf.status === 'all' ? all
+        // Жалобы клиентов — отдельный фильтр: это претензия к компании,
+        // а не вопрос компании о себе, и разбирается она иначе.
+        : tkf.status === 'complaint' ? all.filter(t => t.topic === 'complaint')
+          : all.filter(t => t.status === tkf.status);
     return `
     <div class="top"><button class="ico-btn" data-a="back">${icon('back', 19)}</button>
       <div class="grow"><div class="top-t">Обращения</div>
         <div class="top-sub">${open.length} в работе из ${all.length}</div></div></div>
     <div class="chips" style="margin-bottom:12px">
       <button class="chip ${tkf.status === 'open' ? 'on' : ''}" data-a="tk.f" data-v="open">Открытые · ${open.length}</button>
+      <button class="chip ${tkf.status === 'complaint' ? 'on' : ''}" data-a="tk.f" data-v="complaint">Жалобы · ${all.filter(t => t.topic === 'complaint').length}</button>
       ${Object.entries(TICKET_STATUS).map(([k, v]) =>
       `<button class="chip ${tkf.status === k ? 'on' : ''}" data-a="tk.f" data-v="${k}">${v.t} · ${all.filter(t => t.status === k).length}</button>`).join('')}
       <button class="chip ${tkf.status === 'all' ? 'on' : ''}" data-a="tk.f" data-v="all">Все</button>
@@ -983,9 +1025,11 @@ route('sa.tickets', {
           <span class="bdg" style="background:${st.color}1f;color:${st.color};flex:none">${st.t}</span>
         </div>
         <div class="tiny muted nowrap">${esc(coName(t.companyId))} · ${esc(t.author)} · ${esc(TICKET_TOPICS[t.topic] || t.topic)}</div>
+        ${t.topic === 'complaint' ? '<div class="tiny" style="color:var(--dan);margin-top:2px">жалоба клиента на компанию</div>'
+      : t.from === 'client' ? '<div class="tiny" style="color:var(--tx-3);margin-top:2px">вопрос от клиента</div>' : ''}
         <div class="tiny dim" style="margin-top:5px">${last.from === 'support' ? 'вы: ' : ''}${esc(String(last.text).slice(0, 70))}${String(last.text).length > 70 ? '…' : ''} · ${relPast(new Date(t.updatedAt), now())}</div>
       </button>`;
-    }).join('') : emptyState({ ic: 'msg', title: 'Обращений нет', text: 'Сюда попадают вопросы владельцев компаний.' })}
+    }).join('') : emptyState({ ic: 'msg', title: 'Обращений нет', text: 'Сюда попадают вопросы владельцев компаний и жалобы клиентов на них.' })}
     </div>`;
   },
 });
@@ -1003,10 +1047,17 @@ on('tk.open', ds => {
           <div class="tiny muted">${esc(coName(cur.companyId))} · ${esc(cur.author)}</div>
           <span class="bdg" style="background:${st.color}1f;color:${st.color}">${st.t}</span>
         </div>
+        ${cur.topic === 'complaint' ? `<div class="card flat" style="padding:11px 13px;margin-bottom:12px;border-left:3px solid var(--dan)">
+          <div class="sm b" style="color:var(--dan)">Жалоба клиента на компанию</div>
+          <div class="tiny muted" style="margin-top:3px">Ответ уйдёт клиенту. Компанию можно заблокировать в её карточке.</div>
+        </div>` : cur.from === 'client' ? `<div class="card flat" style="padding:11px 13px;margin-bottom:12px;border-left:3px solid var(--p)">
+          <div class="sm b">Вопрос от клиента</div>
+          <div class="tiny muted" style="margin-top:3px">Это не претензия к салону. Ответ уйдёт клиенту в «Мои обращения».</div>
+        </div>` : ''}
         <div class="stack s" style="margin-bottom:14px">
           ${cur.messages.map(m => `<div class="tk-msg ${m.from === 'support' ? 'ours' : ''}">
             <div class="sm" style="line-height:1.5">${esc(m.text)}</div>
-            <div class="tiny dim" style="margin-top:4px">${m.from === 'support' ? 'поддержка' : esc(cur.author)} · ${relPast(new Date(m.at), now())}</div>
+            <div class="tiny dim" style="margin-top:4px">${m.from === 'support' ? 'поддержка' : esc(cur.author) + (m.from === 'client' ? ' (клиент)' : '')} · ${relPast(new Date(m.at), now())}</div>
           </div>`).join('')}
         </div>
         <div class="field"><label>Ответ</label>

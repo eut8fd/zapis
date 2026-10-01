@@ -4,6 +4,8 @@ import { reportError } from './store.js';
 const A = {};
 export function on(name, fn) { A[name] = fn; }
 export function has(name) { return !!A[name]; }
+/** Все зарегистрированные действия — для проверки мёртвых кнопок. */
+export const actionNames = () => Object.keys(A).sort();
 export function fire(name, ds = {}, el = null, ev = null) {
   const fn = A[name];
   if (!fn) { console.warn('no action:', name); return; }

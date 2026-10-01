@@ -1,5 +1,5 @@
 // Скрытая DEV-панель: роли, компании, тестовая дата, тестовые уведомления.
-import { S, emit, sub, now, allCompanies, emps, clients, staff, autoComplete, reset, nextAppt, co, client, apptTitle, setHome, homeId, ensurePerson, isManager, setRole } from './store.js';
+import { S, emit, sub, now, allCompanies, emps, clients, staff, autoComplete, reset, nextAppt, co, client, apptTitle, setHome, isManager, setRole } from './store.js';
 import { sheet, toast, esc, confirmSheet, hhmm, dateLabel, money, avatar, plural } from './ui.js';
 import { icon } from './icons.js';
 import { on } from './bus.js';
@@ -10,20 +10,18 @@ import { adminAllowed, unlockWithCode, lockAdmin, isWhitelisted } from './config
 import { tgUser } from './tg.js';
 import { promptSheet } from './ui.js';
 
-/* Клиент показан двумя персонами: от того, как человек попал в приложение,
-   зависит вся его часть — своя первая вкладка, свой каталог, своя запись. */
+/* Персона «Клиент с улицы» ушла вместе с каталогом: клиент бывает только
+   один — тот, кто пришёл по ссылке салона. */
 const ROLES = [
   ['client', 'Клиент салона', 'Пришёл по ссылке', 'cl.company'],
-  ['guest', 'Клиент с улицы', 'Ищет через каталог', 'cl.find'],
   ['employee', 'Мастер', 'Видит свой день', 'e.home'],
   ['manager', 'Администратор', 'Весь салон, без денег', 'e.home'],
   ['owner', 'Владелец', 'Управляет бизнесом', 'o.home'],
   ['admin', 'Super Admin', 'Панель SaaS', 'sa.home'],
 ];
 
-/** Какая персона сейчас выбрана — 'guest' у клиента без своего салона. */
+/** Какая персона сейчас выбрана. */
 const persona = () => {
-  if (S.session.role === 'client') return homeId() ? 'client' : 'guest';
   if (S.session.role === 'employee') return isManager() ? 'manager' : 'employee';
   return S.session.role;
 };
@@ -102,18 +100,17 @@ function body() {
 function redraw() { if (window.__dev) window.__dev.set({ title: 'Демо-панель', body: body() }); }
 
 function rootFor(role) {
-  return role === 'guest' ? 'cl.find' : role === 'client' ? 'cl.company'
+  return role === 'client' ? 'cl.company'
     : (role === 'employee' || role === 'manager') ? 'e.home'
       : role === 'admin' ? 'sa.home' : 'o.home';
 }
 
 export function switchRole(role, companyId) {
-  const guest = role === 'guest';
   const manager = role === 'manager';
-  const real = guest ? 'client' : manager ? 'employee' : role;
-  // В списке панели только основные компании. Если сейчас открыт салон из
-  // каталога, переключаться надо на демонстрационный — иначе роль привяжется
-  // к компании, которой в списке нет, и выбор будет выглядеть случайным.
+  const real = manager ? 'employee' : role;
+  // В списке панели только основные компании. Если сейчас открыт один из
+  // дополнительных салонов сида (bg*), переключаться надо на демонстрационный —
+  // иначе роль привяжется к компании, которой в списке нет.
   const cur = String(S.session.companyId || '');
   const cidNew = companyId || (cur.startsWith('bg') ? 'c1' : cur);
   S.session.role = real;
@@ -131,11 +128,10 @@ export function switchRole(role, companyId) {
   const cl = clients(cidNew)[0];
   S.session.clientId = cl ? cl.id : null;
   if (real === 'client') {
-    // персона клиента берётся заново целиком: смешивать историю человека
-    // из салона с историей человека с улицы нельзя, это разные демонстрации
+    // персона клиента берётся заново целиком: история из прошлого салона
+    // в новом человеку не принадлежит
     S.session.homeId = null; S.session.person = null; S.session.clientIds = {};
-    if (guest) ensurePerson('Гость');
-    else setHome(cidNew);
+    setHome(cidNew);
   }
   emit();
   resetStack(rootFor(role));

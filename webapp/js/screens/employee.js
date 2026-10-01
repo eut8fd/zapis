@@ -1,16 +1,17 @@
 import {
   S, co, cid, emp, staff, client, clients, appts, apptTitle, apptColor, apptEnd, now, today,
-  todayStats, rangeStats, nextAppt, dayAppts, clientStats, workDay, me,
+  todayStats, empStats, nextAppt, dayAppts, clientStats, workDay, me, can, addStaffTicket, updateEmployee,
 } from '../store.js';
 import {
   esc, money, moneyShort, hhmm, dateLabel, relPast, avatar, greet, emptyState, nMin, nAppt, nVisit,
-  plural, dayKey, WD_FULL, sheet, toast, progress,
+  plural, dayKey, WD_FULL, sheet, toast, progress, mkpi, prettyPhone,
 } from '../ui.js';
 import { icon } from '../icons.js';
 import { route, go, render } from '../router.js';
 import { on } from '../bus.js';
 import { calendarScreen, apptRow } from './owner.js';
-import { newApptFlow, openApptSheet, voiceNoteSheet } from '../flows.js';
+import { langBtn } from '../flows.js';
+import { newApptFlow, openApptSheet, voiceNoteSheet, supportSheet, myDataSheet } from '../flows.js';
 
 const meId = () => S.session.employeeId;
 
@@ -21,8 +22,7 @@ route('e.home', {
     const e = emp(meId()) || staff()[0];
     const t = todayStats(cid(), e.id);
     const nx = nextAppt(cid(), e.id);
-    const s30 = rangeStats(30);
-    const mine = s30.byEmployee.find(x => x.name === e.name) || { count: 0, sum: 0 };
+    const w7 = empStats(e.id, 7), w30 = empStats(e.id, 30);
     const w = workDay(e, now());
     const c = nx ? client(nx.clientId) : null;
 
@@ -31,15 +31,18 @@ route('e.home', {
       ${avatar(e, 'm')}
       <div class="grow"><div class="top-t" style="font-size:17px">${greet(now().getHours())}, ${esc(e.name.split(' ')[0])}</div>
         <div class="top-sub">${w ? 'смена ' + w.from + '–' + w.to : 'сегодня выходной'} · ${esc(co().short)}</div></div>
+      ${langBtn()}
       <button class="ico-btn" data-a="nav" data-r="e.profile">${icon('user', 19)}</button>
     </div>
 
-    <div class="kpis" style="margin-top:6px">
-      <div class="kpi"><div class="l">${icon('calendar', 13, 2)}Сегодня</div><div class="v">${t.count}</div><div class="d dim">${plural(t.count, ['запись', 'записи', 'записей'])}</div></div>
-      <div class="kpi"><div class="l">${icon('wallet', 13, 2)}Заработано</div><div class="v">${moneyShort(t.revenue)} ₸</div><div class="d dim">из ${moneyShort(t.potential)} ₸</div></div>
-      <div class="kpi"><div class="l">${icon('checkCircle', 13, 2)}Выполнено</div><div class="v">${t.done}/${t.count}</div><div class="d dim">визитов</div></div>
-      <div class="kpi"><div class="l">${icon('chart', 13, 2)}Месяц</div><div class="v">${mine.count}</div><div class="d dim">${moneyShort(mine.sum)} ₸</div></div>
-    </div>
+    ${/* Три плитки одного вида: сегодня — неделя — месяц. Раньше их было
+         четыре, они уезжали за правый край и мерили разное разными единицами
+         (записи, деньги, «3/5»), так что сравнивать между собой было нечего. */''}
+    <div class="wrap sec" style="margin-top:6px"><div class="grid3">
+      ${mkpi('calendar', 'Сегодня', t.count, plural(t.count, ['запись', 'записи', 'записей']), t.revenue)}
+      ${mkpi('trendUp', 'Неделя', w7.visits, plural(w7.visits, ['визит', 'визита', 'визитов']), w7.sum)}
+      ${mkpi('chart', 'Месяц', w30.visits, plural(w30.visits, ['визит', 'визита', 'визитов']), w30.sum)}
+    </div></div>
 
     <div class="wrap sec">
       ${nx ? `<div class="hero">
@@ -106,8 +109,7 @@ route('e.profile', {
   tab: 'e.profile',
   render() {
     const e = emp(meId()) || staff()[0];
-    const s30 = rangeStats(30);
-    const mine = s30.byEmployee.find(x => x.name === e.name) || { count: 0, sum: 0 };
+    const mine = empStats(e.id, 30), w7 = empStats(e.id, 7);
     const t = todayStats(cid(), e.id);
     return `
     <div class="top"><div class="grow"><div class="top-t">Профиль</div></div></div>
@@ -115,14 +117,22 @@ route('e.profile', {
       ${avatar(e, 'xl')}
       <div style="font-size:21px;font-weight:780;letter-spacing:-.03em;margin-top:12px">${esc(e.name)}</div>
       <div class="sm muted">${esc(e.role)} · ${esc(co().name)}</div>
-      ${e.rating ? `<div class="row" style="justify-content:center;margin-top:8px"><span class="bdg warn">${icon('star', 11, 2.4)} ${e.rating}</span></div>` : ''}
+      <div class="tiny dim" style="margin-top:3px">${e.phone ? esc(prettyPhone(e.phone)) : 'телефон не указан'}</div>
+      ${/* средняя оценка — это те же отзывы, только числом: мастеру её не показываем */''}
+      ${can('reviews') && e.rating ? `<div class="row" style="justify-content:center;margin-top:8px"><span class="bdg warn">${icon('star', 11, 2.4)} ${e.rating}</span></div>` : ''}
     </div>
+    ${/* те же три плитки, что и на главной: одинаковые цифры должны
+         выглядеть одинаково, иначе кажется, что считают разное */''}
     <div class="wrap sec"><div class="grid3">
-      <div class="st-card center"><div class="v">${t.count}</div><div class="l">сегодня</div></div>
-      <div class="st-card center"><div class="v">${mine.count}</div><div class="l">за месяц</div></div>
-      <div class="st-card center"><div class="v">${moneyShort(mine.sum)}</div><div class="l">₸ за месяц</div></div>
+      ${mkpi('calendar', 'Сегодня', t.count, plural(t.count, ['запись', 'записи', 'записей']), t.revenue)}
+      ${mkpi('trendUp', 'Неделя', w7.visits, plural(w7.visits, ['визит', 'визита', 'визитов']), w7.sum)}
+      ${mkpi('chart', 'Месяц', mine.visits, plural(mine.visits, ['визит', 'визита', 'визитов']), mine.sum)}
     </div></div>
     <div class="wrap sec"><div class="stack s">
+      <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="e.editMe">
+        <div class="ic">${icon('user', 18)}</div>
+        <div class="grow" style="text-align:left"><div class="tl">Мои данные</div>
+          <div class="st"${e.phone ? '' : ' style="color:var(--warn)"'}>${e.phone ? 'Имя и телефон' : 'Добавьте телефон'}</div></div>${icon('fwd', 17)}</button>
       <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="nav" data-r="o.schedule" data-id="${e.id}">
         <div class="ic" style="background:var(--p-soft);color:var(--p)">${icon('calendar', 18)}</div>
         <div class="grow" style="text-align:left"><div class="tl">Мой график</div><div class="st">Рабочие дни и перерывы</div></div>${icon('fwd', 17)}</button>
@@ -132,6 +142,45 @@ route('e.profile', {
       <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="dev.open">
         <div class="ic">${icon('shield', 18)}</div>
         <div class="grow" style="text-align:left"><div class="tl">Демо-режим</div><div class="st">Сменить роль или компанию</div></div>${icon('fwd', 17)}</button>
-    </div></div>`;
+    </div></div>
+
+    ${quietSection()}`;
   },
+});
+
+/* Тихий раздел внизу профиля — тот же, что у клиента: нужен раз в год,
+   поэтому без карточек и цветных иконок. Мастер тоже человек: у него
+   может не работать приложение, и он тоже может завести своё дело. */
+function quietSection() {
+  return `<div class="wrap sec">
+    <div class="sec-t" style="margin-bottom:8px;color:var(--tx-3)">Ещё</div>
+    <div class="stack s">
+      <button class="lrow press quiet-row" data-a="e.support">
+        <div class="ic">${icon('msg', 18)}</div>
+        <div class="grow" style="text-align:left"><div class="tl">Написать в поддержку</div>
+          <div class="st">Вопрос по приложению или расписанию</div></div>${icon('fwd', 17)}</button>
+      <button class="lrow press quiet-row" data-a="e.toBiz">
+        <div class="ic">${icon('briefcase', 18)}</div>
+        <div class="grow" style="text-align:left"><div class="tl">Создать свой бизнес</div>
+          <div class="st">Своя страница записи за пару минут</div></div>${icon('fwd', 17)}</button>
+    </div>
+  </div>`;
+}
+on('e.support', () => supportSheet({
+  note: 'Отвечает поддержка платформы. Ответ придёт в уведомления салона.',
+  onSend: ({ topic, subject, text }) => addStaffTicket({ topic, subject, text }),
+}));
+on('e.toBiz', () => go('biz.start'));
+/* Сотрудник правит своё имя и телефон сам — раньше это мог только клиент,
+   а у мастера, администратора и владельца такого места не было вовсе. */
+on('e.editMe', () => {
+  const e = emp(meId()) || staff()[0];
+  myDataSheet({
+    name: e.name, phone: e.phone || '',
+    note: 'Телефон видит владелец салона — по нему с вами свяжутся, если что-то изменится в расписании.',
+    onSave: v => updateEmployee(e.id, {
+      ...v,
+      initials: v.name.split(' ').filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase(),
+    }),
+  });
 });

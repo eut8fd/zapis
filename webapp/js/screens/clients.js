@@ -1,10 +1,10 @@
 import {
   S, co, cid, emp, client, clients, appts, apptTitle, apptColor, now, today, clientStats, clientAppts,
-  updateClient, reviews, lostClients, emit,
+  updateClient, reviews, lostClients, emit, can,
 } from '../store.js';
 import {
   esc, money, moneyShort, hhmm, dateLabel, relPast, avatar, emptyState, sheet, toast, promptSheet,
-  nVisit, dayKey, startOfDay, num, plural, confirmSheet,
+  nVisit, dayKey, startOfDay, num, plural, confirmSheet, MON_SHORT,
 } from '../ui.js';
 import { icon } from '../icons.js';
 import { route, go, render } from '../router.js';
@@ -95,7 +95,12 @@ route('o.client', {
     if (!c) return `<div class="wrap">${emptyState({ ic: 'users', title: 'Клиент не найден' })}</div>`;
     window.__cl = c.id;
     const s = clientStats(c.id);
-    const rv = reviews().filter(r => r.clientId === c.id);
+    // Сколько человек оставил в кассе — разговор владельца и администратора.
+    // Мастеру это знать незачем, а клиент об этом и не подозревает.
+    const money_ = can('clients');
+    // отзывы в карточке клиента — тоже только владельцу: мастер и
+    // администратор открывают этот же экран (см. право reviews в store.js)
+    const rv = can('reviews') ? reviews().filter(r => r.clientId === c.id) : [];
     const hist = s.all.filter(a => a.status !== 'planned').slice(0, 8);
 
     return `
@@ -123,10 +128,11 @@ route('o.client', {
     </div>
 
     <div class="wrap sec">
-      <div class="grid3">
+      <div class="${money_ ? 'grid3' : 'grid2'}">
         <div class="st-card center"><div class="v">${s.visits}</div><div class="l">визитов</div></div>
-        <div class="st-card center"><div class="v">${moneyShort(s.spent)}</div><div class="l">потрачено</div></div>
-        <div class="st-card center"><div class="v">${moneyShort(s.avg)}</div><div class="l">средний чек</div></div>
+        ${money_ ? `<div class="st-card center"><div class="v">${moneyShort(s.spent)}</div><div class="l">потрачено</div></div>
+        <div class="st-card center"><div class="v">${moneyShort(s.avg)}</div><div class="l">средний чек</div></div>`
+        : `<div class="st-card center"><div class="v">${s.last ? relPast(new Date(s.last.start), now()).replace(' назад', '') : '—'}</div><div class="l">последний визит</div></div>`}
       </div>
     </div>
 
@@ -138,7 +144,7 @@ route('o.client', {
           <div class="b">${dateLabel(new Date(s.next.start), now())}, ${hhmm(new Date(s.next.start))}</div>
           <div class="sm muted nowrap">${esc(apptTitle(s.next))} · ${esc((emp(s.next.employeeId) || {}).name || '')}</div>
         </div>
-        <div class="b sm">${moneyShort(s.next.price)} ₸</div>
+        ${money_ ? `<div class="b sm">${moneyShort(s.next.price)} ₸</div>` : ''}
       </button>
     </div>` : `<div class="wrap sec">
       <div class="card pad center">
@@ -172,10 +178,11 @@ route('o.client', {
       <div class="stack s">
         ${hist.length ? hist.map(a => `
           <button class="appt press" style="--c:${apptColor(a)};width:100%;text-align:left" data-a="ap.card" data-id="${a.id}">
-            <div class="t" style="width:56px">${new Date(a.start).getDate()}<small>${['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'][new Date(a.start).getMonth()]}</small></div>
+            <div class="t">${new Date(a.start).getDate()}<small>${MON_SHORT[new Date(a.start).getMonth()]}</small></div>
             <div class="grow"><div class="n nowrap">${esc(apptTitle(a))}</div>
               <div class="s">${esc((emp(a.employeeId) || {}).name || '')}</div></div>
-            ${a.status === 'cancelled' ? '<span class="bdg dan">отмена</span>' : `<div class="b sm">${moneyShort(a.price)} ₸</div>`}
+            ${a.status === 'cancelled' ? '<span class="bdg dan">отмена</span>'
+        : money_ ? `<div class="b sm">${moneyShort(a.price)} ₸</div>` : ''}
           </button>`).join('')
         : `<div class="card pad center sm muted">Визитов пока не было</div>`}
       </div>

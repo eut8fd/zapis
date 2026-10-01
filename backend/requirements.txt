@@ -1,0 +1,14 @@
+# Backend. Версии зафиксированы: production и CI должны собирать одно и то же.
+fastapi==0.138.1
+uvicorn[standard]==0.49.0
+pydantic==2.13.4
+
+SQLAlchemy==2.0.52
+alembic==1.19.1
+asyncpg==0.31.0
+
+httpx==0.28.1
+tzdata==2026.3
+
+# Локальная разработка и тесты без PostgreSQL.
+aiosqlite==0.22.1

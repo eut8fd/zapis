@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Zapis — локальная песочница</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <span class="brand">Zapis · песочница</span>
+  <span class="who" id="who">не вошли</span>
+  <span class="grow"></span>
+  <span class="badge" id="clock">—</span>
+  <span class="badge" id="health">backend?</span>
+</header>
+
+<nav>
+  <button data-tab="people" class="on">Люди</button>
+  <button data-tab="business">Бизнес</button>
+  <button data-tab="client">Клиент</button>
+  <button data-tab="notify">Уведомления</button>
+  <button data-tab="state">Состояние</button>
+</nav>
+
+<main>
+
+  <!-- ================================================== Люди -->
+  <section data-pane="people">
+    <div class="card">
+      <h2>Вход без Telegram</h2>
+      <p class="hint">
+        Имя заменяет Telegram-аккаунт: одно и то же имя — один и тот же человек.
+        Дальше работает обычная серверная сессия с правами из базы.
+        Заведите двоих: владельца салона и клиента.
+      </p>
+      <div class="row">
+        <div>
+          <label>Имя и фамилия</label>
+          <input id="loginName" placeholder="Айгуль Салонова">
+        </div>
+        <div class="narrow">
+          <label>Телефон</label>
+          <input id="loginPhone" placeholder="+7 701 …">
+        </div>
+        <div class="narrow" style="flex:0 0 auto">
+          <button class="btn" id="loginBtn">Войти</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Кто уже заходил</h2>
+      <p class="hint">Переключение мгновенное — сессии хранятся в этом браузере.</p>
+      <div id="usersBox"><div class="empty">Пока никого</div></div>
+    </div>
+  </section>
+
+  <!-- ================================================== Бизнес -->
+  <section data-pane="business" hidden>
+    <div id="bizNoUser" class="card"><div class="empty">Сначала войдите на вкладке «Люди».</div></div>
+
+    <div id="bizCreate" class="card" hidden>
+      <h2>Создать компанию</h2>
+      <p class="hint">Компания, первый филиал и владелец создаются одной транзакцией.</p>
+      <div class="row">
+        <div><label>Название</label><input id="coName" placeholder="Барбершоп на Абая"></div>
+        <div class="narrow"><label>Категория</label>
+          <select id="coCat">
+            <option value="barbershop">барбершоп</option>
+            <option value="beauty">салон красоты</option>
+            <option value="nails">ногти</option>
+            <option value="brows">брови</option>
+            <option value="massage">массаж</option>
+            <option value="clinic">клиника</option>
+          </select>
+        </div>
+        <div class="narrow"><label>Город</label><input id="coCity" value="Алматы"></div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <div><label>Адрес</label><input id="coAddr" placeholder="ул. Абая, 10"></div>
+        <div class="narrow"><label>Телефон</label><input id="coPhone" placeholder="+7 727 …"></div>
+        <div class="narrow"><label>Часовой пояс</label>
+          <select id="coTz">
+            <option>Asia/Almaty</option>
+            <option>Asia/Aqtobe</option>
+            <option>Europe/Moscow</option>
+            <option>Europe/Berlin</option>
+            <option>UTC</option>
+          </select>
+        </div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <div><label>Описание (нужно для публикации)</label>
+          <input id="coAbout" placeholder="Мужские стрижки и бритьё в центре"></div>
+        <div class="narrow" style="flex:0 0 auto"><button class="btn" id="coCreate">Создать</button></div>
+      </div>
+    </div>
+
+    <div id="bizPanel" hidden>
+      <div class="card">
+        <h2 id="bizTitle">Компания</h2>
+        <p class="hint" id="bizSub"></p>
+        <div class="row">
+          <div style="flex:0 0 auto"><button class="btn gh sm" id="checkPub">Проверить готовность</button></div>
+          <div style="flex:0 0 auto"><button class="btn sm" id="doPub">Опубликовать</button></div>
+          <div style="flex:1"></div>
+        </div>
+        <div id="pubOut" style="margin-top:10px"></div>
+      </div>
+
+      <div class="grid2">
+        <div class="card">
+          <h2>Услуги</h2>
+          <p class="hint">Цена в тенге, длительность и уборка после клиента.</p>
+          <div class="row">
+            <div><label>Название</label><input id="svcName" placeholder="Мужская стрижка"></div>
+            <div class="narrow"><label>Цена, ₸</label><input id="svcPrice" type="number" value="6000"></div>
+          </div>
+          <div class="row" style="margin-top:8px">
+            <div class="narrow"><label>Длительность, мин</label><input id="svcDur" type="number" value="45"></div>
+            <div class="narrow"><label>Буфер после, мин</label><input id="svcBuf" type="number" value="15"></div>
+            <div class="narrow" style="flex:0 0 auto"><button class="btn" id="svcAdd">Добавить</button></div>
+          </div>
+          <div id="svcList" style="margin-top:12px"></div>
+        </div>
+
+        <div class="card">
+          <h2>Команда</h2>
+          <p class="hint">Мастер без привязки к услуге в выдачу слотов не попадёт.</p>
+          <div class="row">
+            <div><label>Имя мастера</label><input id="empName" placeholder="Тимур"></div>
+            <div class="narrow"><label>Должность</label><input id="empRole" value="Барбер"></div>
+            <div class="narrow" style="flex:0 0 auto"><button class="btn" id="empAdd">Добавить</button></div>
+          </div>
+          <div id="empList" style="margin-top:12px"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>График филиала</h2>
+        <p class="hint">Часы мастера считаются пересечением с этими часами.</p>
+        <div id="wdBox"></div>
+        <div class="row" style="margin-top:10px">
+          <div class="narrow"><label>Перерыв с</label><input id="brFrom" type="time" value="13:00"></div>
+          <div class="narrow"><label>по</label><input id="brTo" type="time" value="14:00"></div>
+          <div class="narrow" style="flex:0 0 auto"><button class="btn" id="wdSave">Сохранить график</button></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Правила записи</h2>
+        <p class="hint">
+          Для теста напоминаний поставьте минуты поменьше: «за 5 и 2 минуты» —
+          и не придётся ждать сутки. Минимальное время до записи тоже уменьшите,
+          иначе ближайшие слоты будут закрыты.
+        </p>
+        <div class="row">
+          <div class="narrow"><label>Шаг сетки, мин</label><input id="cfgStep" type="number" value="30"></div>
+          <div class="narrow"><label>Мин. время до записи, мин</label><input id="cfgLead" type="number" value="0"></div>
+          <div class="narrow"><label>Отмена не позже, ч</label><input id="cfgCancel" type="number" value="0"></div>
+          <div><label>Напоминания за, мин (через запятую)</label><input id="cfgRem" value="5, 2"></div>
+          <div class="narrow" style="flex:0 0 auto"><button class="btn" id="cfgSave">Сохранить</button></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Календарь</h2>
+        <p class="hint">Записи компании. Завершение и неявка доступны после начала визита.</p>
+        <div class="row">
+          <div class="narrow"><label>С</label><input id="calFrom" type="date"></div>
+          <div class="narrow"><label>По</label><input id="calTo" type="date"></div>
+          <div class="narrow" style="flex:0 0 auto"><button class="btn gh" id="calLoad">Показать</button></div>
+        </div>
+        <div id="calList" style="margin-top:12px"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================== Клиент -->
+  <section data-pane="client" hidden>
+    <div id="clNoUser" class="card"><div class="empty">Сначала войдите на вкладке «Люди».</div></div>
+
+    <div id="clPanel" hidden>
+      <div class="card">
+        <h2>Каталог</h2>
+        <p class="hint">Здесь только опубликованные компании — черновик снаружи не виден.</p>
+        <div class="row">
+          <div><label>Поиск</label><input id="catQ" placeholder="название"></div>
+          <div class="narrow" style="flex:0 0 auto"><button class="btn gh" id="catLoad">Обновить</button></div>
+        </div>
+        <div id="catList" style="margin-top:12px"></div>
+      </div>
+
+      <div class="card" id="bookCard" hidden>
+        <h2 id="bookTitle">Запись</h2>
+        <p class="hint" id="bookSub"></p>
+        <div class="row">
+          <div><label>Услуга</label><select id="bkSvc"></select></div>
+          <div><label>Мастер</label><select id="bkEmp"></select></div>
+          <div class="narrow"><label>Дата с</label><input id="bkDate" type="date"></div>
+          <div class="narrow" style="flex:0 0 auto"><button class="btn gh" id="bkLoad">Показать время</button></div>
+        </div>
+        <div id="bkSlots" class="days" style="margin-top:12px"></div>
+      </div>
+
+      <div class="card">
+        <h2>Мои записи</h2>
+        <p class="hint">Только свои — чужая запись для клиента не существует.</p>
+        <div class="row">
+          <div class="narrow" style="flex:0 0 auto"><button class="btn gh sm" id="myLoad">Обновить</button></div>
+        </div>
+        <div id="myList" style="margin-top:12px"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================== Уведомления -->
+  <section data-pane="notify" hidden>
+    <div class="card">
+      <h2>Доставлено</h2>
+      <p class="hint">
+        Сюда попадает то, что worker реально отправил и получил подтверждение —
+        в бою это был бы Telegram. Автообновление раз в 3 секунды.
+      </p>
+      <div class="row">
+        <div class="narrow"><label>Кому</label>
+          <select id="inboxWho"><option value="">всем</option></select></div>
+        <div class="narrow" style="flex:0 0 auto"><button class="btn gh sm" id="inboxClear">Очистить</button></div>
+      </div>
+      <div id="inbox" style="margin-top:12px"><div class="empty">Пока пусто</div></div>
+    </div>
+
+    <div class="card">
+      <h2>Очередь</h2>
+      <p class="hint">Запланированные задачи: когда сработают, сколько было попыток.</p>
+      <div id="queue"><div class="empty">Пусто</div></div>
+    </div>
+  </section>
+
+  <!-- ================================================== Состояние -->
+  <section data-pane="state" hidden>
+    <div class="card">
+      <h2>Что в базе</h2>
+      <p class="hint">Отдельная база песочницы. Демо-бот и его данные не участвуют.</p>
+      <div id="stateBox"></div>
+      <div class="row" style="margin-top:12px">
+        <div class="narrow" style="flex:0 0 auto"><button class="btn gh sm" id="stateLoad">Обновить</button></div>
+        <div class="narrow" style="flex:0 0 auto"><button class="btn dan sm" id="wipe">Стереть всё</button></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Как проверять</h2>
+      <p class="hint" style="margin:0">
+        1. «Люди» — войдите как владелец.<br>
+        2. «Бизнес» — компания, услуга, мастер, график, правила записи, публикация.<br>
+        3. «Люди» — войдите вторым именем, это клиент.<br>
+        4. «Клиент» — каталог, выбор времени, запись.<br>
+        5. «Уведомления» — подтверждение приходит сразу, напоминания в заданное время.<br>
+        6. «Бизнес» → «Календарь» — завершите визит, придёт запрос отзыва.
+      </p>
+    </div>
+  </section>
+
+</main>
+
+<div id="toast"></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>
