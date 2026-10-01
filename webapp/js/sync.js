@@ -15,6 +15,10 @@
    молча выключается, а не роняет экран: демо должно открываться всегда.
    ========================================================= */
 import { S, catalogCompanies, svcs, staff, emit, allCompanies } from './store.js';
+import { API_BASE } from './config.js';
+
+/** Путь к складу. С пустым API_BASE остаётся относительным, как было. */
+const api = p => API_BASE + p;
 
 const TIMEOUT = 6000;
 const MAX_FAILS = 3;       // столько неудач подряд — и до перезагрузки молчим
@@ -72,7 +76,7 @@ export function pushCatalog(delay = 1500) {
     const catalog = snapshot();
     const body = JSON.stringify({ catalog });
     if (body === lastPushed) return;          // ничего не поменялось
-    const ok = await req('/api/catalog', {
+    const ok = await req(api('/api/catalog'), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body,
@@ -86,7 +90,7 @@ export function pushCatalog(delay = 1500) {
 /** Отправить запись в общий список, чтобы бот её увидел и напомнил о ней. */
 export async function pushAppointment(a, extra = {}) {
   if (!a) return;
-  await req('/api/appointments', {
+  await req(api('/api/appointments'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...a, ...extra }),
@@ -96,7 +100,7 @@ export async function pushAppointment(a, extra = {}) {
 /** Изменить статус записи в общем списке (отмена, перенос). */
 export async function patchAppointment(id, patch) {
   if (!id) return;
-  await req('/api/appointments/' + encodeURIComponent(id), {
+  await req(api('/api/appointments/') + encodeURIComponent(id), {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),
@@ -134,7 +138,7 @@ function clientFor(companyId, name, tgId, username) {
  * они возвращались бы обратно дубликатами.
  */
 export async function pullAppointments() {
-  const data = await req('/api/appointments');
+  const data = await req(api('/api/appointments'));
   if (!data || !Array.isArray(data.appointments)) return 0;
   const known = new Set(S.data.appointments.map(a => a.id));
   const ids = new Set(allCompanies().map(c => c.id));
@@ -177,7 +181,7 @@ export async function pullAppointments() {
 
 export async function pushInvite(inv) {
   if (!inv) return;
-  await req('/api/invites', {
+  await req(api('/api/invites'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(inv),
@@ -186,7 +190,7 @@ export async function pushInvite(inv) {
 
 export async function patchInvite(id, patch) {
   if (!id) return;
-  await req('/api/invites/' + encodeURIComponent(id), {
+  await req(api('/api/invites/') + encodeURIComponent(id), {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),
@@ -195,14 +199,14 @@ export async function patchInvite(id, patch) {
 
 /** Достать одно приглашение с сервера — по нему человек и входит. */
 export async function fetchInvite(id) {
-  const data = await req('/api/invites');
+  const data = await req(api('/api/invites'));
   if (!data || !Array.isArray(data.invites)) return null;
   return data.invites.find(i => i.id === id) || null;
 }
 
 /** Забрать приглашения компании к себе: владелец видит их состояние. */
 export async function pullInvites() {
-  const data = await req('/api/invites');
+  const data = await req(api('/api/invites'));
   if (!data || !Array.isArray(data.invites)) return 0;
   S.data.invites = S.data.invites || [];
   const mine = new Map(S.data.invites.map(i => [i.id, i]));
