@@ -107,24 +107,75 @@ screens/     экраны, только вёрстка и вызовы store/flo
 
 Проверка обязательна: приложение без сборки, ошибка видна только в рантайме.
 
-```bash
-# синтаксис всех модулей (обязательно после правок JS)
-node /tmp/syncheck.mjs webapp/js/*.js webapp/js/screens/*.js
+**Node на машине заказчика не установлен** — проверять синтаксис локально
+нечем. Это делает CI при пуше (`.github/workflows/pages.yml`): копирует
+каждый файл как `.mjs` и разбирает `node --check`. Главная же проверка —
+прогнать экраны в браузере, она ловит не синтаксис, а падения в рантайме.
 
+```bash
 # питон
 python -c "import ast,io; [ast.parse(io.open(f,encoding='utf-8').read()) for f in ['bot/bot.py','bot/booking.py','server/serve.py']]"
 
-# состояние демо
+# поднять только статику для проверки (без туннеля и бота)
+python server/serve.py 8080
+
+# состояние демо целиком
 powershell -ExecutionPolicy Bypass -File scripts\status.ps1
 ```
 
-В браузере полезно прогонять три вещи:
-1. рендер всех экранов — `R.routes[n].render(params)` в цикле;
-2. горизонтальное переполнение и перекрытие плавающей кнопкой;
-3. открытие всех шторок без исключений.
+Дальше открыть `http://localhost:8080/index.html?start=c1` и выполнить
+в консоли. Это ловит почти всё: сломанный импорт, опечатку в шаблоне,
+обращение к удалённой функции.
 
-Готовые сниппеты — в истории; при новой сессии проще написать заново,
-они короткие.
+```js
+const R = await import('/js/router.js');
+for (let i = 0; i < 40 && !R.routes['cl.company']; i++) await new Promise(r => setTimeout(r, 100));
+const St = await import('/js/store.js');
+const dev = await import('/js/dev.js');
+const errs = [];
+for (const lg of ['ru', 'kk', 'en']) {
+  St.setLang(lg);
+  for (const role of ['client', 'employee', 'manager', 'owner', 'admin']) {
+    dev.switchRole(role);
+    for (const n of Object.keys(R.routes)) {
+      const d = R.routes[n];
+      try {
+        if (d.perm && !St.can(d.perm)) continue;
+        if (typeof d.render({ id: (St.staff()[0] || {}).id || '' }) !== 'string') errs.push([lg, role, n, 'не строка']);
+      } catch (e) { errs.push([lg, role, n, e.message]); }
+    }
+  }
+}
+St.setLang('ru');
+JSON.stringify(errs);   // ждём []
+```
+
+Отдельно стоит смотреть:
+1. горизонтальное переполнение — `document.documentElement.scrollWidth >
+   clientWidth` на каждом экране (частая причина — ряд кнопок без переноса);
+2. шторки: они не в маршрутах, цикл выше их не трогает. Открывать через
+   `bus.fire('имя.действия', {...})` и смотреть `#sheets .sheet`;
+3. вёрстку в мобильном размере, а не в десктопном.
+
+---
+
+## Как изменения попадают к людям
+
+```
+правка → коммит → push origin main → GitHub Actions → GitHub Pages
+```
+
+Mini App живёт на `https://eut8fd.github.io/zapis/` и обновляется сам
+примерно через полминуты после пуша. Ноутбук для него не нужен.
+
+Бот — отдельная история: это процесс с long polling, его Pages не держит.
+Пока он поднимается с ноутбука через `scripts\start-demo.ps1`, и только
+ему нужен туннель.
+
+Репозиторий **публичный**. Всё, что попадает в коммит, видно всем, поэтому
+`.gitignore` закрывает `.env` с токеном, `bot/users.json` с telegram-id
+людей, `bot/bookings.json` и `.run/` с общим складом. Перед добавлением
+новых файлов с данными — проверять, что они под игнором.
 
 ---
 
