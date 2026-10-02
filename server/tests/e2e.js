@@ -158,6 +158,10 @@ async function main() {
       await page.screenshot({ path: path.join(SHOTS, 'client-success.png') });
       apptId = await page.evaluate(() => window.__zapis.S.data.appointments.find(a => !a.anon).id);
       check(!!apptId, 'запись создана: ' + apptId);
+      const localPrice = await page.evaluate(() => window.__zapis.S.data.appointments.find(a => !a.anon).price);
+      check(localPrice === 7000, 'цена записи у клиента — с сервера по прайсу: ' + localPrice);
+      const myCard = await page.evaluate(() => (window.__zapis.S.data.clients[0] || {}).tgId);
+      check(myCard === '2002', 'карточка клиента приняла серверную версию (tgId): ' + myCard);
       const srv = await fetch(BASE + '/api/v2/boot', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Dev-User': encodeURIComponent('2002:Дана Клиент') }, body: JSON.stringify({ start: companyId }) }).then(r => r.json());
       const a = srv.data.appointments.find(x => x.id === apptId);
       check(a && a.status === 'planned' && a.price === 7000, 'запись на сервере с ценой из прайса');

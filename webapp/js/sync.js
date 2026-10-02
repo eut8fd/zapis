@@ -133,6 +133,11 @@ export async function pushNow() {
   if (!d.n && !pending) { st.dirty = false; return []; }
   const payload = pending ? mergePending(pending, d) : { upsert: d.upsert, delete: d.delete };
   payload.since = st.seq;
+  // Что именно ушло: сервер мог поправить эти сущности (цена по прайсу,
+  // имя владельца из Telegram, срок подписки), и его версию надо принять —
+  // если за время запроса человек не поменял сущность ещё раз.
+  const pushed = {};
+  Object.keys(payload.upsert || {}).forEach(col => payload.upsert[col].forEach(e => { pushed[col + ':' + e.id] = JSON.stringify(e); }));
   st.pushing = true;
   try {
     const r = await api.push(payload);
@@ -141,7 +146,7 @@ export async function pushNow() {
     st.lastError = '';
     const rejected = r.rejected || [];
     rejected.forEach(x => revert(x));
-    applyChanges(r.changes || []);
+    applyChanges(r.changes || [], pushed);
     st.seq = r.seq || st.seq;
     takeSnapshot();
     st.dirty = diff().n > 0;
@@ -191,11 +196,17 @@ function toastOnce(key, msg) {
 }
 
 /* ---------------- приём чужих изменений ---------------- */
-function applyChanges(changes) {
+function applyChanges(changes, pushed = {}) {
   if (!changes || !changes.length) return 0;
   const cur = diff();           // то, что ещё не ушло, сервер перебивать не должен
   const dirty = new Set();
-  Object.keys(cur.upsert).forEach(col => cur.upsert[col].forEach(e => dirty.add(col + ':' + e.id)));
+  Object.keys(cur.upsert).forEach(col => cur.upsert[col].forEach(e => {
+    const key = col + ':' + e.id;
+    // только что отправленное и не тронутое с тех пор — не «грязное»:
+    // серверная версия для него главнее
+    if (pushed[key] && pushed[key] === JSON.stringify(e)) return;
+    dirty.add(key);
+  }));
   let n = 0;
   changes.forEach(ch => {
     const col = ch.col;
