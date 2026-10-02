@@ -117,13 +117,13 @@ fly deploy
 
 ```bash
 git clone <репозиторий> /opt/zapis && cd /opt/zapis
-cp .env.example .env && nano .env   # BOT_TOKEN, DOMAIN, WEBAPP_URL=https://DOMAIN, INTERNAL_TOKEN, ADMIN_TG_IDS
+cp .env.example .env && nano .env   # BOT_TOKEN, DOMAIN, WEBAPP_URL=https://DOMAIN, ADMIN_TG_IDS
 docker compose up -d
 ```
 
-Три сервиса: сервер, бот и Caddy с автоматическим HTTPS. Бот и сервер в
-разных контейнерах, поэтому `INTERNAL_TOKEN` задаётся в `.env` явно.
-База — на томе `app-data`.
+Три сервиса: сервер, бот и Caddy с автоматическим HTTPS. База и токен
+бота к серверу лежат на общем томе `app-data`; если бот и сервер стоят
+на разных машинах, задайте `INTERNAL_TOKEN` в `.env` обоим.
 
 Без Docker — юниты systemd в `deploy/` (`zapis-web.service`,
 `zapis-bot.service`), данные в `/var/lib/zapis`.

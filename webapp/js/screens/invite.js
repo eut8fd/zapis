@@ -19,7 +19,7 @@ import { icon } from '../icons.js';
 import { route, go, render, resetStack } from '../router.js';
 import { on } from '../bus.js';
 import { haptic, tgUsername, tgFullName, tgId, requestPhone, canRequestPhone } from '../tg.js';
-import { fetchInvite, patchInvite, acceptInviteOnServer, session } from '../sync.js';
+import { fetchInvite, acceptInviteOnServer, session } from '../sync.js';
 
 const rr = () => render(false);
 
@@ -183,9 +183,6 @@ on('inv.accept', async () => {
   });
   sh.close();
   if (!res.ok) { toast(t('Ссылка не работает'), 'dan'); st.inv = inviteById(st.id); rr(); return; }
-
-  // Гасим ссылку и на сервере — иначе ею воспользуются с другого устройства
-  patchInvite(st.id, { usedAt: new Date().toISOString(), usedBy: res.employee.id });
 
   S.session.role = 'employee';
   S.session.companyId = res.employee.companyId;

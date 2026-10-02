@@ -196,6 +196,20 @@ async function main() {
       // полный прогон экранов владельца
       const errs = await page.evaluate(SCREEN_LOOP.replace('ROLES', JSON.stringify([null])).replace('LANGS', JSON.stringify(['ru', 'kk', 'en'])));
       check(errs.length === 0, 'экраны владельца в серверном режиме: ' + JSON.stringify(errs).slice(0, 300));
+      // горизонтальное переполнение на каждом экране владельца (мобильная ширина)
+      const wide = await page.evaluate(async () => {
+        const R = await import('/js/router.js');
+        const out = [];
+        for (const n of Object.keys(R.routes)) {
+          if (!/^(o\.|ai\.)/.test(n)) continue;
+          try { R.go(n, {}, { replace: true }); } catch (e) { continue; }
+          await new Promise(r => setTimeout(r, 30));
+          if (document.documentElement.scrollWidth > document.documentElement.clientWidth + 1) out.push(n);
+        }
+        R.go('o.home', {}, { root: true });
+        return out;
+      });
+      check(wide.length === 0, 'экраны без горизонтальной прокрутки: ' + JSON.stringify(wide));
       // перенос записи владельцем → уведомление клиенту
       await page.evaluate(id => { const S = window.__zapis.S; const a = S.data.appointments.find(x => x.id === id); a.start = new Date(new Date(a.start).getTime() + 3600000).toISOString(); window.__zapis.emit(); }, apptId);
       await sleep(1500);

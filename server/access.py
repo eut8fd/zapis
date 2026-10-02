@@ -17,7 +17,7 @@
 роль считается для каждой компании отдельно.
 """
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import slots
 
@@ -80,21 +80,16 @@ class Ctx:
     def reload(self):
         s = self.store
         self.user = s.user(self.tg_id) or {}
-        # Членство — живые карточки сотрудников с моим telegram-id.
+        # Членство — живые карточки сотрудников с моим telegram-id. Ищем по
+        # индексу tg_id, а не перебором всех карточек платформы.
         self.memberships = {}
-        for r in s.conn().execute(
-                "SELECT company_id, body FROM entities WHERE col='employees' AND deleted=0"):
-            import json
-            e = json.loads(r['body'])
-            if str(e.get('tgId') or '') == self.tg_id and e.get('active') is not False:
-                self.memberships[r['company_id']] = e
+        for r in s.by_tg('employees', self.tg_id):
+            e = r['body']
+            if e.get('active') is not False:
+                self.memberships[r['companyId']] = e
         self.client_cards = {}
-        for r in s.conn().execute(
-                "SELECT company_id, body FROM entities WHERE col='clients' AND deleted=0"):
-            import json
-            c = json.loads(r['body'])
-            if str(c.get('tgId') or '') == self.tg_id:
-                self.client_cards[r['company_id']] = c
+        for r in s.by_tg('clients', self.tg_id):
+            self.client_cards[r['companyId']] = r['body']
         self.bound = set((self.user or {}).get('bound') or [])
         if (self.user or {}).get('home'):
             self.bound.add(self.user['home'])
@@ -153,6 +148,14 @@ class Scope:
         self.emp_id = ctx.employee_id(company_id)
         self.my_client = ctx.client_id(company_id)
         self._own_clients = None
+        # Чужие записи нужны только как занятое время для расчёта окон,
+        # поэтому история старше суток клиенту и мастеру не отдаётся:
+        # иначе вся история салона ехала бы в localStorage каждого клиента.
+        self.recent_from = slots.to_iso(datetime.now(timezone.utc) - timedelta(days=1))
+
+    def is_recent(self, body):
+        """Запись или блокировка не старше суток — ISO-строки сравниваются как строки."""
+        return str(body.get('start') or '') >= self.recent_from
 
     def own_clients(self):
         if self._own_clients is None:
@@ -177,7 +180,9 @@ class Scope:
             if col in FINANCE_COLS or col in ('reviews', 'invites', 'broadcasts', 'inbox', 'logs', 'errors'):
                 return None
             if col == 'appointments':
-                return body if body.get('employeeId') == self.emp_id else anonymize_appointment(body)
+                if body.get('employeeId') == self.emp_id:
+                    return body
+                return anonymize_appointment(body) if self.is_recent(body) else None
             if col == 'clients':
                 return body if body.get('id') in self.own_clients() else None
             if col == 'tickets':
@@ -195,10 +200,11 @@ class Scope:
             if col == 'clients':
                 return body if body.get('id') == self.my_client else None
             if col == 'appointments':
-                return body if body.get('clientId') and body.get('clientId') == self.my_client \
-                    else anonymize_appointment(body)
+                if body.get('clientId') and body.get('clientId') == self.my_client:
+                    return body
+                return anonymize_appointment(body) if self.is_recent(body) else None
             if col == 'blocks':
-                return pick(body, BLOCK_PUBLIC)
+                return pick(body, BLOCK_PUBLIC) if self.is_recent(body) else None
             if col == 'reviews':
                 return body if body.get('clientId') == self.my_client else None
             if col == 'tickets':
@@ -396,8 +402,8 @@ def check_review(scope, body, existing, ctx, store):
 
 
 def check_ticket(scope, body, existing, ctx):
-    role = scope.role
-    if role == 'admin':
+    role = scope.role if scope else None
+    if ctx.is_admin:
         return
     if role is None and body.get('companyId'):
         raise Denied('нет доступа к компании')
@@ -460,6 +466,21 @@ def check_write(ctx, col, body, existing, scope, store, tz, company):
         return
     if col == 'companies':
         return check_company(scope, body, existing, ctx)
+    # Без компании могут приходить отчёты об ошибках, журнал и обращения:
+    # их шлёт и человек, у которого ещё нет ни салона, ни членства.
+    if col == 'errors':
+        if role is None and db_company(col, body):
+            raise Denied('нет доступа к компании')
+        return
+    if col == 'logs':
+        if role is None and db_company(col, body):
+            raise Denied('нет доступа к компании')
+        if existing is not None:
+            raise Denied('журнал не правится')
+        body['at'] = body.get('at') or now_iso()
+        return
+    if col == 'tickets':
+        return check_ticket(scope, body, existing, ctx)
     if role is None:
         raise Denied('нет доступа к компании')
     if col == 'employees':
@@ -499,15 +520,11 @@ def check_write(ctx, col, body, existing, scope, store, tz, company):
         if existing and existing.get('usedAt') and body.get('usedAt') != existing.get('usedAt'):
             raise Denied('использованное приглашение не меняется')
         return
-    if col == 'logs':
-        if existing is not None:
-            raise Denied('журнал не правится')
-        body['at'] = body.get('at') or now_iso()
-        return
-    if col == 'errors':
-        # сбор ошибок открыт всем, кто вошёл: отчёт о падении — не атака
-        return
     raise Denied('неизвестная коллекция')
+
+
+def db_company(col, body):
+    return str(body.get('companyId') or '')
 
 
 DELETABLE = {

@@ -27,10 +27,11 @@ services:
     env_file: .env
     environment:
       DATA_DIR: /data
-      # бот и сервер в разных контейнерах: ходит по сети, токен — из .env
+      # бот ходит в сервер по сети; том общий, поэтому internal.token
+      # сервера виден боту и INTERNAL_TOKEN в .env можно не задавать
       SERVER_URL: http://web:8080
     volumes:
-      - bot-data:/data
+      - app-data:/data
     depends_on:
       - web
 
@@ -51,6 +52,5 @@ services:
 
 volumes:
   app-data:
-  bot-data:
   caddy-data:
   caddy-config:

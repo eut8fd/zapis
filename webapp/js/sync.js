@@ -148,8 +148,12 @@ export async function pushNow() {
     rejected.forEach(x => revert(x));
     applyChanges(r.changes || [], pushed);
     st.seq = r.seq || st.seq;
-    takeSnapshot();
+    // Снимок обновляем только для того, что ушло и что пришло: правка,
+    // сделанная пока шёл запрос, остаётся «грязной» и уйдёт следующей.
+    // Полный снимок здесь молча хоронил бы такую правку.
+    commitSnapshot(payload, pushed, rejected);
     st.dirty = diff().n > 0;
+    if (st.dirty) schedulePush(200);
     if (rejected.length) warn(rejected);
     if (rejected.length || (r.changes || []).length) emit();
     return rejected;
@@ -170,6 +174,25 @@ export async function pushNow() {
     }
     return [];
   } finally { st.pushing = false; }
+}
+
+/** Снимок после удачной отправки: отправленное — как отправили, отказанное —
+    как у сервера, удалённое — забыто. Остальное не трогаем. */
+function commitSnapshot(payload, pushed, rejected) {
+  if (!st.snapshot) return;
+  const bad = new Set(rejected.map(x => x.col + ':' + x.id));
+  Object.keys(pushed).forEach(key => {
+    if (bad.has(key)) return;
+    const [col, id] = [key.slice(0, key.indexOf(':')), key.slice(key.indexOf(':') + 1)];
+    if (st.snapshot[col]) st.snapshot[col].set(id, pushed[key]);
+  });
+  Object.keys(payload.delete || {}).forEach(col => {
+    (payload.delete[col] || []).forEach(id => { if (st.snapshot[col] && !bad.has(col + ':' + id)) st.snapshot[col].delete(id); });
+  });
+  rejected.forEach(({ col, id, server }) => {
+    if (!st.snapshot[col]) return;
+    if (server) st.snapshot[col].set(id, JSON.stringify(server)); else st.snapshot[col].delete(id);
+  });
 }
 
 /** Отказ сервера: вернуть сущность к серверному виду или убрать совсем. */
@@ -307,14 +330,3 @@ export async function acceptInviteOnServer(id, person) {
   return r;
 }
 
-/* ---------------- обратная совместимость ----------------
-   Старые вызовы из экранов: теперь всё уходит через разницу состояния,
-   отдельно отправлять ничего не нужно. Оставлены пустыми, чтобы ничего
-   не упало, пока экраны переписываются. */
-export async function syncOnBoot() { return 0; }
-export function pushCatalog() { }
-export async function pushAppointment() { }
-export async function patchAppointment() { }
-export async function pushInvite() { }
-export async function patchInvite() { }
-export const syncAlive = () => st.mode === 'server';

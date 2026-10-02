@@ -59,7 +59,7 @@ DEV_AUTH = env_bool('DEV_AUTH', False)
 INTERNAL_TOKEN = env('INTERNAL_TOKEN')
 # Срок жизни initData. Telegram подписывает его при открытии приложения;
 # приложение живёт в WebView часами, поэтому держим сутки, а не 5 минут.
-AUTH_MAX_AGE = int(env('TELEGRAM_AUTH_MAX_AGE_SECONDS') or 86400)
+AUTH_MAX_AGE = int(env('AUTH_MAX_AGE_SECONDS') or 86400)
 # Инструкция по оплате — её владелец видит в «Подписке» вместо фиктивного платежа.
 PAYMENT_NOTE = env('PAYMENT_NOTE')
 SUPPORT_USERNAME = env('SUPPORT_USERNAME').lstrip('@')

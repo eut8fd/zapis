@@ -329,8 +329,17 @@ def apply_push(ctx, payload):
     new_companies = {}
     plans = STORE.bodies('plans')
 
-    def reject(col, body, why, existing):
-        rejected.append({'col': col, 'id': body.get('id'), 'reason': why, 'server': existing})
+    def reject(col, body, why, existing, scope=None):
+        # Серверную версию возвращаем только в том виде, в каком её вправе
+        # видеть эта роль: иначе отказ «это чужая запись» отдавал бы чужую
+        # запись целиком — с именем, телефоном и ценой.
+        safe = None
+        if existing is not None:
+            if ctx.is_admin:
+                safe = existing
+            elif scope is not None and scope.role:
+                safe = scope.view(col, existing)
+        rejected.append({'col': col, 'id': body.get('id'), 'reason': why, 'server': safe})
 
     with STORE.transaction():
         scopes = {}
@@ -353,15 +362,16 @@ def apply_push(ctx, payload):
                                      'reason': 'некорректная сущность', 'server': None})
                     continue
                 if len(json.dumps(body, ensure_ascii=False)) > MAX_ENTITY:
-                    reject(col, body, 'слишком большая запись — уменьшите фото', STORE.body(col, body['id']))
+                    reject(col, body, 'слишком большая запись — уменьшите фото', None)
                     continue
                 cid = db.company_of(col, body)
                 existing = STORE.body(col, body['id'])
                 if existing is not None and col != 'companies' and db.company_of(col, existing) != cid:
-                    reject(col, body, 'сущность другой компании', existing)
+                    # чужая компания: ничего о ней не рассказываем
+                    reject(col, body, 'сущность другой компании', None)
                     continue
                 if col != 'companies' and col not in db.PLATFORM and not cid and col not in db.OPTIONAL_COMPANY:
-                    reject(col, body, 'нет компании', existing)
+                    reject(col, body, 'нет компании', None)
                     continue
 
                 # --- новая компания: создаёт любой, владельцем становится сам
@@ -398,14 +408,14 @@ def apply_push(ctx, payload):
 
                 company = STORE.body('companies', cid) if cid else None
                 if cid and col != 'companies' and company is None and col not in db.OPTIONAL_COMPANY:
-                    reject(col, body, 'компания не найдена', existing)
+                    reject(col, body, 'компания не найдена', None)
                     continue
                 scope = scope_for(cid) if cid else None
                 tz = notify.company_tz(company)
                 try:
                     access.check_write(ctx, col, body, existing, scope, STORE, tz, company)
                 except access.Denied as e:
-                    reject(col, body, str(e), existing)
+                    reject(col, body, str(e), existing, scope)
                     continue
                 STORE.put(col, body, by=ctx.tg_id)
                 applied += 1
@@ -442,7 +452,7 @@ def apply_push(ctx, payload):
                 try:
                     access.check_delete(ctx, col, existing, scope)
                 except access.Denied as e:
-                    rejected.append({'col': col, 'id': eid, 'reason': str(e), 'server': existing})
+                    reject(col, {'id': eid}, str(e), existing, scope)
                     continue
                 STORE.delete(col, eid, by=ctx.tg_id)
                 applied += 1
@@ -657,6 +667,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         line = fmt % args
+        if os.environ.get('ZAPIS_QUIET'):
+            return
         if '"GET' in line and (' 200 ' in line or ' 304 ' in line):
             return
         sys.stderr.write('%s\n' % line)

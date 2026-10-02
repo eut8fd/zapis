@@ -23,6 +23,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SERVER = os.path.abspath(os.path.join(HERE, '..'))
 sys.path.insert(0, SERVER)
 
+os.environ['ZAPIS_QUIET'] = '1'
 os.environ['DEV_AUTH'] = '1'
 os.environ['BOT_TOKEN'] = os.environ.get('TEST_BOT_TOKEN', '')
 os.environ['ADMIN_TG_IDS'] = '999'
@@ -342,6 +343,88 @@ class UnitPieces(unittest.TestCase):
         self.assertEqual(serve.start_company('c1_my'), 'c1')
         self.assertEqual(serve.start_company('owner_cal'), 'owner')
         self.assertEqual(serve.start_company('co_abc'), 'co_abc')
+
+
+class ReviewFindings(ServerCase):
+    """Что нашло ревью: отказ не раскрывает чужое, ошибки без компании
+    принимаются, клиент не получает всю историю, перенос даёт новое напоминание."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.push_as = lambda self, user, upsert: self.push(upsert, user=user)
+
+    def test_01_setup(self):
+        r = self.push({
+            'companies': [company_payload('co_r1', 'Ревью')],
+            'employees': [{'id': 'co_r1_owner', 'companyId': 'co_r1', 'name': 'Вы', 'role': 'Владелец',
+                           'isOwner': True, 'active': True, 'schedule': HOURS, 'serviceIds': [],
+                           'takesAppointments': True, 'access': 'owner', 'phone': '+7 700 secret'}],
+            'services': [{'id': 's_r', 'companyId': 'co_r1', 'name': 'Стрижка', 'price': 3000, 'duration': 30,
+                          'cat': 'bar', 'active': True, 'employeeIds': ['co_r1_owner']}],
+            'incomes': [{'id': 'inc_r', 'companyId': 'co_r1', 'type': 'income', 'amount': 500, 'cat': 'sale',
+                         'date': '2026-01-01T00:00:00.000Z'}],
+        }, user='11:Owner R')
+        self.assertEqual(r['rejected'], [])
+        # старая запись владельца — история, которой клиенту видеть незачем
+        self.push({'clients': [{'id': 'cl_old', 'companyId': 'co_r1', 'name': 'Старый', 'phone': '+7 1'}],
+                   'appointments': [{'id': 'ap_old', 'companyId': 'co_r1', 'clientId': 'cl_old',
+                                     'employeeId': 'co_r1_owner', 'serviceIds': ['s_r'],
+                                     'start': '2026-01-10T05:00:00.000Z', 'duration': 30, 'price': 3000,
+                                     'status': 'done', 'source': 'owner'}]}, user='11:Owner R')
+
+    def test_02_rejection_does_not_leak_foreign_entities(self):
+        st, boot = self.call('POST', '/api/v2/boot', {'start': 'co_r1'}, user='12:Клиент R')
+        # клиент пробует «отредактировать» чужие сущности, угадав id
+        r = self.push({
+            'incomes': [{'id': 'inc_r', 'companyId': 'co_r1', 'type': 'income', 'amount': 1, 'cat': 'sale'}],
+            'employees': [{'id': 'co_r1_owner', 'companyId': 'co_r1', 'name': 'x'}],
+            'clients': [{'id': 'cl_old', 'companyId': 'co_r1', 'name': 'x'}],
+            'appointments': [{'id': 'ap_old', 'companyId': 'co_r1', 'clientId': 'cl_old', 'employeeId': 'co_r1_owner',
+                              'serviceIds': ['s_r'], 'start': '2026-01-10T05:00:00.000Z', 'duration': 30,
+                              'status': 'cancelled'}],
+        }, user='12:Клиент R')
+        self.assertEqual(len(r['rejected']), 4)
+        by = {x['col']: x['server'] for x in r['rejected']}
+        self.assertIsNone(by['incomes'])
+        self.assertIsNone(by['clients'])
+        self.assertNotIn('phone', by['employees'] or {})
+        self.assertTrue(by['appointments'] is None or by['appointments'].get('anon'))
+        self.assertNotIn('+7 700 secret', json.dumps(r, ensure_ascii=False))
+
+    def test_03_error_report_without_company_is_accepted(self):
+        r = self.push({'errors': [{'id': 'er_1', 'message': 'boom', 'where': 'start', 'count': 1,
+                                   'firstAt': '2026-01-01T00:00:00.000Z', 'lastAt': '2026-01-01T00:00:00.000Z'}]},
+                      user='4444:Nobody')
+        self.assertEqual(r['rejected'], [])
+        r = self.push({'tickets': [{'id': 'tk_free', 'topic': 'howto', 'subject': 'Как', 'companyId': None,
+                                    'messages': [{'from': 'client', 'text': 'вопрос'}]}]}, user='4444:Nobody')
+        self.assertEqual(r['rejected'], [])
+
+    def test_04_client_gets_only_recent_foreign_appointments(self):
+        st, boot = self.call('POST', '/api/v2/boot', {'start': 'co_r1'}, user='12:Клиент R')
+        self.assertEqual([a['id'] for a in boot['data']['appointments']], [])
+        d, start = tomorrow_at(660)
+        self.push({'clients': [{'id': 'cl_r2', 'companyId': 'co_r1', 'name': 'Р', 'tgId': '12'}],
+                   'appointments': [{'id': 'ap_new', 'companyId': 'co_r1', 'clientId': 'cl_r2',
+                                     'employeeId': 'co_r1_owner', 'serviceIds': ['s_r'], 'start': start,
+                                     'duration': 30, 'status': 'planned', 'source': 'client'}]}, user='12:Клиент R')
+        st, boot = self.call('POST', '/api/v2/boot', {'start': 'co_r1'}, user='13:Другой R')
+        ids = [a['id'] for a in boot['data']['appointments']]
+        self.assertEqual(ids, ['ap_new'])        # свежая — как занятое время, старая — нет
+
+    def test_05_move_after_sent_reminder_schedules_new_one(self):
+        a = serve.STORE.body('appointments', 'ap_new')
+        rows = [n for n in serve.STORE.notifications_for(ref='ap_new') if n['kind'] == 'rem2']
+        self.assertEqual(len(rows), 1)
+        serve.STORE.mark_sent(rows[0]['id'], True)          # напоминание уже ушло
+        moved = dict(a)
+        moved['start'] = slots.to_iso(slots.parse_iso(a['start']) + timedelta(days=3))
+        r = self.push({'appointments': [moved]}, user='12:Клиент R')
+        self.assertEqual(r['rejected'], [])
+        rows = [n for n in serve.STORE.notifications_for(ref='ap_new') if n['kind'] == 'rem2' and not n['cancelled']]
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(any(n['sent_at'] is None for n in rows))   # новое напоминание на новую дату
 
 
 if __name__ == '__main__':

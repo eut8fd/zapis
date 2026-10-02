@@ -352,22 +352,27 @@ def client_back_kb(cid):
 
 # --------------------------------------------------------------------- запись в чате
 def bk_state(data):
-    """'bk:<svc>:<emp>:<day>:<time>' → кортеж; пустые поля = ещё не выбрано.
-    Индексы — в списках справочника: callback_data ограничен 64 байтами."""
+    """'bk:<svc>:<emp>:<день>:<время>' → кортеж; пустые поля = ещё не выбрано.
+    Услуга и мастер — индексы в списках справочника (callback_data ограничен
+    64 байтами), день — дата YYYY-MM-DD: индекс от «сегодня» сломался бы
+    после полуночи и на хостинге в другом часовом поясе."""
     parts = (data.split(':') + ['', '', '', ''])[1:5]
     svc = int(parts[0]) if parts[0] != '' else None
     emp = parts[1] if parts[1] != '' else None
-    day = int(parts[2]) if parts[2] != '' else None
+    day = parse_date(parts[2])
     tm = int(parts[3]) if parts[3] != '' else None
     return svc, emp, day, tm
 
 
 def bk_data(svc='', emp='', day='', tm=''):
-    return 'bk:%s:%s:%s:%s' % (svc, emp, day, tm)
+    return 'bk:%s:%s:%s:%s' % (svc, emp, day.isoformat() if isinstance(day, date) else day, tm)
 
 
-def bk_day(idx):
-    return date.today() + timedelta(days=idx)
+def parse_date(s):
+    try:
+        return date.fromisoformat(s) if s else None
+    except ValueError:
+        return None
 
 
 def staff_for(c, svc):
@@ -418,12 +423,14 @@ def bk_screen(c, uid, data):
             days = api.days(cid, s['id'], emp_id(c, emp), n=7)
         except api.ServerError:
             return offline_text(), offline_kb()
+        # «сегодня» — по салону: первый день в ответе сервера
+        if days:
+            today = date.fromisoformat(days[0]['date'])
         rows, line = [], []
         for d in days:
             dd = date.fromisoformat(d['date'])
-            idx = (dd - today).days
             label = day_short(dd, today) + (' · %d' % d['free'] if d['free'] else ' · нет')
-            line.append(cb(label, bk_data(svc, emp, idx) if d['free'] else 'noop'))
+            line.append(cb(label, bk_data(svc, emp, dd) if d['free'] else 'noop'))
             if len(line) == 2:
                 rows.append(line); line = []
         if line:
@@ -433,7 +440,7 @@ def bk_screen(c, uid, data):
         return ('<b>Выберите день</b>\n%s · %s\n\n<i>Здесь ближайшая неделя. Нужна дата дальше — '
                 'откройте полный календарь.</i>' % (esc(s['name']), esc(who)), {'inline_keyboard': rows})
 
-    d = bk_day(day)
+    d = day
     if tm is None:
         try:
             slots = api.slots(cid, s['id'], d.isoformat(), emp_id(c, emp))
@@ -466,8 +473,8 @@ def bk_screen(c, uid, data):
              dur=dur_text(s['duration']), price=money(s['price'], c.get('currency')),
              name=esc(c['name']), addr=esc(c.get('addr')))
     return (txt, {'inline_keyboard': [
-        [cb('✅ Подтвердить запись', 'bkok:%d:%s:%d:%d' % (svc, emp, day, tm))],
-        [cb('‹ Изменить время', bk_data(svc, emp, day))],
+        [cb('✅ Подтвердить запись', 'bkok:%d:%s:%s:%d' % (svc, emp, d.isoformat(), tm))],
+        [cb('‹ Изменить время', bk_data(svc, emp, d))],
     ]})
 
 
@@ -485,11 +492,11 @@ def next_free_text(cid, service_id, employee_id):
 
 def bk_confirm(c, uid, user, data):
     _, svc, emp, day, tm = data.split(':')
-    svc, day, tm = int(svc), int(day), int(tm)
-    if svc >= len(c['services']):
+    svc, tm = int(svc), int(tm)
+    d = parse_date(day)
+    if svc >= len(c['services']) or d is None:
         return ('<b>Услуга изменилась</b>\nВыберите заново.', {'inline_keyboard': [[cb('Выбрать услугу', bk_data())]]})
     s = c['services'][svc]
-    d = bk_day(day)
     try:
         a = api.book(c['id'], s['id'], d.isoformat(), tm, uid,
                      name=(user or {}).get('first_name', '') or 'Гость',
@@ -793,6 +800,12 @@ def setup():
         h = api.health()
         print('   сервер: %s (seq %s)' % (api.server_url(), h.get('seq')))
     except api.ServerError as e:
+        if e.status == 403:
+            # неверный INTERNAL_TOKEN — это настройка, а не сеть: молча работать
+            # «без справочника» бот не должен, иначе ошибку ищут неделями
+            print('!! сервер отверг внутренний токен бота (403).')
+            print('   Задайте INTERNAL_TOKEN одинаково для сервера и бота, либо дайте им общий DATA_DIR.')
+            sys.exit(1)
         print('   !! сервер недоступен: %s' % e.message)
         print('      бот будет отвечать, но записи и справочник появятся, когда сервер поднимется')
     me = tg('getMe').get('result', {})

@@ -181,6 +181,9 @@ def schedule_client_reminders(store, v):
     st = notify_settings(v.company)
     cid = v.company.get('id')
     kb = buttons([app_button('Мои записи', '%s_my' % cid)])
+    # Ключ включает время визита: перенесённая запись получает новое
+    # напоминание, даже если старое уже отправлено.
+    stamp = int(v.start.timestamp())
     for kind, before in REMINDERS:
         if not st[kind]:
             continue
@@ -193,13 +196,13 @@ def schedule_client_reminders(store, v):
         else:
             text = '⏰ <b>Через 2 часа — ваша запись</b>\n\n%s\n\nЖдём вас! Если опаздываете, ' \
                    'предупредите салон.' % v.card()
-        store.schedule('%s:%s' % (kind, a['id']), tg, kind, text, due.timestamp(),
+        store.schedule('%s:%s:%d' % (kind, a['id'], stamp), tg, kind, text, due.timestamp(),
                        ref=a['id'], company_id=cid, buttons=kb)
     if st['review'] and v.end:
         due = v.end + timedelta(minutes=90)
         text = '⭐ <b>Как всё прошло?</b>\n\n%s\n\nОцените визит — это займёт полминуты. ' \
                'Оценку увидит только владелец салона.' % v.card()
-        store.schedule('review:%s' % a['id'], tg, 'review', text, due.timestamp(), ref=a['id'],
+        store.schedule('review:%s:%d' % (a['id'], stamp), tg, 'review', text, due.timestamp(), ref=a['id'],
                        company_id=cid, buttons=buttons([app_button('Оценить визит', '%s_my' % cid)]))
 
 
@@ -305,12 +308,12 @@ def on_appointment(store, old, new, actor_role):
 
     if status == 'done' and old_status == 'planned':
         # визит закрыли раньше расчётного конца — просьбу об отзыве подвинем
-        if v.client_tg and notify_settings(v.company)['review']:
+        if v.client_tg and notify_settings(v.company)['review'] and v.start:
             due = datetime.now(timezone.utc) + timedelta(minutes=60)
             text = '⭐ <b>Как всё прошло?</b>\n\n%s\n\nОцените визит — это займёт полминуты. ' \
                    'Оценку увидит только владелец салона.' % v.card()
-            store.schedule('review:%s' % new['id'], v.client_tg, 'review', text, due.timestamp(),
-                           ref=new['id'], company_id=cid,
+            store.schedule('review:%s:%d' % (new['id'], int(v.start.timestamp())), v.client_tg, 'review', text,
+                           due.timestamp(), ref=new['id'], company_id=cid,
                            buttons=buttons([app_button('Оценить визит', '%s_my' % cid)]))
 
 

@@ -24,6 +24,7 @@ ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))
 sys.path.insert(0, os.path.join(ROOT, 'server'))
 sys.path.insert(0, os.path.join(ROOT, 'bot'))
 
+os.environ['ZAPIS_QUIET'] = '1'
 os.environ['DEV_AUTH'] = '1'
 os.environ['BOT_TOKEN'] = '123:TEST'
 os.environ['ADMIN_TG_IDS'] = '999'
@@ -198,10 +199,9 @@ class BotFlow(unittest.TestCase):
         import slots
         tz = slots.tzinfo_for('Asia/Almaty')
         st = slots.parse_iso(a['start']).astimezone(tz)
-        idx = (st.date() - date.today()).days
         minute = st.hour * 60 + st.minute
         self.message('/start co_bot1', uid=777)
-        self.click('bkok:0:0:%d:%d' % (idx, minute), uid=777)
+        self.click('bkok:0:0:%s:%d' % (st.date().isoformat(), minute), uid=777)
         body = self.last_message()
         self.assertIn('заняли', body['text'].lower() + body['text'])
         self.assertEqual(len(serve.STORE.bodies('appointments', 'co_bot1')), 1)

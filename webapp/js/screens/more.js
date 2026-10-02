@@ -24,7 +24,6 @@ import {
 import { icon, catIcon } from '../icons.js';
 import { bookingLink } from './owner.js';
 import { LANGS, lang } from '../i18n.js';
-import { pushInvite, patchInvite } from '../sync.js';
 import { route, go, render } from '../router.js';
 import { on, fire } from '../bus.js';
 import {
@@ -151,7 +150,6 @@ on('tm.invMake', () => {
   const el = window.__inv.s.el.querySelector('#_ir');
   if (el) invDraft.role = el.value.trim() || ACCESS[invDraft.access].t;
   const inv = createInvite({ access: invDraft.access, role: invDraft.role, days: invDraft.days });
-  pushInvite(inv);
   window.__inv.s.close();
   setTimeout(() => showInvite(inv.id), 260);
 });
@@ -164,7 +162,6 @@ on('tm.invKill', async ds => {
   });
   if (!ok) return;
   revokeInvite(ds.id);
-  patchInvite(ds.id, { revokedAt: new Date().toISOString() });
   toast('Приглашение отозвано', 'dan');
 });
 
@@ -203,7 +200,6 @@ on('tm.inviteFor', ds => {
   const e = emp(ds.id);
   if (!e) return;
   const inv = createInvite({ access: e.access || 'staff', role: e.role, days: 7, employeeId: e.id });
-  pushInvite(inv);
   // Обработчик зовётся и из шторки после создания, и из карточки сотрудника,
   // где шторки нет вовсе.
   const open = window.__tmInv && window.__tmInv.s;

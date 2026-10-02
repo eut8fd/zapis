@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS entities (
   col        TEXT NOT NULL,
   id         TEXT NOT NULL,
   company_id TEXT NOT NULL DEFAULT '',
+  tg_id      TEXT NOT NULL DEFAULT '',
   body       TEXT NOT NULL,
   deleted    INTEGER NOT NULL DEFAULT 0,
   seq        INTEGER NOT NULL,
@@ -54,6 +55,7 @@ CREATE TABLE IF NOT EXISTS entities (
 );
 CREATE INDEX IF NOT EXISTS entities_company ON entities(company_id, col);
 CREATE INDEX IF NOT EXISTS entities_seq ON entities(seq);
+CREATE INDEX IF NOT EXISTS entities_tg ON entities(tg_id, col);
 
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
 
@@ -121,8 +123,22 @@ class Store:
             self._shared = sqlite3.connect(':memory:', check_same_thread=False)
             self._shared.row_factory = sqlite3.Row
         with self.conn() as c:
+            self._migrate(c)
             c.executescript(SCHEMA)
             c.execute("INSERT OR IGNORE INTO meta(k, v) VALUES ('seq', '0')")
+
+    def _migrate(self, c):
+        """База из первых сборок без колонки tg_id: добавляем и заполняем."""
+        cols = [r[1] for r in c.execute('PRAGMA table_info(entities)')]
+        if cols and 'tg_id' not in cols:
+            c.execute("ALTER TABLE entities ADD COLUMN tg_id TEXT NOT NULL DEFAULT ''")
+            for r in c.execute("SELECT col, id, body FROM entities WHERE col IN ('employees','clients')").fetchall():
+                try:
+                    tg = str(json.loads(r[2]).get('tgId') or '')
+                except ValueError:
+                    tg = ''
+                c.execute('UPDATE entities SET tg_id=? WHERE col=? AND id=?', (tg, r[0], r[1]))
+            c.commit()
 
     # ------------------------------------------------------------ соединение
     def conn(self):
@@ -231,17 +247,26 @@ class Store:
         if not eid:
             raise ValueError('entity without id')
         cid = company_id if company_id is not None else company_of(col, body)
+        tg = str(body.get('tgId') or '') if col in ('employees', 'clients') else ''
         with self._wlock:
             c = self.conn()
             seq = self._next_seq(c)
             c.execute(
-                'INSERT INTO entities(col,id,company_id,body,deleted,seq,updated_at,updated_by) '
-                'VALUES (?,?,?,?,0,?,?,?) '
-                'ON CONFLICT(col,id) DO UPDATE SET company_id=excluded.company_id, body=excluded.body, '
-                'deleted=0, seq=excluded.seq, updated_at=excluded.updated_at, updated_by=excluded.updated_by',
-                (col, eid, cid, json.dumps(body, ensure_ascii=False), seq, time.time(), by))
+                'INSERT INTO entities(col,id,company_id,tg_id,body,deleted,seq,updated_at,updated_by) '
+                'VALUES (?,?,?,?,?,0,?,?,?) '
+                'ON CONFLICT(col,id) DO UPDATE SET company_id=excluded.company_id, tg_id=excluded.tg_id, '
+                'body=excluded.body, deleted=0, seq=excluded.seq, updated_at=excluded.updated_at, '
+                'updated_by=excluded.updated_by',
+                (col, eid, cid, tg, json.dumps(body, ensure_ascii=False), seq, time.time(), by))
             c.commit()
             return seq
+
+    def by_tg(self, col, tg_id):
+        """Живые карточки с этим telegram-id — членство и карточки клиента."""
+        if not tg_id:
+            return []
+        return [self._row(r) for r in self.conn().execute(
+            'SELECT * FROM entities WHERE tg_id=? AND col=? AND deleted=0', (str(tg_id), col))]
 
     def delete(self, col, eid, by=None):
         """Удаление — это надгробие: строка остаётся, чтобы другие устройства узнали."""
