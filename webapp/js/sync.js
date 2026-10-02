@@ -1,232 +1,309 @@
 /* =========================================================
-   Общий склад Mini App и бота
+   Синхронизация с сервером
    ---------------------------------------------------------
-   До него это были два мира. У бота своя база и услуги по номеру в списке,
-   у приложения — localStorage и настоящие идентификаторы. Бот знал три
-   салона из одиннадцати, а напоминания уходили только по записям из чата,
-   хотя интерфейс обещал их всем.
+   Два режима работы приложения.
 
-   Теперь приложение выкладывает справочник (компании, услуги, мастера,
-   часы) на сервер, а бот его читает. Записи складываются в общий список
-   в формате приложения — с настоящими идентификаторами.
+   Демо (нет сервера, открыли файл с диска, GitHub Pages без API_BASE):
+   данные живут в localStorage, у каждого устройства своя копия. Так было
+   всегда, и так остаётся — демонстрация обязана открываться везде.
 
-   Всё здесь необязательное. Нет сервера, нет сети, открыли файл с диска —
-   приложение работает ровно как раньше, на localStorage. Синхронизация
-   молча выключается, а не роняет экран: демо должно открываться всегда.
+   Серверный режим: сервер — источник истины. На старте приложение
+   получает своё состояние целиком (уже отфильтрованное по роли: клиент
+   не видит чужих имён, мастер — денег), дальше любое изменение в S.data
+   уходит на сервер разницей сущностей, а чужие изменения подтягиваются
+   раз в полминуты и при возвращении на экран. Экраны про это не знают:
+   они по-прежнему читают S.data и зовут функции store.js.
+
+   Разница считается сравнением со снимком последнего известного
+   серверу состояния: что поменялось — upsert, чего не стало — delete.
+   Сервер может отказать (чужая запись, занятое время) — тогда локальная
+   копия откатывается к серверной и человек видит причину.
    ========================================================= */
-import { S, catalogCompanies, svcs, staff, emit, allCompanies } from './store.js';
-import { API_BASE } from './config.js';
+import { S, emit, onSave, allCompanies, setServerMode, DATA_COLS } from './store.js';
+import { api, canAuth, ApiError } from './api.js';
+import { BOT_USERNAME } from './config.js';
 
-/** Путь к складу. С пустым API_BASE остаётся относительным, как было. */
-const api = p => API_BASE + p;
+const PENDING_KEY = 'zapis.sync.pending';
+const PULL_EVERY = 30000;
 
-const TIMEOUT = 6000;
-const MAX_FAILS = 3;       // столько неудач подряд — и до перезагрузки молчим
-let pushTimer = null;
-let lastPushed = '';
-let alive = true;
-let fails = 0;
+const st = {
+  mode: 'demo', seq: 0, session: null, snapshot: null,
+  pushTimer: null, pushing: false, dirty: false, pullTimer: null,
+  lastError: '', failures: 0, warned: {},
+};
 
-async function req(url, opts = {}, retry = true) {
-  if (!alive) return null;
-  const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), TIMEOUT);
+export const isServer = () => st.mode === 'server';
+export const session = () => st.session;
+export const serverInfo = () => (st.session && st.session.server) || {};
+/** Имя бота для ссылок: в серверном режиме его знает сервер, в демо — config.js. */
+export const botName = () => serverInfo().botUsername || BOT_USERNAME;
+export const syncState = () => ({ mode: st.mode, seq: st.seq, dirty: st.dirty, pushing: st.pushing, lastError: st.lastError });
+
+/* ---------------- подключение ---------------- */
+
+/**
+ * Попробовать войти на сервер. Возвращает сессию (identity, membership,
+ * данные) либо null — тогда приложение работает в демо-режиме.
+ */
+export async function connect(start) {
+  if (!canAuth()) return null;
+  let ping;
+  try { ping = await api.ping(); } catch (e) { return null; }
+  if (!ping || !ping.auth) return null;
   try {
-    const r = await fetch(url, { ...opts, signal: ctl.signal });
-    if (!r.ok) return null;
-    fails = 0;
-    return await r.json();
+    const s = await api.boot(start);
+    if (!s || !s.ok) return null;
+    return s;
   } catch (e) {
-    // Одна осечка — не повод выключать синхронизацию. Раньше выключала:
-    // на старте приложение шлёт справочник и забирает записи одновременно,
-    // и переиспользованное соединение изредка обрывалось. После этого
-    // записи из Mini App молча переставали доходить до бота, а человек
-    // видел у него «Записей пока нет».
-    if (retry) {
-      await new Promise(r2 => setTimeout(r2, 300));
-      return req(url, opts, false);
-    }
-    if (++fails >= MAX_FAILS) alive = false;
+    // 401 — initData не прошёл: ошибка подписи или сервер без токена.
+    // Это не повод падать: демо-режим покажет интерфейс, а баннер — причину.
+    st.lastError = e && e.message ? e.message : String(e);
+    console.warn('boot failed', e);
     return null;
-  } finally { clearTimeout(t); }
-}
-
-/* ---------------- справочник ---------------- */
-
-/** Срез, который нужен боту: без клиентов, денег и всего внутреннего. */
-function snapshot() {
-  return catalogCompanies().map(c => ({
-    id: c.id, name: c.name, short: c.short, cat: c.cat, city: c.city,
-    addr: c.addr, phone: c.phone, color: c.color, currency: c.currency,
-    rating: c.rating, hours: c.hours, lat: c.lat, lon: c.lon,
-    services: svcs(c.id).map(s => ({
-      id: s.id, name: s.name, price: s.price, duration: s.duration,
-      cat: s.cat, employeeIds: s.employeeIds || [],
-    })),
-    staff: staff(c.id).map(e => ({
-      id: e.id, name: e.name, role: e.role, schedule: e.schedule,
-    })),
-  }));
-}
-
-/** Выложить справочник. Зовётся после сохранения, с задержкой. */
-export function pushCatalog(delay = 1500) {
-  clearTimeout(pushTimer);
-  pushTimer = setTimeout(async () => {
-    const catalog = snapshot();
-    const body = JSON.stringify({ catalog });
-    if (body === lastPushed) return;          // ничего не поменялось
-    const ok = await req(api('/api/catalog'), {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-    });
-    if (ok) lastPushed = body;
-  }, delay);
-}
-
-/* ---------------- записи ---------------- */
-
-/** Отправить запись в общий список, чтобы бот её увидел и напомнил о ней. */
-export async function pushAppointment(a, extra = {}) {
-  if (!a) return;
-  await req(api('/api/appointments'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...a, ...extra }),
-  });
-}
-
-/** Изменить статус записи в общем списке (отмена, перенос). */
-export async function patchAppointment(id, patch) {
-  if (!id) return;
-  await req(api('/api/appointments/') + encodeURIComponent(id), {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(patch),
-  });
-}
-
-/** Найти или завести карточку клиента: записи из чата приходят без clientId —
-    в боте своих карточек клиентов нет. Сначала ищем по telegram-id: имя
-    совпадает у разных людей, id — нет. */
-function clientFor(companyId, name, tgId, username) {
-  const list = S.data.clients.filter(c => c.companyId === companyId);
-  const found = list.find(c => (tgId && String(c.tgId) === String(tgId)))
-    || list.find(c => (username && String(c.tg).replace('@', '') === String(username).replace('@', '')))
-    || list.find(c => c.name === name);
-  if (found) {
-    if (tgId && !found.tgId) found.tgId = String(tgId);
-    return found.id;
   }
-  const initials = String(name || 'Клиент').split(' ').filter(Boolean)
-    .slice(0, 2).map(w => w[0]).join('').toUpperCase();
-  const rec = {
-    id: 'cl_bot_' + Math.random().toString(36).slice(2, 8),
-    companyId, name: name || 'Клиент', phone: '',
-    tg: username ? String(username) : '', tgId: tgId ? String(tgId) : '',
-    initials, color: '#06AED4', createdAt: new Date().toISOString(),
-    note: '', ai: null, tags: [],
-  };
-  S.data.clients.push(rec);
-  return rec.id;
+}
+
+/** Принять состояние с сервера как своё. */
+export function adopt(sessionPayload) {
+  st.mode = 'server';
+  st.session = { ...sessionPayload };
+  delete st.session.data;
+  st.seq = sessionPayload.seq || 0;
+  const data = sessionPayload.data || {};
+  const next = {};
+  DATA_COLS.forEach(k => { next[k] = Array.isArray(data[k]) ? data[k] : []; });
+  S.data = next;
+  takeSnapshot();
+  setServerMode(true);
+  startPolling();
+}
+
+/* ---------------- снимок и разница ---------------- */
+function takeSnapshot() {
+  const snap = {};
+  DATA_COLS.forEach(col => {
+    const m = new Map();
+    (S.data[col] || []).forEach(e => { if (e && e.id) m.set(e.id, JSON.stringify(e)); });
+    snap[col] = m;
+  });
+  st.snapshot = snap;
+}
+
+function diff() {
+  const upsert = {}, del = {};
+  let n = 0;
+  DATA_COLS.forEach(col => {
+    const prev = (st.snapshot && st.snapshot[col]) || new Map();
+    const seen = new Set();
+    (S.data[col] || []).forEach(e => {
+      if (!e || !e.id) return;
+      seen.add(e.id);
+      const js = JSON.stringify(e);
+      if (prev.get(e.id) !== js) { (upsert[col] = upsert[col] || []).push(e); n++; }
+    });
+    prev.forEach((_, id) => { if (!seen.has(id)) { (del[col] = del[col] || []).push(id); n++; } });
+  });
+  return { upsert, delete: del, n };
+}
+
+/* ---------------- отправка ---------------- */
+onSave(() => { if (st.mode === 'server') schedulePush(); });
+
+export function schedulePush(delay = 400) {
+  st.dirty = true;
+  clearTimeout(st.pushTimer);
+  st.pushTimer = setTimeout(() => { pushNow().catch(() => { }); }, delay);
 }
 
 /**
- * Забрать записи из общего списка. Возвращает число новых.
- * Свои же записи узнаём по id и пропускаем — иначе после каждой отправки
- * они возвращались бы обратно дубликатами.
+ * Отправить накопившиеся изменения сейчас. Возвращает список отказов —
+ * вызывающий решает, что показать (запись клиента ждёт ответа сервера
+ * до экрана «Готово», а не после).
  */
-export async function pullAppointments() {
-  const data = await req(api('/api/appointments'));
-  if (!data || !Array.isArray(data.appointments)) return 0;
-  const known = new Set(S.data.appointments.map(a => a.id));
-  const ids = new Set(allCompanies().map(c => c.id));
-  const emps = new Set(S.data.employees.map(e => e.id));
-  const svcIds = new Set(S.data.services.map(x => x.id));
-  let added = 0;
-  data.appointments.forEach(a => {
-    if (!a || !a.id || !ids.has(a.companyId)) return;
-    const mine = S.data.appointments.find(x => x.id === a.id);
-    if (mine) {
-      // статус мог поменяться в чате — забираем его, остальное не трогаем
-      if (a.status && a.status !== mine.status) { mine.status = a.status; added++; }
+export async function pushNow() {
+  if (st.mode !== 'server') return [];
+  if (st.pushing) {
+    // идёт отправка — дождёмся и отправим остаток следующим заходом
+    await new Promise(r => setTimeout(r, 250));
+    return pushNow();
+  }
+  clearTimeout(st.pushTimer);
+  const d = diff();
+  const pending = readPending();
+  if (!d.n && !pending) { st.dirty = false; return []; }
+  const payload = pending ? mergePending(pending, d) : { upsert: d.upsert, delete: d.delete };
+  payload.since = st.seq;
+  st.pushing = true;
+  try {
+    const r = await api.push(payload);
+    clearPending();
+    st.failures = 0;
+    st.lastError = '';
+    const rejected = r.rejected || [];
+    rejected.forEach(x => revert(x));
+    applyChanges(r.changes || []);
+    st.seq = r.seq || st.seq;
+    takeSnapshot();
+    st.dirty = diff().n > 0;
+    if (rejected.length) warn(rejected);
+    if (rejected.length || (r.changes || []).length) emit();
+    return rejected;
+  } catch (e) {
+    st.failures++;
+    st.lastError = e && e.message ? e.message : String(e);
+    // Нет сети — изменения не теряем: лежат в localStorage до следующей попытки,
+    // переживают и перезагрузку приложения.
+    if (!(e instanceof ApiError) || e.status >= 500 || e.status === 429) {
+      savePending(payload);
+      clearTimeout(st.pushTimer);
+      st.pushTimer = setTimeout(() => { pushNow().catch(() => { }); }, Math.min(60000, 3000 * st.failures));
+    } else if (e.status === 401) {
+      // сессия протухла (initData живёт сутки) — просим открыть заново
+      toastOnce('auth', 'Сессия истекла — откройте приложение заново из Telegram');
+    } else {
+      toastOnce('err', e.message);
+    }
+    return [];
+  } finally { st.pushing = false; }
+}
+
+/** Отказ сервера: вернуть сущность к серверному виду или убрать совсем. */
+function revert({ col, id, server }) {
+  const list = S.data[col];
+  if (!Array.isArray(list)) return;
+  const i = list.findIndex(e => e && e.id === id);
+  if (server) { if (i >= 0) list[i] = server; else list.push(server); }
+  else if (i >= 0) list.splice(i, 1);
+}
+
+function warn(rejected) {
+  const reasons = Array.from(new Set(rejected.map(x => x.reason).filter(Boolean)));
+  import('./ui.js').then(u => {
+    u.toast('Не сохранено: ' + reasons.slice(0, 2).join('; '), 'dan');
+  }).catch(() => { });
+}
+
+function toastOnce(key, msg) {
+  const now = Date.now();
+  if (st.warned[key] && now - st.warned[key] < 60000) return;
+  st.warned[key] = now;
+  import('./ui.js').then(u => u.toast(msg, 'dan')).catch(() => { });
+}
+
+/* ---------------- приём чужих изменений ---------------- */
+function applyChanges(changes) {
+  if (!changes || !changes.length) return 0;
+  const cur = diff();           // то, что ещё не ушло, сервер перебивать не должен
+  const dirty = new Set();
+  Object.keys(cur.upsert).forEach(col => cur.upsert[col].forEach(e => dirty.add(col + ':' + e.id)));
+  let n = 0;
+  changes.forEach(ch => {
+    const col = ch.col;
+    if (!DATA_COLS.includes(col)) return;
+    if (dirty.has(col + ':' + ch.id)) return;
+    const list = S.data[col] = S.data[col] || [];
+    const i = list.findIndex(e => e && e.id === ch.id);
+    if (ch.deleted) {
+      if (i >= 0) { list.splice(i, 1); n++; }
+      if (st.snapshot) st.snapshot[col].delete(ch.id);
       return;
     }
-    if (known.has(a.id)) return;
-    // Запись с сервера может ссылаться на мастера или услугу, которых в этой
-    // базе нет: версия данных поменялась, демо сбросили, справочник ушёл
-    // вперёд. Такую пропускаем — иначе экраны падают на emp(...).name.
-    if (!emps.has(a.employeeId)) return;
-    if ((a.serviceIds || []).some(x => !svcIds.has(x))) return;
-    S.data.appointments.push({
-      id: a.id, companyId: a.companyId,
-      clientId: a.clientId || clientFor(a.companyId, a.clientName, a.clientTg, a.clientUsername),
-      employeeId: a.employeeId, serviceIds: a.serviceIds || [],
-      start: a.start, duration: a.duration || 60, price: a.price || 0,
-      status: a.status || 'planned', note: a.note || '',
-      source: a.source || 'bot', createdAt: a.createdAt || a.start,
+    const js = JSON.stringify(ch.body);
+    if (i >= 0) { if (JSON.stringify(list[i]) !== js) { list[i] = ch.body; n++; } }
+    else { list.push(ch.body); n++; }
+    if (st.snapshot) st.snapshot[col].set(ch.id, js);
+  });
+  return n;
+}
+
+export async function pull() {
+  if (st.mode !== 'server' || st.pushing) return 0;
+  try {
+    const r = await api.changes(st.seq);
+    const n = applyChanges(r.changes || []);
+    st.seq = r.seq || st.seq;
+    st.failures = 0;
+    if (n) emit();
+    return n;
+  } catch (e) {
+    return 0;
+  }
+}
+
+let polling = false;
+function startPolling() {
+  if (polling) return;
+  polling = true;
+  const tick = () => { if (document.visibilityState === 'visible') pull(); };
+  st.pullTimer = setInterval(tick, PULL_EVERY);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') { pushNow().then(() => pull()).catch(() => { }); }
+  });
+  window.addEventListener('online', () => { pushNow().then(() => pull()).catch(() => { }); });
+  window.addEventListener('pagehide', () => { if (st.dirty) savePending(diff()); });
+}
+
+/* ---------------- неотправленное между перезапусками ---------------- */
+function readPending() {
+  try { return JSON.parse(localStorage.getItem(PENDING_KEY) || 'null'); } catch (e) { return null; }
+}
+function savePending(p) {
+  try {
+    if (!p || (!Object.keys(p.upsert || {}).length && !Object.keys(p.delete || {}).length)) return;
+    localStorage.setItem(PENDING_KEY, JSON.stringify({ upsert: p.upsert || {}, delete: p.delete || {} }));
+  } catch (e) { }
+}
+function clearPending() { try { localStorage.removeItem(PENDING_KEY); } catch (e) { } }
+function mergePending(p, d) {
+  const upsert = {}, del = {};
+  [p, d].forEach(x => {
+    Object.keys(x.upsert || {}).forEach(col => {
+      upsert[col] = upsert[col] || [];
+      x.upsert[col].forEach(e => {
+        const i = upsert[col].findIndex(y => y.id === e.id);
+        if (i >= 0) upsert[col][i] = e; else upsert[col].push(e);
+      });
     });
-    added++;
+    Object.keys(x.delete || {}).forEach(col => {
+      del[col] = Array.from(new Set([...(del[col] || []), ...x.delete[col]]));
+    });
   });
-  if (added) emit();
-  return added;
+  return { upsert, delete: del };
 }
 
-/* ---------------- приглашения в команду ----------------
-   Ссылку делают на одном устройстве, а открывают на другом. Без общего
-   склада приглашение вообще не имело бы смысла: у того, кто переходит,
-   в браузере пусто.
--------------------------------------------------------- */
+/** Есть ли что-то, что не дошло до сервера с прошлого запуска. */
+export const hasPending = () => !!readPending();
 
-export async function pushInvite(inv) {
-  if (!inv) return;
-  await req(api('/api/invites'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(inv),
-  });
-}
-
-export async function patchInvite(id, patch) {
-  if (!id) return;
-  await req(api('/api/invites/') + encodeURIComponent(id), {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(patch),
-  });
-}
-
-/** Достать одно приглашение с сервера — по нему человек и входит. */
+/* ---------------- приглашения (с любого устройства) ---------------- */
 export async function fetchInvite(id) {
-  const data = await req(api('/api/invites'));
-  if (!data || !Array.isArray(data.invites)) return null;
-  return data.invites.find(i => i.id === id) || null;
+  if (st.mode !== 'server') return null;
+  try {
+    const r = await api.invite(id);
+    if (!r || !r.ok) return { state: (r && r.state) || 'нет' };
+    // компании приглашения у человека в данных нет — подкладываем публичную
+    // карточку, чтобы экран мог показать название и логотип
+    if (r.company && r.company.id && !allCompanies().some(c => c.id === r.company.id)) {
+      S.data.companies.push(r.company);
+      if (st.snapshot) st.snapshot.companies.set(r.company.id, JSON.stringify(r.company));
+    }
+    return { state: r.state, invite: r.invite, company: r.company };
+  } catch (e) { return { state: 'нет' }; }
 }
 
-/** Забрать приглашения компании к себе: владелец видит их состояние. */
-export async function pullInvites() {
-  const data = await req(api('/api/invites'));
-  if (!data || !Array.isArray(data.invites)) return 0;
-  S.data.invites = S.data.invites || [];
-  const mine = new Map(S.data.invites.map(i => [i.id, i]));
-  let n = 0;
-  data.invites.forEach(i => {
-    const has = mine.get(i.id);
-    if (!has) { S.data.invites.push(i); n++; return; }
-    // ссылку могли погасить на другом устройстве
-    if (i.usedAt && !has.usedAt) { Object.assign(has, i); n++; }
-  });
-  if (n) emit();
-  return n;
+export async function acceptInviteOnServer(id, person) {
+  const r = await api.acceptInvite(id, person);
+  if (r && r.ok && r.session) adopt(r.session);
+  return r;
 }
 
-/** Разовая синхронизация при запуске: сначала отдать, потом забрать. */
-export async function syncOnBoot() {
-  pushCatalog(0);
-  const n = await pullAppointments();
-  await pullInvites();
-  return n;
-}
-
-export const syncAlive = () => alive;
+/* ---------------- обратная совместимость ----------------
+   Старые вызовы из экранов: теперь всё уходит через разницу состояния,
+   отдельно отправлять ничего не нужно. Оставлены пустыми, чтобы ничего
+   не упало, пока экраны переписываются. */
+export async function syncOnBoot() { return 0; }
+export function pushCatalog() { }
+export async function pushAppointment() { }
+export async function patchAppointment() { }
+export async function pushInvite() { }
+export async function patchInvite() { }
+export const syncAlive = () => st.mode === 'server';

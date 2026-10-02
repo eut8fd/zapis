@@ -8,8 +8,9 @@
 
 [Unit]
 Description=Zapis — Telegram bot
-After=network-online.target
+After=network-online.target zapis-web.service
 Wants=network-online.target
+Requires=zapis-web.service
 
 [Service]
 Type=simple
@@ -19,6 +20,7 @@ EnvironmentFile=/opt/zapis/.env
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONIOENCODING=utf-8
 Environment=DATA_DIR=/var/lib/zapis
+Environment=SERVER_URL=http://127.0.0.1:8080
 ExecStart=/usr/bin/python3 -u /opt/zapis/bot/bot.py
 Restart=always
 RestartSec=5

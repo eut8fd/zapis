@@ -19,6 +19,8 @@ bot/users.json
 bot/bookings.json
 bot/*.local.json
 .run/
+.run-tests/
+**/.run-tests/
 *.db
 *.sqlite
 *.sqlite3

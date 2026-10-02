@@ -1,19 +1,23 @@
 """
 Телеграм-бот Zapis — вход в Mini App и меню, разное для клиента и для бизнеса.
 
-Логика меню:
+Что умеет:
   * человек пришёл по ссылке салона (?start=c1) — видит меню этого салона:
-    записаться, мои записи, услуги и цены, адрес и контакты. Ничего лишнего;
-  * человек выбрал «У меня бизнес» — видит меню своей компании:
-    кабинет, календарь, клиенты, ссылка для клиентов, подписка;
-  * новый человек без ссылки — короткая витрина с выбором «клиент / бизнес».
+    записаться (в приложении или прямо в чате), свои записи, услуги, контакты;
+  * владелец или мастер — меню своей компании: кабинет, календарь, ссылка
+    для клиентов, очередь уведомлений;
+  * новый человек без ссылки — короткое приветствие: открыть ссылку своего
+    салона или создать свой бизнес.
 
-Роль запоминается в bot/users.json, поэтому следующий /start сразу открывает
-нужное меню. Кнопка рядом с полем ввода тоже подстраивается под роль.
+Источник данных — сервер (`server/serve.py`): справочник салонов, свободные
+окна, записи и их отмена. Своей базы у бота больше нет: запись из чата
+создаёт сервер той же проверкой занятости, что и приложение, и он же
+отправляет напоминания. Бот хранит только, кем человек представился
+в последний раз (`users.json`), чтобы /start сразу открывал нужное меню.
 
 Запуск:
   set BOT_TOKEN=...   (или файл .env рядом с проектом)
-  set WEBAPP_URL=https://....trycloudflare.com
+  set WEBAPP_URL=https://…
   python bot/bot.py
 """
 import json
@@ -27,8 +31,7 @@ import urllib.request
 from datetime import date, datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import booking as bk  # noqa: E402
-import shared as sh  # noqa: E402
+import api  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..'))
@@ -50,21 +53,25 @@ def load_env():
             if not line or line.startswith('#') or '=' not in line:
                 continue
             k, v = line.split('=', 1)
-            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+            v = v.split(' #', 1)[0].strip().strip('"').strip("'")
+            os.environ.setdefault(k.strip(), v)
 
 
 load_env()
 TOKEN = os.environ.get('BOT_TOKEN', '').strip()
 URL = os.environ.get('WEBAPP_URL', '').strip().rstrip('/')
-API = 'https://api.telegram.org/bot%s/' % TOKEN
+# Адрес Bot API переопределяется только в тестах — там вместо Telegram
+# отвечает локальная заглушка.
+API = '%s/bot%s/' % ((os.environ.get('TELEGRAM_API_BASE') or 'https://api.telegram.org').rstrip('/'), TOKEN)
 
 BRAND = os.environ.get('BRAND_NAME', 'Zapis').strip() or 'Zapis'
 BOT_NAME = os.environ.get('BOT_NAME', '').strip()
 SUPPORT = os.environ.get('SUPPORT_USERNAME', '').strip().lstrip('@')
-
 ADMIN_IDS = {int(x) for x in os.environ.get('ADMIN_TG_IDS', '').replace(';', ',').split(',')
              if x.strip().isdigit()}
 ADMIN_CODE = os.environ.get('ADMIN_CODE', '').strip()
+DATA_DIR = os.environ.get('DATA_DIR') or HERE
+os.makedirs(DATA_DIR, exist_ok=True)
 
 if not TOKEN:
     print('!! BOT_TOKEN не задан (env или .env)')
@@ -72,43 +79,24 @@ if not TOKEN:
 
 HTTPS = URL.startswith('https://')
 BOT_USERNAME = ''
+# Демо-салоны из сида (c1, c2…): их можно выбрать списком. Настоящие
+# компании по списку не выдаём — к ним приходят по ссылке.
+DEMO_ID = re.compile(r'^c\d+$')
+COMPANY_ID = re.compile(r'^(c\d+|bg\d+|co_?[a-z0-9]+)$')
+INVITE_ID = re.compile(r'^inv[a-z0-9]{8,}$')
+SECTIONS = {'book', 'my', 'profile', 'cal', 'clients', 'sub', 'ai', 'more', 'team'}
+
+WD = ['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс']
+MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+          'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря']
 
 
 def is_admin(user_id):
     return int(user_id) in ADMIN_IDS
 
 
-# --------------------------------------------------------------------- данные
-with open(os.path.join(HERE, 'companies.json'), 'r', encoding='utf-8-sig') as f:
-    FALLBACK_COMPANIES = json.load(f)
-COMPANIES = dict(FALLBACK_COMPANIES)
-_catalog_stamp = None
-
-
-def refresh_companies(force=False):
-    """
-    Справочник берём у Mini App, если оно его выложило: там все салоны
-    каталога, а в companies.json их три. Файла нет или он пуст — работаем
-    по старому файлу, как раньше.
-    """
-    global COMPANIES, _catalog_stamp
-    try:
-        stamp = sh.read().get('updatedAt')
-        if not force and stamp == _catalog_stamp:
-            return False
-        fresh = sh.companies()
-        _catalog_stamp = stamp
-        if fresh:
-            changed = set(fresh) != set(COMPANIES)
-            COMPANIES = fresh
-            return changed
-        if COMPANIES is not FALLBACK_COMPANIES:
-            COMPANIES = dict(FALLBACK_COMPANIES)
-    except Exception as e:  # noqa: BLE001
-        print('   справочник не прочитался:', e)
-    return False
-
-USERS_PATH = os.path.join(bk.DATA_DIR, 'users.json')
+# --------------------------------------------------------------------- локальная память
+USERS_PATH = os.path.join(DATA_DIR, 'users.json')
 try:
     with open(USERS_PATH, 'r', encoding='utf-8') as f:
         USERS = json.load(f)
@@ -135,20 +123,35 @@ def set_state(uid, **kw):
     return s
 
 
-def company_of(uid, default='c1'):
-    return COMPANIES.get(state(uid).get('company') or default) or COMPANIES[default]
+# --------------------------------------------------------------------- справочник
+def companies():
+    """Готовые салоны с сервера; при недоступности — пустой словарь, не падение."""
+    try:
+        return api.companies()
+    except api.ServerError as e:
+        print('   справочник недоступен:', e.message)
+        return {}
 
 
-def company_id_of(uid, default='c1'):
+def company(cid):
+    cs = companies()
+    if cid in cs:
+        return cs[cid]
+    try:
+        return api.company(cid)
+    except api.ServerError:
+        return None
+
+
+def company_id_of(uid):
     cid = state(uid).get('company')
-    return cid if cid in COMPANIES else default
+    return cid if cid and company(cid) else None
 
 
-# --------------------------------------------------------------------- API
-def api(method, **params):
+# --------------------------------------------------------------------- Telegram API
+def tg(method, **params):
     data = json.dumps(params).encode('utf-8')
-    req = urllib.request.Request(API + method, data=data,
-                                 headers={'Content-Type': 'application/json'})
+    req = urllib.request.Request(API + method, data=data, headers={'Content-Type': 'application/json'})
     try:
         with urllib.request.urlopen(req, timeout=60) as r:
             return json.loads(r.read().decode('utf-8'))
@@ -162,21 +165,15 @@ def api(method, **params):
         return {'ok': False, 'error': str(e)}
 
 
-def api_retry(method, tries=3, **params):
-    """
-    То же, но с повтором. Настроечные вызовы (имя, команды, кнопка меню)
-    делаются один раз при старте: если в этот момент сеть моргнула, кнопка
-    рядом с полем ввода остаётся стандартной телеграмовской «Menu» на
-    английском, и починить это до следующего запуска нечем.
-    """
+def tg_retry(method, tries=3, **params):
+    """Настроечные вызовы при старте — с повтором: сеть моргнула, и кнопка
+    меню осталась бы стандартной «Menu» до следующего запуска."""
     last = None
     for attempt in range(tries):
-        last = api(method, **params)
+        last = tg(method, **params)
         if last.get('ok'):
             return last
-        # HTTP-ошибка означает неверные параметры — повтор не поможет.
-        err = str(last.get('error', ''))
-        if err.startswith('{'):
+        if str(last.get('error', '')).startswith('{'):
             return last
         if attempt + 1 < tries:
             time.sleep(1.5 * (attempt + 1))
@@ -208,65 +205,155 @@ def cb(text, data):
 
 
 def esc(s):
-    return str(s).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    return str(s if s is not None else '').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
 
-# --------------------------------------------------------------------- меню клиента
-def client_text(cid):
-    c = COMPANIES[cid]
+def money(n, cur='₸'):
+    try:
+        n = int(round(float(n)))
+    except (TypeError, ValueError):
+        return ''
+    return '{:,}'.format(n).replace(',', ' ') + ' ' + (cur or '₸')
+
+
+def dur_text(m):
+    m = int(m or 0)
+    if m < 60:
+        return '%d мин' % m
+    h, rest = divmod(m, 60)
+    return '%d ч %d мин' % (h, rest) if rest else '%d ч' % h
+
+
+def hm(minutes):
+    return '%02d:%02d' % (minutes // 60, minutes % 60)
+
+
+def day_label(d, today):
+    delta = (d - today).days
+    if delta == 0:
+        return 'сегодня'
+    if delta == 1:
+        return 'завтра'
+    return '%d %s' % (d.day, MONTHS[d.month - 1])
+
+
+def day_short(d, today):
+    delta = (d - today).days
+    if delta == 0:
+        return 'Сегодня'
+    if delta == 1:
+        return 'Завтра'
+    return '%s %d' % (WD[d.weekday()], d.day)
+
+
+def hours_text(hours):
+    """«Пн–Пт 09:00–20:00 · Сб 10:00–18:00» из недельного графика."""
+    if not isinstance(hours, dict):
+        return ''
+    names = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
+    order = [1, 2, 3, 4, 5, 6, 0]
+    parts, run, prev = [], [], None
+
+    def flush():
+        if not run:
+            return
+        a, b = run[0], run[-1]
+        days = names[order.index(a)] if a == b else '%s–%s' % (names[order.index(a)], names[order.index(b)])
+        d = hours.get(str(a)) or hours.get(a) or {}
+        parts.append('%s %s–%s' % (days, d.get('from', ''), d.get('to', '')))
+
+    for d in order:
+        v = hours.get(str(d)) or hours.get(d) or {}
+        key = (v.get('on'), v.get('from'), v.get('to'))
+        if not v.get('on'):
+            flush(); run = []; prev = None
+            continue
+        if prev is not None and key != prev:
+            flush(); run = []
+        run.append(d); prev = key
+    flush()
+    return ' · '.join(parts)
+
+
+def send(chat_id, text, kb=None):
+    p = {'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML', 'disable_web_page_preview': True}
+    if kb:
+        p['reply_markup'] = kb
+    return tg('sendMessage', **p)
+
+
+def edit(chat_id, message_id, text, kb=None):
+    p = {'chat_id': chat_id, 'message_id': message_id, 'text': text,
+         'parse_mode': 'HTML', 'disable_web_page_preview': True}
+    if kb:
+        p['reply_markup'] = kb
+    r = tg('editMessageText', **p)
+    if not r.get('ok') and 'not modified' not in str(r.get('error', '')):
+        # сообщение могли удалить — отвечаем новым
+        return send(chat_id, text, kb)
+    return r
+
+
+# --------------------------------------------------------------------- тексты
+def offline_text():
+    return ('<b>Сервер временно недоступен</b>\n\n'
+            'Попробуйте через минуту. Если не поможет — откройте приложение: '
+            'оно покажет, что сможет.')
+
+
+def offline_kb():
+    return {'inline_keyboard': [[open_btn('Открыть приложение')], [cb('Обновить', 'menu')]]}
+
+
+def client_text(c):
     return (
         '<b>{name}</b>\n'
         '{cat} · {city}\n'
         '{addr}\n\n'
-        '{about}\n\n'
+        '{about}'
         'Свободное время видно сразу — выберите услугу и запишитесь за полминуты.'
-    ).format(name=esc(c['name']), cat=esc(c['cat']),
-             city=esc(c['city']), addr=esc(c['addr']), about=esc(c['about']))
+    ).format(name=esc(c['name']), cat=esc(c.get('cat')), city=esc(c.get('city')),
+             addr=esc(c.get('addr')), about=(esc(c['about']) + '\n\n') if c.get('about') else '')
 
 
-def client_kb(cid, uid=None):
-    mine = bk.user_bookings(uid) if uid is not None else []
+def client_kb(c, uid):
+    cid = c['id']
+    mine = my_bookings(uid)
     rows = [
-        # основной путь — приложение: там полный календарь на месяцы вперёд
         [open_btn('📅 Записаться', cid + '_book')],
-        # быстрый путь для тех, кто не хочет открывать приложение
         [cb('⚡ Быстрая запись в чате', 'bk::::')],
         [open_btn('Мои записи' + (' · %d' % len(mine) if mine else ''), cid + '_my')],
+        [cb('Услуги и цены', 'services'), cb('Контакты', 'contacts')],
+        [cb('Поддержка', 'support'), cb('‹ В меню', 'menu')],
     ]
-    rows.append([cb('Услуги и цены', 'services'), cb('Контакты', 'contacts')])
-    rows.append([cb('Поддержка', 'support')])
-    rows.append([cb('‹ Выбрать другой салон', 'landing')])
     return {'inline_keyboard': rows}
 
 
-def services_text(cid):
-    c = COMPANIES[cid]
-    rows = '\n'.join('• %s — <b>%s</b> · %s' % (esc(s[0]), s[1], s[2]) for s in c['services'])
-    tail = ('\n\nЕщё %d услуг — в приложении.' % c['more']) if c.get('more') else ''
+def services_text(c):
+    rows = '\n'.join('• %s — <b>%s</b> · %s' % (esc(s['name']), money(s['price'], c.get('currency')),
+                                                 dur_text(s['duration'])) for s in c['services'][:25])
+    tail = '\n\nЕщё %d — в приложении.' % (len(c['services']) - 25) if len(c['services']) > 25 else ''
     return '<b>Услуги и цены</b>\n<i>%s</i>\n\n%s%s' % (esc(c['name']), rows, tail)
 
 
-def contacts_text(cid):
-    c = COMPANIES[cid]
+def contacts_text(c):
     return (
         '<b>Как нас найти</b>\n<i>{name}</i>\n\n'
         '📍 {city}, {addr}\n'
         '📞 <code>{phone}</code>\n'
         '🕘 {hours}'
-    ).format(name=esc(c['name']), city=esc(c['city']), addr=esc(c['addr']),
-             phone=c['phone'], hours=esc(c['hours']))
+    ).format(name=esc(c['name']), city=esc(c.get('city')), addr=esc(c.get('addr')),
+             phone=esc(c.get('phone')), hours=esc(hours_text(c.get('hours'))))
 
 
 def client_back_kb(cid):
-    return {'inline_keyboard': [
-        [open_btn('📅 Записаться', cid + '_book')],
-        [cb('‹ Назад', 'menu')],
-    ]}
+    return {'inline_keyboard': [[open_btn('📅 Записаться', cid + '_book')], [cb('‹ Назад', 'salon')]]}
 
 
 # --------------------------------------------------------------------- запись в чате
 def bk_state(data):
-    """'bk:<svc>:<emp>:<day>:<time>' -> кортеж, пустые поля = ещё не выбрано."""
+    """'bk:<svc>:<emp>:<day>:<time>' → кортеж; пустые поля = ещё не выбрано.
+    Индексы — в списках справочника: callback_data ограничен 64 байтами."""
     parts = (data.split(':') + ['', '', '', ''])[1:5]
     svc = int(parts[0]) if parts[0] != '' else None
     emp = parts[1] if parts[1] != '' else None
@@ -283,81 +370,90 @@ def bk_day(idx):
     return date.today() + timedelta(days=idx)
 
 
-def bk_screen(cid, uid, data):
-    """Возвращает (текст, клавиатура) для текущего шага записи."""
-    c = COMPANIES[cid]
+def staff_for(c, svc):
+    ids = set(svc.get('employeeIds') or [])
+    out = [i for i, e in enumerate(c['staff']) if e['id'] in ids]
+    return out or list(range(len(c['staff'])))
+
+
+def emp_id(c, emp):
+    return None if emp in (None, 'x') else c['staff'][int(emp)]['id']
+
+
+def bk_screen(c, uid, data):
+    """(текст, клавиатура) для текущего шага записи в чате."""
+    cid = c['id']
     svc, emp, day, tm = bk_state(data)
     today = date.today()
 
-    # --- шаг 1: услуга
     if svc is None:
-        rows = [[cb('%s · %s' % (s[0], s[1]), bk_data(i))] for i, s in enumerate(c['services'])]
-        rows.append([cb('‹ Назад', 'menu')])
-        return ('<b>Выберите услугу</b>\n<i>%s</i>' % esc(c['name']),
-                {'inline_keyboard': rows})
+        if not c['services']:
+            return ('<b>У салона пока нет услуг</b>\nЗагляните позже.', {'inline_keyboard': [[cb('‹ Назад', 'salon')]]})
+        rows = [[cb('%s · %s' % (s['name'], money(s['price'], c.get('currency'))), bk_data(i))]
+                for i, s in enumerate(c['services'][:40])]
+        rows.append([cb('‹ Назад', 'salon')])
+        return ('<b>Выберите услугу</b>\n<i>%s</i>' % esc(c['name']), {'inline_keyboard': rows})
 
+    if svc >= len(c['services']):
+        return ('<b>Услуга изменилась</b>\nВыберите заново.', {'inline_keyboard': [[cb('Выбрать услугу', bk_data())]]})
     s = c['services'][svc]
 
-    # --- шаг 2: мастер
     if emp is None:
-        rows = [[cb('Любой мастер — самое раннее время', bk_data(svc, 'x'))]]
-        for i in bk.masters_for(c, svc):
+        cands = staff_for(c, s)
+        rows = []
+        if len(cands) > 1:
+            rows.append([cb('Любой мастер — самое раннее время', bk_data(svc, 'x'))])
+        for i in cands:
             st = c['staff'][i]
-            rows.append([cb('%s · %s' % (st['name'], bk.next_free_text(c, cid, i, s[3])),
+            rows.append([cb('%s · %s' % (st['name'].split(' ')[0], next_free_text(cid, s['id'], st['id'])),
                             bk_data(svc, i))])
         rows.append([cb('‹ Назад', bk_data())])
-        return ('<b>Выберите мастера</b>\n%s · %s · %s' % (esc(s[0]), s[1], s[2]),
-                {'inline_keyboard': rows})
+        return ('<b>Выберите мастера</b>\n%s · %s · %s' % (esc(s['name']), money(s['price'], c.get('currency')),
+                                                          dur_text(s['duration'])), {'inline_keyboard': rows})
 
-    who = 'любой мастер' if emp == 'x' else c['staff'][int(emp)]['name']
+    who = 'любой мастер' if emp == 'x' else c['staff'][int(emp)]['name'].split(' ')[0]
 
-    # --- шаг 3: день
     if day is None:
-        days = bk.days_with_slots(c, cid, svc, emp if emp == 'x' else int(emp))
+        try:
+            days = api.days(cid, s['id'], emp_id(c, emp), n=7)
+        except api.ServerError:
+            return offline_text(), offline_kb()
         rows, line = [], []
-        for d, n in days:
-            idx = (d - today).days
-            label = bk.day_short(d, today) + (' · %d' % n if n else ' · нет')
-            line.append(cb(label, bk_data(svc, emp, idx) if n else 'noop'))
+        for d in days:
+            dd = date.fromisoformat(d['date'])
+            idx = (dd - today).days
+            label = day_short(dd, today) + (' · %d' % d['free'] if d['free'] else ' · нет')
+            line.append(cb(label, bk_data(svc, emp, idx) if d['free'] else 'noop'))
             if len(line) == 2:
-                rows.append(line)
-                line = []
+                rows.append(line); line = []
         if line:
             rows.append(line)
         rows.append([open_btn('📅 Полный календарь', cid + '_book')])
         rows.append([cb('‹ Назад', bk_data(svc))])
-        return ('<b>Выберите день</b>\n%s · %s\n\n'
-                '<i>Здесь ближайшие дни. Нужна дата дальше — откройте полный календарь.</i>'
-                % (esc(s[0]), esc(who)), {'inline_keyboard': rows})
+        return ('<b>Выберите день</b>\n%s · %s\n\n<i>Здесь ближайшая неделя. Нужна дата дальше — '
+                'откройте полный календарь.</i>' % (esc(s['name']), esc(who)), {'inline_keyboard': rows})
 
     d = bk_day(day)
-
-    # --- шаг 4: время
     if tm is None:
-        slots = bk.slots_for_choice(c, cid, svc, emp if emp == 'x' else int(emp), d)
+        try:
+            slots = api.slots(cid, s['id'], d.isoformat(), emp_id(c, emp))
+        except api.ServerError:
+            return offline_text(), offline_kb()
         if not slots:
             return ('<b>На этот день мест нет</b>\nВыберите другой день.',
                     {'inline_keyboard': [[cb('‹ К выбору дня', bk_data(svc, emp))]]})
         rows, line = [], []
-        for m, _ in slots:
-            line.append(cb(bk.hm(m), bk_data(svc, emp, day, m)))
+        for sl in slots:
+            line.append(cb(sl['t'], bk_data(svc, emp, day, sl['min'])))
             if len(line) == 3:
-                rows.append(line)
-                line = []
+                rows.append(line); line = []
         if line:
             rows.append(line)
         rows.append([open_btn('📅 Полный календарь', cid + '_book')])
         rows.append([cb('‹ Назад', bk_data(svc, emp))])
-        return ('<b>Выберите время</b>\n%s · %s · %s' % (
-            esc(s[0]), esc(who), bk.day_label(d, today)), {'inline_keyboard': rows})
+        return ('<b>Выберите время</b>\n%s · %s · %s' % (esc(s['name']), esc(who), day_label(d, today)),
+                {'inline_keyboard': rows})
 
-    # --- шаг 5: подтверждение
-    slots = dict(bk.slots_for_choice(c, cid, svc, emp if emp == 'x' else int(emp), d))
-    if tm not in slots:
-        return ('<b>Это время только что заняли</b>\nВыберите другое.',
-                {'inline_keyboard': [[cb('‹ К выбору времени', bk_data(svc, emp, day))]]})
-    real_emp = slots[tm]
-    st = c['staff'][real_emp]
     txt = (
         '<b>Проверьте запись</b>\n\n'
         'Услуга — <b>{svc}</b>\n'
@@ -366,183 +462,182 @@ def bk_screen(cid, uid, data):
         'Длительность — {dur}\n'
         'Стоимость — <b>{price}</b>\n\n'
         '{name}\n{addr}'
-    ).format(svc=esc(s[0]), emp=esc(st['name']), day=bk.day_label(d, today), time=bk.hm(tm),
-             dur=s[2], price=s[1], name=esc(c['name']), addr=esc(c['addr']))
+    ).format(svc=esc(s['name']), emp=esc(who), day=day_label(d, today), time=hm(tm),
+             dur=dur_text(s['duration']), price=money(s['price'], c.get('currency')),
+             name=esc(c['name']), addr=esc(c.get('addr')))
     return (txt, {'inline_keyboard': [
-        [cb('✅ Подтвердить запись', 'bkok:%d:%d:%d:%d' % (svc, real_emp, day, tm))],
+        [cb('✅ Подтвердить запись', 'bkok:%d:%s:%d:%d' % (svc, emp, day, tm))],
         [cb('‹ Изменить время', bk_data(svc, emp, day))],
     ]})
 
 
-def bk_confirm(cid, uid, user, data):
-    c = COMPANIES[cid]
+def next_free_text(cid, service_id, employee_id):
+    try:
+        days = api.days(cid, service_id, employee_id, n=14)
+    except api.ServerError:
+        return '—'
+    today = date.today()
+    for d in days:
+        if d['free']:
+            return '%s, %s' % (day_label(date.fromisoformat(d['date']), today), d['first'])
+    return 'нет мест'
+
+
+def bk_confirm(c, uid, user, data):
     _, svc, emp, day, tm = data.split(':')
-    svc, emp, day, tm = int(svc), int(emp), int(day), int(tm)
+    svc, day, tm = int(svc), int(day), int(tm)
+    if svc >= len(c['services']):
+        return ('<b>Услуга изменилась</b>\nВыберите заново.', {'inline_keyboard': [[cb('Выбрать услугу', bk_data())]]})
     s = c['services'][svc]
     d = bk_day(day)
-
-    free = dict(bk.slots_for_choice(c, cid, svc, emp, d))
-    if tm not in free:
-        return ('<b>Это время уже заняли</b>\nВыберите другое — свободные слоты обновились.',
-                {'inline_keyboard': [[cb('Выбрать другое время', bk_data(svc, emp, day))]]})
-
-    rec = bk.add_booking({
-        'id': '%s%d' % (hex(int(time.time() * 1000))[2:], uid % 997),
-        'uid': uid, 'cid': cid, 'svc': svc, 'emp': emp,
-        'date': d.isoformat(), 'min': tm, 'dur': s[3],
-        'name': (user or {}).get('first_name', ''), 'status': 'active',
-    })
-    st = c['staff'][emp]
-    share_booking(cid, c, rec, svc, emp, d, tm, user)
+    try:
+        a = api.book(c['id'], s['id'], d.isoformat(), tm, uid,
+                     name=(user or {}).get('first_name', '') or 'Гость',
+                     username=(user or {}).get('username', '') or '', employee_id=emp_id(c, emp))
+    except api.ServerError as e:
+        if e.status == 409:
+            return ('<b>%s</b>\nВыберите другое время — свободные окна обновились.' % esc(e.message.capitalize()),
+                    {'inline_keyboard': [[cb('Выбрать другое время', bk_data(svc, emp, day))]]})
+        return offline_text(), offline_kb()
     txt = (
         '✅ <b>Готово! Вы записаны</b>\n\n'
         '<b>{svc}</b>\n'
-        '{emp} · {day}, {time}\n'
+        '{emp} · {when}\n'
         '{price} · {dur}\n\n'
         '{name}\n{addr}\n\n'
         'Напомним за день и за 2 часа до визита.'
-    ).format(svc=esc(s[0]), emp=esc(st['name']), day=bk.day_label(d, date.today()),
-             time=bk.hm(tm), price=s[1], dur=s[2], name=esc(c['name']), addr=esc(c['addr']))
-    return (txt, {'inline_keyboard': [
-        [cb('Мои записи', 'mine')],
-        [cb('‹ В меню', 'menu')],
-    ]})
+    ).format(svc=esc(a['service']), emp=esc(a['employee']), when=esc(a['when']),
+             price=money(a['price'], a.get('currency')), dur=dur_text(a['duration']),
+             name=esc(a['companyName']), addr=esc(a['addr']))
+    return (txt, {'inline_keyboard': [[cb('Мои записи', 'mine')], [cb('‹ В меню', 'menu')]]})
 
 
-def share_booking(cid, c, rec, svc, emp, d, tm, user):
-    """
-    Положить запись из чата в общий список — с настоящими идентификаторами
-    услуги и мастера, а не номерами в списке. Без них приложение не смогло бы
-    показать эту запись у себя.
-    """
-    ids = c.get('serviceIds') or []
-    sids = c.get('staffIds') or []
-    if svc >= len(ids) or emp >= len(sids):
-        return                      # работаем по старому файлу, id взять неоткуда
-    start = datetime(d.year, d.month, d.day, tm // 60, tm % 60)
-    prices = c.get('servicePrices') or []
-    sh.put_appointment({
-        'id': rec['id'], 'companyId': cid, 'clientId': None,
-        'clientName': (user or {}).get('first_name', '') or 'Гость',
-        'clientTg': (user or {}).get('id', ''),
-        'employeeId': sids[emp], 'serviceIds': [ids[svc]],
-        'start': start.isoformat(), 'duration': rec.get('dur', 60),
-        'price': prices[svc] if svc < len(prices) else 0,
-        'status': 'planned', 'source': 'bot',
-        'createdAt': datetime.now().isoformat(),
-    })
+# --------------------------------------------------------------------- мои записи
+def my_bookings(uid, only_future=True):
+    try:
+        rows = api.my(uid)
+    except api.ServerError:
+        return []
+    out = []
+    for a in rows:
+        if a.get('status') != 'planned':
+            continue
+        try:
+            when = datetime.fromisoformat(a['localStart'])
+        except (TypeError, ValueError):
+            continue
+        if only_future and when < datetime.now() - timedelta(minutes=5):
+            continue
+        out.append((when, a))
+    out.sort(key=lambda x: x[0])
+    return out
 
 
-def mine_screen(cid, uid):
-    # Списка два: чат пишет в свою базу, приложение — в общий склад.
-    # Человеку это неважно, у него записи одни.
-    rows_all = all_bookings(uid)
+def mine_screen(uid, cid=None):
+    rows_all = my_bookings(uid)
+    book_param = (cid + '_book') if cid else ''
     if not rows_all:
+        kb = [[open_btn('🔴  Записаться онлайн', book_param)]] if cid else [[open_btn('Открыть приложение')]]
+        if cid:
+            kb.append([cb('⚡ Быстрая запись в чате', 'bk::::')])
+        kb.append([cb('‹ В меню', 'menu')])
         return ('<b>Мои записи</b>\n\nЗаписей пока нет. Свободное время видно сразу — '
                 'выберите услугу и время в приложении или запишитесь прямо в чате.',
-                {'inline_keyboard': [
-                    [open_btn('🔴  Записаться онлайн', cid + '_book')],
-                    [cb('⚡ Быстрая запись в чате', 'bk::::')],
-                    [cb('‹ В меню', 'menu')],
-                ]})
+                {'inline_keyboard': kb})
     lines, rows = [], []
-    for when, b, kind in rows_all:
-        label = '%s %s' % (bk.day_label(when.date(), date.today()),
-                           bk.hm(when.hour * 60 + when.minute))
-        if kind == 'bot':
-            c = COMPANIES.get(b['cid'], COMPANIES[cid])
-            s = c['services'][b['svc']]
-            st = c['staff'][b['emp']]
-            lines.append('<b>%s</b>\n%s · %s · %s' % (
-                esc(s[0]), esc(st['name']), label, s[1]))
-        else:
-            c = COMPANIES.get(b.get('companyId'))
-            where = '' if not c or b.get('companyId') == cid else ' · ' + esc(c['name'])
-            master = app_master_name(b)
-            lines.append('<b>%s</b>\n%s%s · %s%s' % (
-                esc(app_service_name(b)),
-                esc(master) + ' · ' if master else '', label,
-                sh.money(b.get('price')), where))
-        rows.append([cb('Отменить: ' + label, 'cxl:' + b['id'])])
-    rows.append([open_btn('📅  Записаться ещё', cid + '_book')])
-    rows.append([cb('⚡ Быстрая запись в чате', 'bk::::')])
+    for when, a in rows_all:
+        where = '' if a.get('companyId') == cid else ' · ' + esc(a.get('companyName', ''))
+        lines.append('<b>%s</b>\n%s · %s · %s%s' % (
+            esc(a['service']), esc(a['employee']), esc(a['when']), money(a['price'], a.get('currency')), where))
+        rows.append([cb('Отменить: ' + a['when'], 'cxl:' + a['id'])])
+    if cid:
+        rows.append([open_btn('📅  Записаться ещё', book_param)])
+        rows.append([cb('⚡ Быстрая запись в чате', 'bk::::')])
+    else:
+        rows.append([open_btn('Открыть приложение')])
     rows.append([cb('‹ В меню', 'menu')])
-    return ('<b>Мои записи</b>\n\n' + '\n\n'.join(lines) +
-            '\n\nНапомним за 24 часа и за 2 часа до визита.',
+    return ('<b>Мои записи</b>\n\n' + '\n\n'.join(lines) + '\n\nНапомним за 24 часа и за 2 часа до визита.',
             {'inline_keyboard': rows})
 
 
 # --------------------------------------------------------------------- меню бизнеса
-def biz_text(cid):
-    c = COMPANIES[cid]
+def biz_info(uid):
+    """Компании, где человек владелец или мастер — по данным сервера."""
+    try:
+        u = api.user(uid)
+    except api.ServerError:
+        return None
+    return u
+
+
+def biz_text(c, m):
     return (
         '<b>{name}</b>\n'
         '{cat} · {city} · тариф {plan}\n\n'
         'Ваш кабинет: расписание команды, клиенты, деньги и AI-помощник.\n'
         'Клиенты записываются сами — по ссылке ниже.'
-    ).format(name=esc(c['name']), cat=esc(c['cat']), city=esc(c['city']), plan=c['plan'])
+    ).format(name=esc(c.get('name')), cat=esc(c.get('cat')), city=esc(c.get('city')), plan=esc(c.get('plan')))
 
 
-def biz_kb(cid, uid=None):
+def biz_kb(cid, uid, many=False):
     rows = [
         [open_btn('💼  Открыть кабинет', 'owner')],
         [open_btn('Календарь', 'owner_cal'), open_btn('Клиенты', 'owner_clients')],
-        [cb('Ссылка для клиентов', 'link')],
-        [cb('Подписка', 'plan'), cb('Поддержка', 'support')],
-        [cb('🔔 Очередь напоминаний', 'reminders')],
-        [cb('Сменить компанию', 'switch'), cb('‹ В меню', 'menu')],
+        [cb('Ссылка для клиентов', 'link:' + cid)],
+        [open_btn('Подписка', 'owner_sub'), cb('Поддержка', 'support')],
+        [cb('🔔 Очередь уведомлений', 'reminders:' + cid)],
     ]
-    if uid is not None and is_admin(uid):
-        rows.append([{'text': '🛡 Панель администратора', 'web_app': {'url': admin_url()}}])
+    tail = [cb('‹ В меню', 'menu')]
+    if many:
+        tail.insert(0, cb('Сменить компанию', 'switch'))
+    rows.append(tail)
+    if is_admin(uid):
+        rows.append([{'text': '🛡 Панель администратора', 'web_app': {'url': admin_url()}}
+                     if HTTPS else {'text': '🛡 Панель администратора', 'url': admin_url()}])
     return {'inline_keyboard': rows}
 
 
-def link_text(cid):
-    c = COMPANIES[cid]
-    link = 'https://t.me/%s?start=%s' % (BOT_USERNAME or 'bot', cid)
+def link_text(c):
+    link = 'https://t.me/%s?start=%s' % (BOT_USERNAME or 'bot', c['id'])
     return (
         '<b>Ссылка для клиентов</b>\n<i>{name}</i>\n\n'
         '<code>{link}</code>\n\n'
         'Поставьте её в шапку профиля, в сторис или отправьте в личном сообщении. '
         'По этой ссылке клиент сразу попадает на вашу страницу записи.'
-    ).format(name=esc(c['name']), link=link)
+    ).format(name=esc(c.get('name')), link=link)
 
 
 def link_kb(cid):
     link = 'https://t.me/%s?start=%s' % (BOT_USERNAME or 'bot', cid)
     share = 'https://t.me/share/url?url=' + urllib.parse.quote(link) + \
             '&text=' + urllib.parse.quote('Записывайтесь онлайн — свободное время видно сразу')
-    return {'inline_keyboard': [
-        [{'text': '📤 Отправить ссылку', 'url': share}],
-        [cb('‹ Назад', 'menu')],
-    ]}
+    return {'inline_keyboard': [[{'text': '📤 Отправить ссылку', 'url': share}], [cb('‹ Назад', 'biz')]]}
 
 
-def plan_text(cid):
-    c = COMPANIES[cid]
-    return (
-        '<b>Подписка</b>\n<i>{name}</i>\n\n'
-        'Текущий тариф — <b>{plan}</b>.\n\n'
-        '<b>START</b> — 9 900 ₸ / месяц\nОдин мастер, онлайн-запись, база клиентов, напоминания.\n\n'
-        '<b>PRO</b> — 19 900 ₸ / месяц\nДо 10 сотрудников, AI-помощник, рассылки, аналитика и финансы.\n\n'
-        '<b>BUSINESS</b> — 39 900 ₸ / месяц\nБез ограничений, филиалы, интеграции, приоритетная поддержка.'
-    ).format(name=esc(c['name']), plan=c['plan'])
-
-
-def plan_kb():
-    return {'inline_keyboard': [
-        [open_btn('Управлять подпиской', 'owner_sub')],
-        [cb('‹ Назад', 'menu')],
-    ]}
+def reminders_screen(cid):
+    """Очередь сервера: что и когда уйдёт клиентам этой компании."""
+    try:
+        q = api.queue(cid)
+    except api.ServerError:
+        return offline_text(), offline_kb()
+    q = [n for n in q if not n.get('cancelled')][:15]
+    if not q:
+        return ('<b>Очередь уведомлений</b>\n\nПока пусто: новые записи появятся здесь вместе с '
+                'напоминаниями.', {'inline_keyboard': [[cb('‹ Назад', 'biz')]]})
+    KIND = {'rem24': 'за сутки', 'rem2': 'за 2 часа', 'review': 'просьба об отзыве', 'new': 'новая запись',
+            'cancel': 'отмена', 'move': 'перенос', 'moved': 'перенос', 'booked': 'подтверждение',
+            'cancelled': 'отмена', 'digest': 'сводка', 'broadcast': 'рассылка', 'invite': 'команда'}
+    lines = []
+    for n in q:
+        due = datetime.fromtimestamp(n['due_at']).strftime('%d.%m %H:%M')
+        st = 'отправлено' if n.get('sent_at') else ('ошибка' if n.get('error') and n.get('attempts', 0) >= 6 else 'ждёт')
+        lines.append('%s · %s · <i>%s</i>' % (esc(KIND.get(n['kind'], n['kind'])), due, st))
+    return ('<b>Очередь уведомлений</b>\n\n' + '\n'.join(lines) +
+            '\n\nСервер проверяет очередь каждые 15 секунд.',
+            {'inline_keyboard': [[cb('Обновить', 'reminders:' + cid)], [cb('‹ Назад', 'biz')]]})
 
 
 # --------------------------------------------------------------------- витрина
-def pick_kb(prefix, title_cb='landing'):
-    rows = [[cb(COMPANIES[k]['name'], '%s:%s' % (prefix, k))] for k in COMPANIES]
-    rows.append([cb('‹ Назад', title_cb)])
-    return {'inline_keyboard': rows}
-
-
 FEATURES_TEXT = (
     '<b>Возможности</b>\n\n'
     '<b>Онлайн-запись</b>\nКлиент выбирает услугу, мастера и время. Занятые слоты скрыты, '
@@ -564,31 +659,16 @@ PRICES_TEXT = (
     'Первые 14 дней — бесплатно, карта не нужна.'
 )
 
-# Идентификаторы компаний Mini App: c1, bg5, co_lx8f2. Ключевые слова
-# (admin, biz, find, create) под шаблон не подходят и сюда не проваливаются.
-CATALOG_ID = re.compile(r'^(c\d+|bg\d+|co_[a-z0-9]+)$')
-# Приглашение в команду: владелец делает ссылку, человек по ней входит.
-INVITE_ID = re.compile(r'^inv[a-z0-9]{8,}$')
-
 INVITE_TEXT = (
     '<b>Приглашение в команду</b>\n\n'
     'Вас зовут работать в салоне. Откройте приглашение — там будет видно, '
     'в какой салон и на какую роль. Ссылка одноразовая.'
 )
 
-# В приложении каталога нет: клиент работает только с тем салоном, чью
-# ссылку открыл. Выбор из списка остался ровно для демонстрации — тому,
-# кому ссылку салона никто не присылал, а посмотреть надо.
-FIND_TEXT = (
-    '<b>Демо-салоны</b>\n\n'
-    'Обычно клиент попадает в салон по его ссылке и других салонов не видит. '
-    'Здесь можно выбрать, от чьего имени смотреть запись в демо.'
-)
-
 SUPPORT_TEXT = (
     '<b>Поддержка</b>\n\n'
     'Поможем настроить услуги, график и страницу записи — обычно отвечаем '
-    'в течение рабочего дня.'
+    'в течение рабочего дня. Написать можно и из приложения: «Ещё» → «Поддержка».'
 )
 
 HELP_TEXT = (
@@ -596,16 +676,11 @@ HELP_TEXT = (
     '/start — главное меню\n'
     '/app — открыть приложение\n'
     '/help — эта справка\n\n'
-    'Кнопка <b>«Открыть»</b> рядом с полем ввода запускает приложение '
-    'в любой момент — она всегда актуальна.\n\n'
-    'Если кнопка из старого сообщения не открывается, отправьте /start '
-    'заново: в демо адрес приложения периодически меняется, и кнопки '
-    'в старых сообщениях перестают работать.'
+    'Кнопка <b>«Открыть»</b> рядом с полем ввода запускает приложение в любой момент.\n\n'
+    'Если кнопка из старого сообщения не открывается, отправьте /start заново.'
 )
 
-
 SHORT_DESC = 'Онлайн-запись для салонов и мастеров: календарь, клиенты, напоминания и AI-помощник.'
-
 FULL_DESC = (
     'Онлайн-запись прямо в Telegram.\n\n'
     'Клиенты выбирают услугу, мастера и удобное время за 30 секунд — без звонков '
@@ -614,355 +689,84 @@ FULL_DESC = (
     'Нажмите «Запустить», чтобы открыть приложение.'
 )
 
-
-def back_kb(extra=None):
-    rows = []
-    if extra:
-        rows.append(extra)
-    rows.append([cb('‹ Назад', 'menu')])
-    return {'inline_keyboard': rows}
-
-
-# --------------------------------------------------------------------- отправка
-def send(chat_id, text, kb=None):
-    p = {'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML', 'disable_web_page_preview': True}
-    if kb:
-        p['reply_markup'] = kb
-    return api('sendMessage', **p)
-
-
-def edit(chat_id, message_id, text, kb=None):
-    p = {'chat_id': chat_id, 'message_id': message_id, 'text': text,
-         'parse_mode': 'HTML', 'disable_web_page_preview': True}
-    if kb:
-        p['reply_markup'] = kb
-    return api('editMessageText', **p)
-
-
-# ------------------------------------------------------ напоминания (§16)
-# Отдельного планировщика нет и не нужно: цикл getUpdates просыпается
-# минимум раз в 30 секунд, поэтому очередь проверяем прямо в нём —
-# не чаще раза в минуту, чтобы не дёргать файл на каждой итерации.
-REMIND_EVERY = 60
-_last_remind_check = 0.0
-
-
-def reminder_text(b, kind, left_min):
-    c = COMPANIES.get(b['cid'])
-    if not c:
-        return None
-    try:
-        s = c['services'][b['svc']]
-        st = c['staff'][b['emp']]
-    except Exception:  # noqa: BLE001
-        return None
-    d = date.fromisoformat(b['date'])
-    when = '%s, %s' % (bk.day_label(d, date.today()), bk.hm(b['min']))
-    if kind == '24h':
-        head = '🔔 <b>Напоминание: завтра запись</b>'
-        tail = 'Если планы изменились, отмените заранее — время займёт кто-то другой.'
-    else:
-        hours = max(1, int(round(left_min / 60.0)))
-        head = '⏰ <b>Через %d %s — ваша запись</b>' % (
-            hours, 'час' if hours == 1 else 'часа' if hours < 5 else 'часов')
-        tail = 'Ждём вас! Если опаздываете — предупредите, мы придержим время.'
-    return (
-        '{head}\n\n'
-        '<b>{svc}</b>\n'
-        '{emp} · {when}\n'
-        '{price} · {dur}\n\n'
-        '{name}\n{addr}\n\n'
-        '{tail}'
-    ).format(head=head, svc=esc(s[0]), emp=esc(st['name']), when=when,
-             price=s[1], dur=s[2], name=esc(c['name']), addr=esc(c['addr']), tail=tail)
-
-
-def app_start(a):
-    """
-    Время записи из приложения в местном времени.
-
-    Приложение кладёт `start` в UTC («…Z»), а бот и человек живут по часам
-    салона. Раньше зона просто отбрасывалась — и напоминание уезжало на
-    разницу с UTC: запись на 14:00 показывалась как 09:00.
-    """
-    try:
-        dt = datetime.fromisoformat(str(a.get('start') or ''))
-    except (TypeError, ValueError):
-        return None
-    return dt.astimezone().replace(tzinfo=None) if dt.tzinfo else dt
-
-
-def app_service_name(a):
-    """Название услуги по её id: бот адресует услуги номером в списке."""
-    c = COMPANIES.get(a.get('companyId'))
-    if not c:
-        return 'визит'
-    try:
-        i = (c.get('serviceIds') or []).index((a.get('serviceIds') or [None])[0])
-        return c['services'][i][0]
-    except (ValueError, IndexError, KeyError):
-        return 'визит'
-
-
-def app_master_name(a):
-    c = COMPANIES.get(a.get('companyId'))
-    if not c:
-        return ''
-    try:
-        i = (c.get('staffIds') or []).index(a.get('employeeId'))
-        return c['staff'][i]['name']
-    except (ValueError, IndexError, KeyError):
-        return ''
-
-
-def app_bookings(uid, only_future=True):
-    """
-    Записи этого человека, сделанные в приложении.
-
-    Бот их не создавал и в своей базе не хранит — они лежат в общем складе.
-    Человека узнаём по `clientTg`: telegram-id туда кладёт само приложение.
-    Без этого списка «Мои записи» показывали «Записей пока нет» сразу после
-    записи в Mini App, хотя напоминание по ней бот отправить обещал.
-    """
-    now = datetime.now()
-    out = []
-    for a in sh.appointments():
-        if a.get('status') != 'planned' or a.get('source') == 'bot':
-            continue
-        if not a.get('clientTg') or str(a['clientTg']) != str(uid):
-            continue
-        when = app_start(a)
-        if when is None or (only_future and when < now):
-            continue
-        out.append((when, a))
-    out.sort(key=lambda x: x[0])
-    return out
-
-
-def all_bookings(uid, only_future=True):
-    """Записи из чата и из приложения одним списком, ближайшая первой."""
-    rows = [(w, b, 'bot') for w, b in bk.user_bookings(uid, only_future)]
-    rows += [(w, a, 'app') for w, a in app_bookings(uid, only_future)]
-    rows.sort(key=lambda x: x[0])
-    return rows
-
-
-def app_reminder_text(a, kind):
-    """Текст напоминания по записи, сделанной в приложении."""
-    c = COMPANIES.get(a.get('companyId'))
-    if not c:
-        return None
-    name = app_service_name(a)
-    start = app_start(a)
-    if start is None:
-        return None
-    when = '%s, %s' % (bk.day_label(start.date(), date.today()),
-                       bk.hm(start.hour * 60 + start.minute))
-    head = ('🔔 <b>Напоминание: завтра запись</b>' if kind == '24h'
-            else '⏰ <b>Скоро визит</b>')
-    return '%s\n\n<b>%s</b>\n%s\n%s' % (head, esc(name), when, esc(c['name']))
-
-
-def app_due_reminders(now=None):
-    """
-    Созревшие напоминания по записям из приложения. Раньше их не было вовсе:
-    бот видел только свою базу, а интерфейс обещал напоминания всем.
-    Клиента узнаём по clientTg — telegram-id кладёт туда само приложение.
-    """
-    now = now or datetime.now()
-    out = []
-    for a in sh.appointments():
-        if a.get('status') != 'planned' or a.get('source') == 'bot':
-            continue
-        uid = a.get('clientTg')
-        if not uid:
-            continue
-        start = app_start(a)
-        if start is None or start < now:
-            continue
-        left = (start - now).total_seconds() / 60.0
-        done = a.get('reminded') or {}
-        for kind, before in bk.REMINDERS:
-            if done.get(kind) or left > before:
-                continue
-            if left < before - bk.LATE_LIMIT:
-                sh.mark_reminded(a.get('id'), kind)
-                continue
-            out.append((a, kind))
-    return out
-
-
-def send_due_reminders():
-    """Разослать созревшие напоминания. Возвращает, сколько отправлено."""
-    sent = 0
-    for a, kind in app_due_reminders():
-        txt = app_reminder_text(a, kind)
-        sh.mark_reminded(a.get('id'), kind)
-        if not txt:
-            continue
-        r = send(a['clientTg'], txt, {'inline_keyboard': [[cb('Мои записи', 'mine')]]})
-        if r.get('ok'):
-            sent += 1
-    for b, kind, left in bk.due_reminders():
-        txt = reminder_text(b, kind, left)
-        if not txt:
-            bk.mark_reminded(b.get('id'), kind)
-            continue
-        kb = {'inline_keyboard': [
-            [cb('Мои записи', 'mine')],
-            [cb('Отменить запись', 'cxl:' + b['id'])],
-        ]}
-        r = send(b['uid'], txt, kb)
-        # если пользователь заблокировал бота, помечаем как отправленное:
-        # иначе бот будет пытаться достучаться до него каждую минуту
-        bk.mark_reminded(b.get('id'), kind)
-        if r.get('ok'):
-            sent += 1
-        else:
-            print('   напоминание не ушло:', r.get('error') or r)
-    return sent
-
-
-def tick_reminders():
-    global _last_remind_check
-    now = time.time()
-    if now - _last_remind_check < REMIND_EVERY:
-        return
-    _last_remind_check = now
-    refresh_companies()
-    try:
-        n = send_due_reminders()
-        if n:
-            print('   напоминаний отправлено:', n)
-    except Exception as e:  # noqa: BLE001
-        print('   ошибка напоминаний:', e)
-
-
-def reminders_screen(uid):
-    """Служебная сводка: что и когда уйдёт клиентам. Помогает проверить §16."""
-    rows = bk.upcoming_all(12)
-    if not rows:
-        return ('<b>Очередь напоминаний</b>\n\nБудущих записей нет — напоминать не о чем.',
-                {'inline_keyboard': [[cb('‹ В меню', 'menu')]]})
-    now = datetime.now()
-    lines = []
-    for when, b in rows:
-        sent = b.get('reminded') or {}
-        marks = []
-        for kind, before in bk.REMINDERS:
-            point = when - timedelta(minutes=before)
-            label = 'за сутки' if kind == '24h' else 'за 2 часа'
-            if sent.get(kind):
-                marks.append('%s — отправлено' % label)
-            elif point < now:
-                marks.append('%s — пропущено' % label)
-            else:
-                marks.append('%s — %s' % (label, point.strftime('%d.%m %H:%M')))
-        c = COMPANIES.get(b['cid'], {})
-        svc = ''
-        try:
-            svc = c['services'][b['svc']][0]
-        except Exception:  # noqa: BLE001
-            svc = 'услуга'
-        lines.append('<b>%s</b> · %s\n%s\n%s' % (
-            esc(svc), when.strftime('%d.%m %H:%M'),
-            esc(b.get('name') or 'клиент'), '\n'.join(marks)))
-    return ('<b>Очередь напоминаний</b>\n\n' + '\n\n'.join(lines) +
-            '\n\nБот проверяет очередь раз в минуту.',
-            {'inline_keyboard': [[cb('Обновить', 'reminders')], [cb('‹ В меню', 'menu')]]})
-
-
-def main_menu(uid):
-    """
-    Главное меню: три действия и ничего лишнего.
-
-      1) записаться — приложение с полным календарём;
-      2) свои записи — прямо в чате, без открытия приложения;
-      3) бизнес — кабинет, если он есть, иначе создание.
-
-    Второстепенное (услуги, контакты, тарифы) живёт внутри этих трёх
-    экранов и в /help: на первом экране оно только рассеивает внимание.
-    """
-    s = state(uid)
-    cid = company_id_of(uid)
-    c = COMPANIES[cid]
-    mine = all_bookings(uid)
-    biz_cid = s.get('company') if s.get('role') == 'biz' else None
-    # салон есть только у того, кто пришёл по ссылке или выбрал его сам.
-    # Остальным салон не подставляем: человек его не выбирал
-    bound = s.get('company') in COMPANIES
-
-    lines = ['<b>%s — онлайн-запись в Telegram</b>' % esc(BRAND), '']
-    if biz_cid and biz_cid in COMPANIES:
-        lines.append('Ваш бизнес: <b>%s</b> · тариф %s'
-                     % (esc(COMPANIES[biz_cid]['name']), esc(COMPANIES[biz_cid]['plan'])))
-    elif bound:
-        lines.append('Салон: <b>%s</b> · %s' % (esc(c['name']), esc(c['city'])))
-    else:
-        lines.append('Откройте ссылку своего салона — или выберите демо-салон ниже.')
-    if mine:
-        when, b, kind = mine[0]
-        # услугу берём из салона самой записи: она может быть не из текущего
-        if kind == 'bot':
-            bc = COMPANIES.get(b['cid'], c)
-            b_cid = b['cid']
-            try:
-                svc = bc['services'][b['svc']][0]
-            except (IndexError, KeyError):
-                svc = 'визит'
-        else:
-            b_cid = b.get('companyId')
-            bc = COMPANIES.get(b_cid, c)
-            svc = app_service_name(b)
-        where = '' if b_cid == cid else ' · ' + esc(bc['name'])
-        lines.append('Ближайшая запись: <b>%s, %s</b> · %s%s' % (
-            bk.day_label(when.date(), date.today()),
-            bk.hm(when.hour * 60 + when.minute), esc(svc), where))
-    lines.append('')
-    lines.append('Свободное время видно сразу — запись занимает полминуты.')
-
-    # Каталога салонов в приложении больше нет: клиент попадает в салон
-    # только по его ссылке. Тому, кто открыл бота сам, показываем
-    # демо-салоны списком здесь, в чате, а не поиском внутри Mini App.
-    rows = ([[open_btn('🔴  Записаться онлайн', cid + '_book')]] if bound or biz_cid
-            else [[cb('🏠  Выбрать салон', 'role_client')]])
-    rows.append([cb('🗓  Мои записи' + (' · %d' % len(mine) if mine else ''), 'mine')])
-    if biz_cid and biz_cid in COMPANIES:
-        # Подписью была голая вывеска компании. У салонов она сплошь и рядом
-        # латиницей («Lash Room»), и среди русских кнопок это читалось как
-        # английский пункт меню. Кнопка должна говорить, что она делает.
-        rows.append([cb('💼  Кабинет · %s' % COMPANIES[biz_cid]['name'], 'biz')])
-    else:
-        rows.append([cb('💼  Создать бизнес', 'biz_start')])
-    return '\n'.join(lines), {'inline_keyboard': rows}
-
-
 BIZ_START_TEXT = (
     '<b>Бизнесу</b>\n\n'
     'Соберите страницу записи за пару минут: услуги, мастера, часы работы. '
     'Дальше клиенты записываются сами, а вы видите расписание, клиентов '
-    'и деньги в одном приложении.\n\n'
-    'Можно не настраивать с нуля — откройте готовую демо-компанию '
-    'и посмотрите, как это выглядит с данными.'
+    'и деньги в одном приложении.'
 )
 
 
-def biz_start_kb():
-    # Первым делом — витрина в Mini App: там то же самое, но с картинками,
-    # разбором разделов и живым кабинетом. Кому не нужно объяснять,
-    # тот жмёт вторую кнопку и попадает сразу в форму.
-    return {'inline_keyboard': [
+def biz_start_kb(demo=False):
+    rows = [
         [open_btn('✨  Что вы получите', 'create')],
-        [open_btn('Сразу создать бизнес', 'onboarding')],
-        [cb('Открыть демо-компанию', 'role_biz')],
-        [cb('Возможности', 'features'), cb('Тарифы', 'prices')],
-        [cb('‹ В меню', 'menu')],
-    ]}
+        [open_btn('Создать бизнес', 'onboarding')],
+    ]
+    if demo:
+        rows.append([cb('Открыть демо-компанию', 'role_biz')])
+    rows.append([cb('Возможности', 'features'), cb('Тарифы', 'prices')])
+    rows.append([cb('‹ В меню', 'menu')])
+    return {'inline_keyboard': rows}
 
 
-def menu_for(uid):
-    """Текст и клавиатура главного меню."""
-    return main_menu(uid)
+def back_kb(extra=None, to='menu'):
+    rows = []
+    if extra:
+        rows.append(extra)
+    rows.append([cb('‹ Назад', to)])
+    return {'inline_keyboard': rows}
+
+
+def demo_companies():
+    return {k: v for k, v in companies().items() if DEMO_ID.match(k)}
+
+
+def pick_kb(prefix, back='menu'):
+    rows = [[cb(c['name'], '%s:%s' % (prefix, k))] for k, c in demo_companies().items()]
+    rows.append([cb('‹ Назад', back)])
+    return {'inline_keyboard': rows}
+
+
+# --------------------------------------------------------------------- главное меню
+def main_menu(uid):
+    """
+    Главное меню: три действия и ничего лишнего.
+      1) записаться — приложение с полным календарём;
+      2) свои записи — прямо в чате;
+      3) бизнес — кабинет, если он есть, иначе создание.
+    """
+    s = state(uid)
+    cid = company_id_of(uid)
+    c = company(cid) if cid else None
+    mine = my_bookings(uid)
+    info = biz_info(uid) or {}
+    members = info.get('memberships') or []
+    biz = members[0] if members else None
+
+    lines = ['<b>%s — онлайн-запись в Telegram</b>' % esc(BRAND), '']
+    if biz:
+        lines.append('Ваш бизнес: <b>%s</b> · тариф %s' % (esc(biz['name']), esc(biz.get('plan') or '')))
+    if c:
+        lines.append('Салон: <b>%s</b> · %s' % (esc(c['name']), esc(c.get('city'))))
+    elif not biz:
+        lines.append('Откройте ссылку своего салона — она ведёт прямо на страницу записи.')
+    if mine:
+        when, a = mine[0]
+        lines.append('Ближайшая запись: <b>%s</b> · %s · %s' % (esc(a['when']), esc(a['service']), esc(a['companyName'])))
+    lines.append('')
+    lines.append('Свободное время видно сразу — запись занимает полминуты.')
+
+    rows = []
+    if c:
+        rows.append([open_btn('🔴  Записаться онлайн', cid + '_book')])
+    elif demo_companies():
+        rows.append([cb('🏠  Выбрать салон', 'role_client')])
+    rows.append([cb('🗓  Мои записи' + (' · %d' % len(mine) if mine else ''), 'mine')])
+    if biz:
+        rows.append([cb('💼  Кабинет · %s' % biz['name'], 'biz')])
+    else:
+        rows.append([cb('💼  Создать бизнес', 'biz_start')])
+    return '\n'.join(lines), {'inline_keyboard': rows}
 
 
 def apply_menu_button(chat_id, uid):
@@ -970,57 +774,50 @@ def apply_menu_button(chat_id, uid):
     if not HTTPS:
         return
     s = state(uid)
-    if s.get('role') == 'client':
-        text, param = 'Записаться', company_id_of(uid) + '_book'
-    elif s.get('role') == 'biz':
+    cid = company_id_of(uid)
+    if s.get('role') == 'biz':
         text, param = 'Кабинет', 'owner'
+    elif cid:
+        text, param = 'Записаться', cid + '_book'
     else:
         text, param = 'Открыть', ''
-    api_retry('setChatMenuButton', chat_id=chat_id,
-              menu_button={'type': 'web_app', 'text': text, 'web_app': {'url': app_url(param)}})
+    tg_retry('setChatMenuButton', chat_id=chat_id,
+             menu_button={'type': 'web_app', 'text': text, 'web_app': {'url': app_url(param)}})
 
 
 # --------------------------------------------------------------------- настройка
 def setup():
     global BOT_USERNAME
     print('bot: настройка…')
-    # Справочник от Mini App читаем до всего остального: от него зависит,
-    # сколько салонов бот вообще знает.
-    refresh_companies(force=True)
-    print('   салонов в справочнике: %d%s'
-          % (len(COMPANIES), ' (из приложения)' if sh.available() else ' (из companies.json)'))
-    me = api('getMe').get('result', {})
+    try:
+        h = api.health()
+        print('   сервер: %s (seq %s)' % (api.server_url(), h.get('seq')))
+    except api.ServerError as e:
+        print('   !! сервер недоступен: %s' % e.message)
+        print('      бот будет отвечать, но записи и справочник появятся, когда сервер поднимется')
+    me = tg('getMe').get('result', {})
     BOT_USERNAME = me.get('username', '')
-
     if BOT_NAME:
-        r = api('setMyName', name=BOT_NAME)
+        r = tg('setMyName', name=BOT_NAME)
         print('   имя бота:', 'ok' if r.get('ok') else 'пропущено (лимит Telegram)')
-    api('setMyShortDescription', short_description=SHORT_DESC)
-    api('setMyDescription', description=FULL_DESC)
-    api_retry('setMyCommands', commands=[
+    tg('setMyShortDescription', short_description=SHORT_DESC)
+    tg('setMyDescription', description=FULL_DESC)
+    tg_retry('setMyCommands', commands=[
         {'command': 'start', 'description': 'Главное меню'},
         {'command': 'app', 'description': 'Открыть приложение'},
-        {'command': 'salons', 'description': 'Выбрать салон'},
         {'command': 'help', 'description': 'Помощь и поддержка'},
     ])
     if HTTPS:
-        r = api_retry('setChatMenuButton', menu_button={
+        r = tg_retry('setChatMenuButton', menu_button={
             'type': 'web_app', 'text': 'Открыть', 'web_app': {'url': app_url()}})
-        if r.get('ok'):
-            print('   кнопка меню: ok')
-        else:
-            # Молчать нельзя: без этой кнопки у человека внизу останется
-            # стандартная английская «Menu», и выглядит это как чужой язык.
-            print('   !! кнопка меню не применилась:', r.get('error'))
-            print('      перезапустите бота, когда сеть станет стабильной')
+        print('   кнопка меню:', 'ok' if r.get('ok') else '!! не применилась: %s' % r.get('error'))
     else:
         print('   !! WEBAPP_URL не https — кнопки web_app недоступны, шлём обычную ссылку')
-
     if me:
         print('   бот: @%s (%s)' % (BOT_USERNAME, me.get('id')))
         print('   ссылка: https://t.me/%s' % BOT_USERNAME)
-    for k in COMPANIES:
-        print('   ссылка салона %s: https://t.me/%s?start=%s' % (COMPANIES[k]['short'], BOT_USERNAME, k))
+    for k, c in list(companies().items())[:10]:
+        print('   ссылка салона %s: https://t.me/%s?start=%s' % (c.get('short') or c['name'], BOT_USERNAME, k))
     print('   супер-админы: %s' % (', '.join(str(i) for i in sorted(ADMIN_IDS)) or
                                    'не заданы (команда /admin покажет ваш ID)'))
 
@@ -1029,19 +826,25 @@ def setup():
 HIDDEN = {'/app': '', '/owner': 'owner', '/staff': 'employee'}
 
 
+def remember(uid, user, company=None):
+    """Сервер должен знать имя человека — для карточек клиентов и уведомлений."""
+    try:
+        api.touch_user(uid, name=' '.join(x for x in [(user or {}).get('first_name'), (user or {}).get('last_name')] if x),
+                       username=(user or {}).get('username', '') or '', lang=(user or {}).get('language_code', ''),
+                       company=company)
+    except api.ServerError:
+        pass
+
+
 def handle_message(msg):
     chat = msg['chat']['id']
-    uid = (msg.get('from') or {}).get('id', 0)
+    user = msg.get('from') or {}
+    uid = user.get('id', 0)
     text = (msg.get('text') or '').strip()
     low = text.lower().split('@')[0].split()[0] if text else ''
 
     if low == '/help':
         send(chat, HELP_TEXT, back_kb([open_btn('Открыть приложение')] if HTTPS else None))
-        return
-
-    if low == '/salons':
-        send(chat, '<b>Демо-салоны</b>\n\nВыберите, от чьего имени смотреть запись.',
-             pick_kb('pick_c', 'menu'))
         return
 
     if low == '/admin':
@@ -1050,57 +853,74 @@ def handle_message(msg):
                        'Ваш Telegram ID: <code>%s</code>' % uid)
             print('   отказ в доступе к панели: id=%s' % uid)
             return
-        kb = {'inline_keyboard': [[{'text': '🛡 Открыть панель', 'web_app': {'url': admin_url()}}]]} \
-            if HTTPS else {'inline_keyboard': [[{'text': '🛡 Открыть панель', 'url': admin_url()}]]}
-        send(chat, '<b>Панель администратора</b>\n\nКомпании, подписки, MRR и активность.', kb)
+        btn = {'text': '🛡 Открыть панель', 'web_app': {'url': admin_url()}} if HTTPS \
+            else {'text': '🛡 Открыть панель', 'url': admin_url()}
+        send(chat, '<b>Панель администратора</b>\n\nКомпании, подписки, обращения и очередь уведомлений.',
+             {'inline_keyboard': [[btn]]})
         return
 
     if low in HIDDEN:
         send(chat, 'Открываю приложение.', {'inline_keyboard': [[open_btn('Открыть', HIDDEN[low])]]})
         return
 
-    # /start [param]
     param = ''
     if low == '/start':
         parts = text.split(maxsplit=1)
         if len(parts) > 1:
-            param = parts[1].strip()
+            param = parts[1].strip().lower()
 
-    if param in COMPANIES:                       # пришёл по ссылке салона
-        set_state(uid, role='client', company=param)
-    elif param in ('biz', 'business', 'owner'):  # ссылка «для бизнеса»
-        set_state(uid, role='biz', company=company_id_of(uid))
-    elif param == 'create':                      # ссылка на витрину для бизнеса
+    # «<компания>_<раздел>» — ссылка приложения; компанию берём без хвоста
+    base = param
+    i = param.rfind('_')
+    if i > 0 and param[i + 1:] in SECTIONS:
+        base = param[:i]
+
+    if base and COMPANY_ID.match(base) and company(base):
+        set_state(uid, role='client', company=base)
+        remember(uid, user, company=base)
         apply_menu_button(chat, uid)
-        send(chat, BIZ_START_TEXT, biz_start_kb())
+        c = company(base)
+        send(chat, client_text(c), client_kb(c, uid))
         return
-    elif param == 'find':                        # старая ссылка на каталог
+    remember(uid, user)
+    if param in ('biz', 'business', 'owner'):
+        set_state(uid, role='biz')
         apply_menu_button(chat, uid)
-        send(chat, FIND_TEXT, pick_kb('pick_c', 'menu'))
+        t, kb = biz_screen(uid)
+        send(chat, t, kb)
         return
-    elif INVITE_ID.match(param):
+    if param == 'create':
         apply_menu_button(chat, uid)
-        send(chat, INVITE_TEXT, {'inline_keyboard': [
-            [open_btn('👥  Открыть приглашение', param)],
-            [cb('‹ В меню', 'menu')],
-        ]})
+        send(chat, BIZ_START_TEXT, biz_start_kb(bool(demo_companies())))
         return
-    elif CATALOG_ID.match(param):
-        # Салон из каталога Mini App. Своей базы по нему у бота нет — записывать
-        # в чате нечего, — но ссылку присылают людям, и вести она должна
-        # на страницу салона, а не в холодное меню.
+    if INVITE_ID.match(param):
         apply_menu_button(chat, uid)
-        send(chat, '<b>Страница записи</b>\n\n'
-                   'Откройте салон и выберите время — свободные окна видно сразу.',
-             {'inline_keyboard': [
-                 [open_btn('📅  Открыть страницу записи', param)],
-                 [cb('‹ В меню', 'menu')],
-             ]})
+        send(chat, INVITE_TEXT, {'inline_keyboard': [[open_btn('👥  Открыть приглашение', param)],
+                                                     [cb('‹ В меню', 'menu')]]})
+        return
+    if base and COMPANY_ID.match(base):
+        # ссылка салона, которого сервер не знает (ещё не заполнен или удалён)
+        apply_menu_button(chat, uid)
+        send(chat, '<b>Страница записи</b>\n\nОткройте салон в приложении — там видно, что он уже предлагает.',
+             {'inline_keyboard': [[open_btn('📅  Открыть страницу записи', param)], [cb('‹ В меню', 'menu')]]})
         return
 
     apply_menu_button(chat, uid)
-    t, kb = menu_for(uid)
+    t, kb = main_menu(uid)
     send(chat, t, kb)
+
+
+def biz_screen(uid):
+    info = biz_info(uid)
+    if info is None:
+        return offline_text(), offline_kb()
+    members = info.get('memberships') or []
+    if not members:
+        return BIZ_START_TEXT, biz_start_kb(bool(demo_companies()))
+    want = state(uid).get('bizCompany')
+    m = next((x for x in members if x['companyId'] == want), members[0])
+    c = company(m['companyId']) or {'id': m['companyId'], 'name': m['name'], 'plan': m.get('plan')}
+    return biz_text(c, m), biz_kb(m['companyId'], uid, many=len(members) > 1)
 
 
 # --------------------------------------------------------------------- кнопки
@@ -1109,109 +929,123 @@ def handle_callback(cq):
     msg = cq.get('message') or {}
     chat = (msg.get('chat') or {}).get('id')
     mid = msg.get('message_id')
-    uid = (cq.get('from') or {}).get('id', 0)
+    user = cq.get('from') or {}
+    uid = user.get('id', 0)
     note = None
 
     if data.startswith('pick_c:') or data.startswith('pick_b:'):
         cid = data.split(':', 1)[1]
-        if cid in COMPANIES:
-            set_state(uid, role='client' if data.startswith('pick_c') else 'biz', company=cid)
-            apply_menu_button(chat, uid)
-            note = 'Готово'
-        data = 'menu'
+        if company(cid):
+            if data.startswith('pick_c'):
+                set_state(uid, role='client', company=cid)
+                remember(uid, user, company=cid)
+                apply_menu_button(chat, uid)
+                note = 'Готово'
+                data = 'salon'
+            else:
+                # демо-компания как бизнес: открываем кабинет в приложении
+                set_state(uid, role='biz', bizCompany=cid)
+                note = 'Готово'
+                data = 'biz'
+    if data.startswith('sw:'):
+        set_state(uid, bizCompany=data.split(':', 1)[1])
+        data = 'biz'
 
     if data == 'noop':
-        api('answerCallbackQuery', callback_query_id=cq['id'], text='В этот день мест нет')
+        tg('answerCallbackQuery', callback_query_id=cq['id'], text='В этот день мест нет')
         return
 
-    api('answerCallbackQuery', callback_query_id=cq['id'], text=note or None)
+    tg('answerCallbackQuery', callback_query_id=cq['id'], text=note or None)
     if not chat:
         return
 
     cid = company_id_of(uid)
-    role = state(uid).get('role')
+    c = company(cid) if cid else None
 
     # --- запись прямо в чате
-    if data.startswith('bk:'):
-        if role != 'client':
-            set_state(uid, role='client', company=cid)
-        t, kb = bk_screen(cid, uid, data)
-        edit(chat, mid, t, kb)
-        return
-    if data.startswith('bkok:'):
-        t, kb = bk_confirm(cid, uid, cq.get('from'), data)
+    if data.startswith('bk:') or data.startswith('bkok:'):
+        if not c:
+            edit(chat, mid, 'Сначала откройте ссылку салона — тогда будет понятно, куда записывать.',
+                 {'inline_keyboard': [[cb('‹ В меню', 'menu')]]})
+            return
+        if data.startswith('bk:'):
+            t, kb = bk_screen(c, uid, data)
+        else:
+            t, kb = bk_confirm(c, uid, user, data)
         edit(chat, mid, t, kb)
         return
     if data == 'mine':
-        t, kb = mine_screen(cid, uid)
+        t, kb = mine_screen(uid, cid)
         edit(chat, mid, t, kb)
-        return
-    if data == 'reminders':
-        t, kb = reminders_screen(uid)
-        edit(chat, mid, t, kb)
-        return
-    if data == 'biz':
-        # бизнес уже выбран — показываем его название и быстрые действия
-        t, kb = biz_text(company_id_of(uid)), biz_kb(company_id_of(uid), uid)
-        edit(chat, mid, t, kb)
-        return
-    if data == 'biz_start':
-        edit(chat, mid, BIZ_START_TEXT, biz_start_kb())
         return
     if data.startswith('cxl:'):
         aid = data.split(':', 1)[1]
-        rec = bk.cancel_booking(uid, aid)
-        if not rec:
-            # Запись из приложения живёт в общем складе. Чужую не трогаем:
-            # id известен только владельцу записи, но проверяем всё равно.
-            mine = {a.get('id') for _, a in app_bookings(uid, only_future=False)}
-            if aid in mine:
-                rec = sh.patch_appointment(aid, {
-                    'status': 'cancelled', 'cancelledBy': 'client',
-                    'cancelledAt': datetime.now().isoformat(),
-                })
-        t, kb = mine_screen(cid, uid)
-        if rec:
-            t = '<b>Запись отменена</b>\nВремя снова свободно.\n\n' + t
+        try:
+            api.cancel(aid, uid)
+            head = '<b>Запись отменена</b>\nВремя снова свободно.\n\n'
+        except api.ServerError as e:
+            head = '<b>Не удалось отменить</b>\n%s\n\n' % esc(e.message)
+        t, kb = mine_screen(uid, cid)
+        edit(chat, mid, head + t, kb)
+        return
+    if data.startswith('reminders:'):
+        t, kb = reminders_screen(data.split(':', 1)[1])
         edit(chat, mid, t, kb)
         return
+    if data.startswith('link:'):
+        cc = company(data.split(':', 1)[1])
+        if cc:
+            edit(chat, mid, link_text(cc), link_kb(cc['id']))
+        return
+    if data == 'biz':
+        set_state(uid, role='biz')
+        apply_menu_button(chat, uid)
+        t, kb = biz_screen(uid)
+        edit(chat, mid, t, kb)
+        return
+    if data == 'switch':
+        info = biz_info(uid) or {}
+        rows = [[cb(m['name'], 'sw:' + m['companyId'])] for m in info.get('memberships') or []]
+        rows.append([cb('‹ Назад', 'biz')])
+        edit(chat, mid, '<b>Выберите компанию</b>', {'inline_keyboard': rows})
+        return
+    if data == 'biz_start':
+        edit(chat, mid, BIZ_START_TEXT, biz_start_kb(bool(demo_companies())))
+        return
+    if data == 'salon':
+        if not c:
+            data = 'menu'
+        else:
+            edit(chat, mid, client_text(c), client_kb(c, uid))
+            return
 
     if data == 'menu':
-        t, kb = menu_for(uid)
-    elif data == 'landing':
-        USERS.pop(str(uid), None)
-        save_users()
-        apply_menu_button(chat, uid)
-        t, kb = menu_for(uid)
+        t, kb = main_menu(uid)
     elif data == 'role_client':
-        t = '<b>Выберите салон</b>\n\nОбычно клиент попадает сюда по ссылке салона — ' \
-            'тогда этот шаг не нужен.'
+        t = '<b>Выберите салон</b>\n\nОбычно клиент попадает сюда по ссылке салона — тогда этот шаг не нужен.'
         kb = pick_kb('pick_c', 'menu')
     elif data == 'role_biz':
-        t = '<b>Выберите компанию</b>\n\nЭто демо-компании с готовыми данными: ' \
-            'расписанием, клиентами и финансами.'
+        t = '<b>Выберите компанию</b>\n\nЭто демо-компании с готовыми данными.'
         kb = pick_kb('pick_b', 'biz_start')
-    elif data == 'switch':
-        t = '<b>Выберите компанию</b>'
-        kb = pick_kb('pick_b', 'biz')
     elif data == 'services':
-        t, kb = services_text(cid), client_back_kb(cid)
+        if not c:
+            t, kb = main_menu(uid)
+        else:
+            t, kb = services_text(c), client_back_kb(cid)
     elif data == 'contacts':
-        t, kb = contacts_text(cid), client_back_kb(cid)
-    elif data == 'link':
-        t, kb = link_text(cid), link_kb(cid)
-    elif data == 'plan':
-        t, kb = plan_text(cid), plan_kb()
+        if not c:
+            t, kb = main_menu(uid)
+        else:
+            t, kb = contacts_text(c), client_back_kb(cid)
     elif data == 'features':
-        t, kb = FEATURES_TEXT, back_kb([open_btn('Попробовать')] if HTTPS else None)
+        t, kb = FEATURES_TEXT, back_kb([open_btn('Попробовать')] if HTTPS else None, 'biz_start')
     elif data == 'prices':
-        t, kb = PRICES_TEXT, back_kb([open_btn('Начать бесплатно')] if HTTPS else None)
+        t, kb = PRICES_TEXT, back_kb([open_btn('Начать бесплатно', 'onboarding')] if HTTPS else None, 'biz_start')
     elif data == 'support':
         extra = [{'text': '💬 Написать в поддержку', 'url': 'https://t.me/' + SUPPORT}] if SUPPORT else None
         t, kb = SUPPORT_TEXT, back_kb(extra)
     else:
         return
-
     edit(chat, mid, t, kb)
 
 
@@ -1223,22 +1057,13 @@ def main():
     conflicts = 0
     while True:
         try:
-            tick_reminders()
-            r = api('getUpdates', offset=offset, timeout=30,
-                    allowed_updates=['message', 'callback_query'])
+            r = tg('getUpdates', offset=offset, timeout=30, allowed_updates=['message', 'callback_query'])
             if not r.get('ok'):
                 # Telegram разрешает опрашивать бота только одному процессу.
-                # Если токен запущен ещё где-то (например, на втором ноутбуке),
-                # экземпляры будут бесконечно выбивать друг друга.
                 if 'Conflict' in str(r.get('error', '')):
                     conflicts += 1
                     if conflicts == 3:
-                        print('')
-                        print('!! Этот бот уже запущен на другом компьютере.')
-                        print('   Один токен = один работающий бот.')
-                        print('   Остановите демо на второй машине '
-                              '(4 ОСТАНОВИТЬ.cmd) и запустите здесь заново.')
-                        print('')
+                        print('\n!! Этот бот уже запущен в другом месте. Один токен = один работающий бот.\n')
                     time.sleep(min(60, 5 * conflicts))
                     continue
                 time.sleep(3)

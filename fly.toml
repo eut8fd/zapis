@@ -4,12 +4,13 @@
 #   fly auth login                       — вход в аккаунт (откроется браузер)
 #   fly launch --no-deploy --copy-config — создать приложение с этим конфигом
 #   fly volumes create zapis_data -s 1   — диск под данные, 1 ГБ
-#   fly secrets set BOT_TOKEN=... WEBAPP_URL=https://eut8fd.github.io/zapis
+#   fly secrets set BOT_TOKEN=... ADMIN_TG_IDS=123456789 WEBAPP_URL=https://zapis-bot.fly.dev
 #   fly deploy
 #
-# После первого деплоя адрес склада — https://<имя-приложения>.fly.dev,
-# его нужно вписать в API_BASE в webapp/js/config.js, иначе Mini App
-# на Pages останется на localStorage и записи из чата бота не увидит.
+# Сервер отдаёт и Mini App, поэтому WEBAPP_URL = https://<имя-приложения>.fly.dev.
+# Если приложение хочется держать на GitHub Pages, впишите адрес сервера
+# в API_BASE (webapp/js/config.js), иначе Mini App на Pages останется
+# демо на localStorage.
 
 app = "zapis-bot"
 primary_region = "fra"

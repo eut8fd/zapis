@@ -4,7 +4,13 @@ import { S, co, cid, rangeStats, staff, svcs, clients, lostClients, freeGaps, da
 import { money, nAppt, plural, dateLabel } from './ui.js';
 import { toHM } from './store.js';
 
-export const aiIsLive = () => S.aiMode === 'live' && !!localStorage.getItem('zapis.ai.key');
+import { isServer } from './store.js';
+import { serverInfo } from './sync.js';
+import { api } from './api.js';
+
+/** LIVE доступен, когда ключ лежит на сервере (серверный режим) или в браузере (демо). */
+export const aiAvailable = () => (isServer() && !!serverInfo().ai) || !!localStorage.getItem('zapis.ai.key');
+export const aiIsLive = () => S.aiMode === 'live' && aiAvailable();
 
 /* ---------------- Отчёт за неделю ---------------- */
 export function weeklyReport(companyId = cid()) {
@@ -240,6 +246,11 @@ export function chatAnswer(q, companyId = cid()) {
 
 /* ---------------- LIVE-режим ---------------- */
 export async function askLive(prompt, system) {
+  // На сервере ключ не покидает сервер: приложение зовёт прокси.
+  if (isServer() && serverInfo().ai) {
+    const r = await api.ai(prompt, system || '');
+    return r.text || '';
+  }
   const key = localStorage.getItem('zapis.ai.key');
   const url = localStorage.getItem('zapis.ai.url') || 'https://api.anthropic.com/v1/messages';
   if (!key) throw new Error('no key');

@@ -3,8 +3,10 @@ import {
   now, today, todayStats, rangeStats, nextAppt, dayAppts, blocks, me, toHM, toMin, workDay, workWindow, companyHours,
   clientStats, emit, freeGaps, removeBlock, ABSENCE, absenceOn,
   markSetup, setupSteps, tipSeen, markTip, daysBetween,
-  companyInbox, unreadInbox, markInboxRead, markInboxAllRead, INBOX_KINDS,
+  companyInbox, unreadInbox, markInboxRead, markInboxAllRead, INBOX_KINDS, isServer,
 } from '../store.js';
+import { enterAsClient } from '../roles.js';
+import { botName } from '../sync.js';
 import {
   esc, money, moneyShort, hhmm, dateLabel, dateFull, relPast, nMin, nAppt, avatar, greet, WD, WD_FULL, MONTHS,
   dayKey, startOfDay, addDays, emptyState, sheet, toast, segmented, sparkline, num, plural,
@@ -155,7 +157,7 @@ function nextCard(a) {
 }
 
 on('ap.card', ds => openApptSheet(ds.id));
-export const bookingLink = (c = co()) => 'https://t.me/' + BOT_USERNAME + '?start=' + c.id;
+export const bookingLink = (c = co()) => 'https://t.me/' + botName() + '?start=' + c.id;
 
 on('o.share', () => {
   const c = co();
@@ -186,6 +188,13 @@ on('o.sendLink', () => {
 });
 on('o.preview', () => {
   document.querySelectorAll('.sheet [data-sheet-close]').forEach(b => b.click());
+  if (isServer()) {
+    // владелец смотрит свою страницу как клиент; назад — «Вернуться в кабинет» в профиле
+    enterAsClient(cid());
+    emit();
+    setTimeout(() => go('cl.company', {}, { root: true }), 260);
+    return;
+  }
   const cl = clients()[0];
   S.session.role = 'client';
   if (cl) S.session.clientId = cl.id;
@@ -825,10 +834,10 @@ route('o.notifications', {
 
     return `<div class="top"><button class="ico-btn" data-a="back">${icon('back', 19)}</button>
       <div class="grow"><div class="top-t">Уведомления</div>
-        <div class="top-sub">${mail.length ? 'От платформы и по записям' : 'Ближайшие записи'}</div></div></div>
+        <div class="top-sub">${mail.length ? 'События салона и платформы' : 'Ближайшие записи'}</div></div></div>
 
     ${mail.length ? `<div class="sec">
-      <div class="sec-h"><div class="sec-t">От платформы</div>
+      <div class="sec-h"><div class="sec-t">События</div>
         ${unreadInbox() ? `<span class="bdg p">${unreadInbox()} новых</span>` : ''}</div>
       <div class="wrap stack s">
         ${mail.slice(0, 20).map(m => {
@@ -858,7 +867,7 @@ route('o.notifications', {
       return `<button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="ap.card" data-id="${a.id}">
           <div class="ic" style="background:var(--p-soft);color:var(--p)">${icon('bell', 18)}</div>
           <div class="grow" style="text-align:left">
-            <div class="tl">${esc(c.name)} · ${hhmm(new Date(a.start))}</div>
+            <div class="tl">${esc(c ? c.name : 'Клиент')} · ${hhmm(new Date(a.start))}</div>
             <div class="st">${dateLabel(new Date(a.start), n)} · ${esc(apptTitle(a))}</div>
           </div>${icon('fwd', 16)}</button>`;
     }).join('') || (mail.length ? '' : emptyState({ ic: 'bell', title: 'Уведомлений нет', text: 'Здесь появятся сообщения платформы и напоминания о ближайших записях.' }))}

@@ -5,7 +5,7 @@ import {
   now, today, slotsFor, slotFree, toMin, toHM, createAppointment, cancelAppointment, completeAppointment,
   moveAppointment, createClient, createService, updateService, addBlock, addAbsence, ABSENCE, clientStats, updateClient,
   nextFreeFor, workDay, workWindow, cats, addCat, addReview, reviewFor, tipSeen, markTip,
-  canTouchAppt, bookableStaff, can, setLang, me, apptsInRange, sub,
+  canTouchAppt, bookableStaff, can, setLang, me, apptsInRange, sub, isServer,
 } from './store.js';
 import { LANGS, lang } from './i18n.js';
 import {
@@ -324,7 +324,7 @@ on('ap.cancel', async ds => {
   const a = guard(ds.id);
   if (!a) return;
   if (a.status !== 'planned') { toast('Выполненную запись нельзя отменить', 'dan'); return; }
-  const ok = await confirmSheet({ title: 'Отменить запись?', text: 'Слот снова станет свободным, клиент получит уведомление.', ok: 'Отменить запись', cancel: 'Оставить', danger: true });
+  const ok = await confirmSheet({ title: 'Отменить запись?', text: isServer() ? 'Слот снова станет свободным, клиент получит сообщение от бота.' : 'Слот снова станет свободным. В демо уведомление клиенту не уходит.', ok: 'Отменить запись', cancel: 'Оставить', danger: true });
   if (!ok) return;
   if (!cancelAppointment(ds.id, S.session.role)) { toast('Эту запись уже нельзя отменить', 'dan'); return; }
   document.querySelectorAll('.sheet [data-sheet-close]').forEach(b => b.click());
@@ -525,7 +525,7 @@ export function moveFlow(id) {
     title: 'Перенести запись', head, date: cur, from: cur, slotsOn, showBusy: true,
     okLabel: min => t('Перенести на {t}', { t: toHM(min) }),
     confirm: { title: 'Перенести запись?', ok: 'Перенести', note: 'Старое время снова станет свободным.' },
-    done: { text: 'Запись перенесена', note: 'Клиента предупредите сами — в демо уведомление не уходит.' },
+    done: { text: 'Запись перенесена', note: isServer() ? 'Клиент получит сообщение от бота с новым временем.' : 'Клиента предупредите сами — в демо уведомление не уходит.' },
     onPick: ({ date }) => moveAppointment(id, date, null),
   });
 }
@@ -900,7 +900,7 @@ on('cf.cancel', async ds => {
   const c = client(a.clientId), d = new Date(a.start);
   const ok = await confirmSheet({
     title: 'Отменить запись?',
-    text: `${c ? c.name : 'Клиент'}\n${apptTitle(a)}\n${dateLabel(d, now())}, ${hhmm(d)}\n\nПредупредите клиента — в демо уведомление не уходит.`,
+    text: `${c ? c.name : 'Клиент'}\n${apptTitle(a)}\n${dateLabel(d, now())}, ${hhmm(d)}\n\n${isServer() ? 'Клиент получит сообщение об отмене от бота.' : 'Предупредите клиента — в демо уведомление не уходит.'}`,
     ok: 'Отменить запись', cancel: 'Оставить', danger: true,
   });
   if (!ok) return;

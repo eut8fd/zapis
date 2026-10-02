@@ -3,7 +3,7 @@
   now, today, slotsFor, nextFreeFor, createAppointment, cancelAppointment, clientStats, clientAppts,
   reviews, toHM, moveAppointment, updateClient, emit, reviewFor,
   homeId, homeCo, person, myClient, ensureMyClient, updatePerson, myAppts, myStats,
-  viewCompany, addComplaint, addClientTicket, COMPLAINT_REASONS, myTickets, TICKET_STATUS,
+  viewCompany, addComplaint, addClientTicket, COMPLAINT_REASONS, myTickets, TICKET_STATUS, isServer,
 } from '../store.js';
 import {
   esc, money, moneyShort, hhmm, dateLabel, dateFull, relPast, avatar, emptyState, sheet, toast,
@@ -16,7 +16,8 @@ import { on } from '../bus.js';
 import { haptic, openLink, tgClose, copy } from '../tg.js';
 import { BOT_USERNAME } from '../config.js';
 import { LANGS, lang } from '../i18n.js';
-import { pushAppointment, patchAppointment } from '../sync.js';
+import { pushNow, session, botName } from '../sync.js';
+import { enterCompany, myCabinet } from '../roles.js';
 import { setLang } from '../store.js';
 import { reviewSheet, tipOnce, langBtn, pickSlot, supportSheet, myDataSheet } from '../flows.js';
 
@@ -69,6 +70,9 @@ route('cl.company', {
     const heroBg = c.cover
       ? `background-image:linear-gradient(170deg,rgba(12,16,32,.30) 0%,rgba(12,16,32,.78) 100%),url('${c.cover}')`
       : `background-image:${brandGradient(col)}`;
+    // Подписка салона кончилась — сервер запись не примет. Говорим об этом
+    // сразу, а не отказом после выбора времени.
+    const closed = isServer() && c.planUntil && new Date(c.planUntil).getTime() + 3 * 86400000 < now().getTime();
 
     return `
     <div class="pub-hero ${c.cover ? 'has-cover' : ''}" style="${heroBg}">
@@ -89,9 +93,12 @@ route('cl.company', {
     </div>
 
     <div class="wrap pub-cta">
-      <button class="btn hero-cta" style="color:${col}" data-a="cl.start">
+      ${closed ? `<div class="card pad row" style="gap:10px;background:var(--warn-soft);border-color:transparent">
+        <span style="color:var(--warn)">${icon('alert', 19)}</span>
+        <div class="sm" style="color:var(--tx-2)">${t('Салон временно не принимает онлайн-записи. Позвоните — номер ниже.')}</div>
+      </div>` : `<button class="btn hero-cta" style="color:${col}" data-a="cl.start">
         ${icon('calendarPlus', 20)}${t('Записаться')}
-      </button>
+      </button>`}
     </div>
 
     ${st.next ? `<div class="wrap sec">
@@ -246,7 +253,7 @@ on('cl.myTickets', () => {
 
 on('cl.share', async () => {
   const c = co();
-  const link = 'https://t.me/' + BOT_USERNAME + '?start=' + c.id;
+  const link = 'https://t.me/' + botName() + '?start=' + c.id;
   await copy(link);
   sheet({
     title: t('Поделиться салоном'),
@@ -499,20 +506,23 @@ on('bk.confirm', async () => {
   if (!empId) { toast(t('Это время уже заняли'), 'dan'); rr(); return; }
   const d = new Date(s.date); d.setHours(Math.floor(s.min / 60), s.min % 60, 0, 0);
   const sh = sheet({ title: t('Подтверждение'), body: loadingBlock(t('Бронируем время…')) });
-  await wait(1100);
+  if (!isServer()) await wait(1100);
   // карточку в этом салоне заводим ровно здесь — в момент первой записи
   const rec = ensureMyClient();
   const a = createAppointment({ clientId: rec.id, employeeId: empId, serviceIds: [sv.id], start: d, source: 'client' });
-  // В общий список кладём имя и telegram-id: своих карточек клиентов у бота
-  // нет, связать запись с человеком он может только по ним. Берём id из
-  // личности, а не из карточки: карточка могла достаться от салона, и её
-  // `tg` — это username для ссылки, а боту нужен числовой id.
-  const me = person() || {};
-  pushAppointment(a, {
-    clientName: rec.name,
-    clientTg: me.tgId || rec.tgId || '',
-    clientUsername: rec.tg || me.tg || '',
-  });
+  // Экран «Готово» показываем после ответа сервера: время могли занять
+  // с другого устройства, и сервер откажет — тогда запись откатится, а
+  // человек вернётся к выбору времени, а не увидит ложное подтверждение.
+  if (isServer()) {
+    const rej = await pushNow();
+    const bad = rej.find(x => x.col === 'appointments' && x.id === a.id);
+    if (bad) {
+      sh.close();
+      toast(bad.reason || t('Это время уже заняли'), 'dan');
+      book.st.min = null; rr();
+      return;
+    }
+  }
   sh.close();
   book.st.created = a.id;
   haptic('success');
@@ -759,9 +769,9 @@ ${t('Время снова станет свободным.')}`,
   });
   if (!ok) return;
   if (!cancelAppointment(ds.id, 'client')) { toast(t('Эту запись уже нельзя отменить'), 'dan'); return; }
-  patchAppointment(ds.id, { status: 'cancelled' });
   if (window.__ma) { window.__ma.close(); window.__ma = null; }
   toast(t('Запись отменена'), 'dan');
+  if (isServer()) pushNow().catch(() => { });
 });
 on('cl.again', ds => {
   const a = appt(ds.id); if (!a) return;
@@ -796,7 +806,7 @@ on('cl.move', ds => {
     done: { text: 'Запись перенесена', note: 'Новое время уже в «Моих записях».' },
     onPick: ({ date }) => {
       moveAppointment(a.id, date, null);
-      patchAppointment(a.id, { start: date.toISOString() });
+      if (isServer()) pushNow().catch(() => { });
     },
   });
 });
@@ -856,9 +866,14 @@ route('cl.profile', {
    в девяти случаях из десяти человеку нужна она, а не жалоба. Строки
    без цветных иконок: это не действия, а запасной выход. */
 function quietSection() {
+  const cab = isServer() ? myCabinet() : null;
   return `<div class="wrap sec">
     <div class="sec-t" style="margin-bottom:8px;color:var(--tx-3)">${t('Ещё')}</div>
     <div class="stack s">
+      ${cab ? `<button class="lrow press quiet-row" data-a="cl.toCabinet">
+        <div class="ic">${icon('briefcase', 18)}</div>
+        <div class="grow" style="text-align:left"><div class="tl">${t('Вернуться в кабинет')}</div>
+          <div class="st">${esc((session() || {}).memberships.find(m => m.companyId === cab.companyId).companyName || '')}</div></div>${icon('fwd', 17)}</button>` : ''}
       <button class="lrow press quiet-row" data-a="cl.support">
         <div class="ic">${icon('msg', 18)}</div>
         <div class="grow" style="text-align:left"><div class="tl">${t('Написать в поддержку')}</div>
@@ -867,14 +882,19 @@ function quietSection() {
         <div class="ic">${icon('shield', 18)}</div>
         <div class="grow" style="text-align:left"><div class="tl">${t('Пожаловаться на салон')}</div>
           <div class="st">${t('Разберётся поддержка платформы')}</div></div>${icon('fwd', 17)}</button>
-      <button class="lrow press quiet-row" data-a="cl.toBiz">
+      ${cab ? '' : `<button class="lrow press quiet-row" data-a="cl.toBiz">
         <div class="ic">${icon('briefcase', 18)}</div>
         <div class="grow" style="text-align:left"><div class="tl">${t('Создать свой бизнес')}</div>
-          <div class="st">${t('Своя страница записи за пару минут')}</div></div>${icon('fwd', 17)}</button>
+          <div class="st">${t('Своя страница записи за пару минут')}</div></div>${icon('fwd', 17)}</button>`}
     </div>
   </div>`;
 }
 on('cl.toBiz', () => go('biz.start'));
+on('cl.toCabinet', () => {
+  const cab = myCabinet(); if (!cab) return;
+  const r = enterCompany(cab.companyId);
+  if (r) { emit(); resetStack(r.r); }
+});
 
 /* Вопрос в поддержку платформы — не про салон, а про само приложение.
    Отдельно от жалобы намеренно: человек, у которого не приходят

@@ -151,14 +151,26 @@ if (-not $hasUrl) { $out += "WEBAPP_URL=$public" }
 # без BOM: иначе docker compose env_file и подобные читалки ломаются на первой строке
 [IO.File]::WriteAllText($envPath, ($out -join "`n") + "`n", (New-Object Text.UTF8Encoding($false)))
 
-# --- 4. бот -----------------------------------------------------------------
+# --- 4. сервер заново — уже с адресом приложения ------------------------------
+# Сервер шлёт уведомления с кнопками «Открыть», и адрес ему нужен при старте.
+# Первый запуск был нужен только туннелю, чтобы тому было куда стучаться.
+Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 400
+$env:WEBAPP_URL = $public
+$env:PYTHONUNBUFFERED = '1'
+$server = Start-Process -FilePath $py.Source `
+  -ArgumentList "-u `"$Root\server\serve.py`" $Port" `
+  -RedirectStandardOutput $serveLog -RedirectStandardError "$serveLog.err" `
+  -WindowStyle Hidden -PassThru
+Start-Sleep -Milliseconds 900
+Ok "сервер   : перезапущен с WEBAPP_URL"
+
+# --- 5. бот -----------------------------------------------------------------
 Write-Host ''
 Write-Host '  Готово. В Telegram откройте бота и нажмите /start' -ForegroundColor White
 Write-Host '  Кнопка «Открыть» появится рядом с полем ввода.' -ForegroundColor DarkGray
 Write-Host ''
 
-$env:WEBAPP_URL = $public
-$env:PYTHONUNBUFFERED = '1'
 try {
   & $py.Source -u "$Root\bot\bot.py"
 } finally {

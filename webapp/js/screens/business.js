@@ -13,7 +13,8 @@
    Картинки рисуем сами: внешних изображений в проекте нет и не будет —
    они бы уехали в localStorage вместе с данными.
    ========================================================= */
-import { plans, PERIODS, allCompanies } from '../store.js';
+import { plans, PERIODS, allCompanies, isServer, emit } from '../store.js';
+import { enterCompany, myCabinet } from '../roles.js';
 import { esc, money, toast, t } from '../ui.js';
 import { icon } from '../icons.js';
 import { route, go, render } from '../router.js';
@@ -388,6 +389,15 @@ on('biz.feat', ds => go('biz.feat', { k: ds.k }));
 /* Живой кабинет вместо скриншота: данные в демо уже есть, показывать
    картинку там, где можно показать сам продукт, — слабее. */
 on('biz.demo', ds => {
+  if (isServer()) {
+    // На сервере чужих демо-кабинетов нет: показываем свой, если он есть
+    const cab = myCabinet();
+    if (!cab) { toast(t('Создайте свой бизнес — кабинет появится сразу')); return; }
+    const r = enterCompany(cab.companyId);
+    emit(); resetStack(r.r);
+    if (ds.r) setTimeout(() => go(ds.r), 240);
+    return;
+  }
   switchRole('owner');
   if (ds.r) setTimeout(() => go(ds.r), 240);
   toast(t('Это демо-кабинет с готовыми данными'));

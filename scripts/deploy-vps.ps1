@@ -60,7 +60,7 @@ if (-not $SkipUpload) {
   if (Test-Path $tar) { Remove-Item $tar -Force }
   # tar есть в Windows 10+; .env, локальные данные и кэш не берём
   & tar -C $root -cf $tar `
-    --exclude='bot/users.json' --exclude='bot/bookings.json' `
+    --exclude='bot/users.json' --exclude='bot/tests/.run-tests' --exclude='server/tests/.run-tests' `
     --exclude='__pycache__' --exclude='*.pyc' `
     webapp bot server deploy
   if ($LASTEXITCODE -ne 0) { Write-Host '   не удалось упаковать проект' -ForegroundColor Red; exit 1 }

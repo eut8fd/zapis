@@ -29,7 +29,7 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
 
 Step 'Проверяю, что секреты не уйдут в репозиторий'
 $ignored = Get-Content "$root\.gitignore" -Raw
-foreach ($must in @('.env', 'bot/users.json', 'bot/bookings.json')) {
+foreach ($must in @('.env', 'bot/users.json', '.run/')) {
   if ($ignored -notmatch [regex]::Escape($must)) {
     Write-Host "  !! $must отсутствует в .gitignore — добавьте перед публикацией" -ForegroundColor Red; exit 1
   }

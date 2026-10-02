@@ -1,15 +1,13 @@
 name: Deploy Mini App
 
-# Публикует папку webapp/ на GitHub Pages при каждом пуше в main.
-# Приложение полностью статическое, поэтому сборка не нужна.
+# Публикует папку webapp/ на GitHub Pages при каждом пуше в main и
+# прогоняет проверки сервера и бота. Приложение полностью статическое,
+# поэтому сборка не нужна.
 
-# Фильтра по путям здесь нет намеренно. Он экономил несколько секунд
-# на коммитах в документацию, но создавал тупик: пока в webapp/ ничего
-# не менялось, сайт нельзя было перевыпустить — ни после включения Pages,
-# ни после упавшей сборки. Работа длится полминуты, экономить на ней нечего.
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -22,26 +20,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  check:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
       # Приложение грузится браузером без сборки: один синтаксически битый
       # файл рушит его целиком, и узнать об этом до публикации больше негде.
-      #
-      # Проверяем настоящим разбором ES-модуля: копия с расширением .mjs,
-      # дальше `node --check`. Так Node парсит файл как модуль и не выполняет
-      # его — иначе код сразу упёрся бы в document и localStorage, которых
-      # на сервере нет.
-      #
-      # Прошлая версия вырезала строки с import/export регуляркой и скармливала
-      # остаток в new Function. На многострочных импортах от них оставались
-      # хвосты вроде «} from '../store.js';», и проверка валилась на здоровом
-      # коде.
+      # Копия с расширением .mjs и `node --check` разбирает файл как модуль,
+      # не выполняя его.
       - name: Синтаксис модулей
         run: |
           mkdir -p /tmp/syn
@@ -60,6 +47,26 @@ jobs:
           [ "$bad" -eq 0 ]
         shell: bash
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Сервер и бот — чистая стандартная библиотека, ставить ничего не нужно.
+      - name: Тесты сервера
+        run: python -m unittest discover -s server/tests -v
+
+      - name: Тесты бота
+        run: python -m unittest discover -s bot/tests -v
+
+  deploy:
+    needs: check
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

@@ -1,10 +1,14 @@
-import { S, load, sub, emit, reportError, logEvent, setHome, viewCompany, ensurePerson, homeId } from './store.js';
+import {
+  S, load, loadServer, sub, emit, reportError, setHome, viewCompany, ensurePerson, homeId,
+  isServer, allCompanies, emps, co,
+} from './store.js';
 import { initTelegram, tgColorScheme, startParam, tgUser, tgId, tgUsername, tg } from './tg.js';
 import { adminAllowed, unlockWithCode } from './config.js';
 import { bindDelegation, on } from './bus.js';
-import { render, bootRoute, go, back, routes } from './router.js';
+import { render, bootRoute, go, back, routes, resetStack } from './router.js';
 import { $ } from './ui.js';
-import { syncOnBoot, pushCatalog } from './sync.js';
+import { connect, adopt, session, pushNow, pull } from './sync.js';
+import { parseStart, SECTIONS, enterCompany, enterAsClient } from './roles.js';
 
 /* ---------- тема ---------- */
 export function applyTheme() {
@@ -32,8 +36,8 @@ on('noop', () => { });
 
 /* ---------- сбор ошибок ----------
    Ошибки видит владелец платформы в Super Admin, а не только консоль
-   разработчика. В боевой версии тот же поток уходит на сервер —
-   меняется приёмник в reportError, не эти обработчики.
+   разработчика. В серверном режиме они уходят на сервер вместе с
+   остальными данными — меняется приёмник в reportError, не эти обработчики.
 ---------------------------------- */
 window.addEventListener('error', ev => {
   try {
@@ -52,60 +56,34 @@ window.addEventListener('unhandledrejection', ev => {
   } catch (e) { }
 });
 
-/* ---------- старт ---------- */
-async function boot() {
-  initTelegram();
-  load();
-  // сохранённая сессия не должна давать доступ к Super Admin без ключа
-  if (S.session.role === 'admin' && !adminAllowed(tgUser())) S.session.role = 'owner';
-  applyTheme();
-  bindDelegation();
+/* ---------- start-параметр ----------
+   Формат: <роль|компания>[_<раздел>] — c1_book, owner_cal, co_abc_my.
+   Идентификаторы компаний сами содержат подчёркивание (co_abc), поэтому
+   отрезаем только известный хвост раздела, а не первое подчёркивание.
+----------------------------------- */
+const tgName = () => { const u = tgUser(); return u ? [u.first_name, u.last_name].filter(Boolean).join(' ') : ''; };
+// Числовой id обязателен: бот узнаёт человека только по нему и без
+// него не покажет ему запись, сделанную в приложении.
+const tgIds = () => ({ tg: tgUsername(), tgId: tgId() });
 
-  await Promise.all([
-    import('./screens/owner.js'), import('./screens/clients.js'), import('./screens/more.js'),
-    import('./screens/ai.js'), import('./screens/client.js'), import('./screens/employee.js'),
-    import('./screens/admin.js'), import('./screens/onboarding.js'), import('./dev.js'),
-    import('./screens/business.js'), import('./screens/invite.js'),
-  ]);
-
-  // стартовый маршрут: параметр из ссылки бота, иначе роль сессии
-  // формат: <роль|компания>[_<раздел>] — например c1_book, owner_cal
-  const raw = (startParam() || new URLSearchParams(location.search).get('start') || '').toLowerCase();
-  const [sp, section] = raw.split('_');
-  const SECTIONS = {
-    client: { book: 'cl.book', my: 'cl.my', profile: 'cl.profile' },
-    owner: { cal: 'o.cal', clients: 'o.clients', sub: 'o.subscription', ai: 'ai.home', more: 'o.more' },
-    employee: { cal: 'e.cal', clients: 'e.clients' },
-  };
-  const tgName = () => { const u = tgUser(); return u ? [u.first_name, u.last_name].filter(Boolean).join(' ') : ''; };
-  // Числовой id обязателен: бот узнаёт человека только по нему и без
-  // него не покажет ему запись, сделанную в приложении.
-  const tgIds = () => ({ tg: tgUsername(), tgId: tgId() });
+/* ---------- маршрут по умолчанию: демо-режим (как раньше) ---------- */
+async function demoRoute(raw) {
+  const [sp, section] = parseStart(raw);
   let def = { r: 'o.home', p: {} };
-  // Приглашение в команду. Проверяем раньше салонов: идентификатор
-  // приглашения ни с каким салоном не совпадёт, но порядок важен для
-  // читающего — это отдельный вход, а не разновидность салонного.
   if (/^inv[a-z0-9]{8,}$/.test(sp)) { def = { r: 'inv.join', p: { id: sp } }; }
-  // ссылка салона — привязка. Ставится один раз и дальше живёт в сессии:
-  // салон, который привёл клиента, не теряет его из-за похода в каталог
   else if (S.data.companies.some(c => c.id === sp)) {
     S.session.role = 'client';
     setHome(sp);
     ensurePerson(tgName(), tgIds());
     def = { r: SECTIONS.client[section] || 'cl.company', p: {} };
   } else if (sp === 'admin') {
-    // панель Super Admin: только белый список Telegram ID или верный секретный код
     const key = new URLSearchParams(location.search).get('key');
     const ok = adminAllowed(tgUser()) || (key ? await unlockWithCode(key) : false);
     if (key) history.replaceState(null, '', location.pathname + location.hash);
     if (ok) { S.session.role = 'admin'; def = { r: 'sa.home', p: {} }; }
     else { S.session.role = 'owner'; def = { r: 'o.home', p: {} }; }
   }
-  // пришёл заводить бизнес: сначала витрина, а не сразу форма
   else if (sp === 'create') { def = { r: 'biz.start', p: {} }; }
-  // человек открыл бота сам, без ссылки салона. Каталога, куда его можно
-  // было бы отправить выбирать, больше нет, поэтому оставляем его в том
-  // салоне, где он уже был; для первого входа это демо-салон из сессии.
   else if (sp === 'client' || sp === 'find') {
     S.session.role = 'client';
     if (!homeId()) setHome(S.session.companyId);
@@ -129,46 +107,115 @@ async function boot() {
     const r = S.session.role;
     def = { r: r === 'client' ? 'cl.company' : r === 'employee' ? 'e.home' : r === 'admin' ? 'sa.home' : 'o.home', p: {} };
   }
-  // Личность дозаполняем при любом входе клиента, а не только по ссылке
-  // салона: в приложение заходят и с кнопки меню, где start-параметра нет,
-  // а без telegram-id бот потом не узнает автора записи.
   if (S.session.role === 'client') ensurePerson(tgName(), tgIds());
-
-  // Клиент всегда открывается на своём салоне. Своего салона может не быть
-  // только у старой сессии, заведённой во времена каталога, — тогда берём
-  // тот, что открыт сейчас: без салона клиентские экраны рисовать нечем.
   if (S.session.role === 'client') {
     if (!homeId()) setHome(S.session.companyId);
     viewCompany(homeId());
   }
+  return def;
+}
+
+/* ---------- маршрут по умолчанию: серверный режим ----------
+   Роль не выбирается в приложении — она следует из данных сервера:
+   есть карточка сотрудника с моим telegram-id — я в команде; открыл
+   ссылку салона — я его клиент; id в списке платформы — Super Admin.
+--------------------------------------------------------- */
+function serverRoute(raw) {
+  const ses = session() || {};
+  const [sp, section] = parseStart(raw);
+  const members = ses.memberships || [];
+  const known = cid => allCompanies().some(c => c.id === cid);
+
+  if (/^inv[a-z0-9]{8,}$/.test(sp)) return { r: 'inv.join', p: { id: sp } };
+  if (sp === 'admin' && ses.identity && ses.identity.isAdmin) {
+    S.session.role = 'admin';
+    const first = allCompanies()[0];
+    if (first) { S.session.companyId = first.id; const o = emps(first.id).find(e => e.isOwner); S.session.employeeId = o ? o.id : null; }
+    return { r: 'sa.home', p: {} };
+  }
+  // ссылка салона — всегда вход клиента, даже если это мой собственный салон:
+  // владелец так смотрит свою страницу глазами клиента
+  if (known(sp)) return enterAsClient(sp, section);
+
+  const cabinet = () => {
+    const last = S.session.lastCompanyId;
+    const pick = members.find(m => m.companyId === last) || members.find(m => m.isOwner) || members[0];
+    return pick ? enterCompany(pick.companyId, { section }) : null;
+  };
+
+  if (sp === 'owner' || sp === 'biz' || sp === 'business' || sp === 'employee' || sp === 'staff') {
+    const r = cabinet(); if (r) return r;
+  }
+  if (sp === 'create') return { r: 'biz.start', p: {} };
+  if (sp === 'onboarding') return { r: 'onb', p: {} };
+  if (sp === 'client' || sp === 'find') {
+    const home = ses.home && known(ses.home) ? ses.home : (ses.bound || []).find(known);
+    if (home) return enterAsClient(home, section);
+  }
+  // без параметра: кабинет, если есть; иначе свой салон; иначе витрина
+  const r = cabinet(); if (r) return r;
+  const home = ses.home && known(ses.home) ? ses.home : (ses.bound || []).find(known);
+  if (home) return enterAsClient(home, section);
+  return { r: 'biz.start', p: {} };
+}
+
+/* ---------- старт ---------- */
+async function boot() {
+  initTelegram();
+  bindDelegation();
+
+  const raw = (startParam() || new URLSearchParams(location.search).get('start') || '').toLowerCase();
+
+  // Сначала пробуем сервер. Нет сервера или не прошла подпись — демо на
+  // localStorage, как раньше. Ждём ответ до отрисовки: иначе человек на
+  // секунду увидит чужие демо-данные вместо своих.
+  let ses = null;
+  try { ses = await connect(raw); } catch (e) { ses = null; }
+
+  await Promise.all([
+    import('./screens/owner.js'), import('./screens/clients.js'), import('./screens/more.js'),
+    import('./screens/ai.js'), import('./screens/client.js'), import('./screens/employee.js'),
+    import('./screens/admin.js'), import('./screens/onboarding.js'), import('./dev.js'),
+    import('./screens/business.js'), import('./screens/invite.js'),
+  ]);
+
+  let def;
+  if (ses) {
+    loadServer();
+    adopt(ses);
+    def = serverRoute(raw);
+    document.body.dataset.server = '1';
+    // кнопка демо-панели рисовалась при импорте, до того как стал известен режим
+    try { (await import('./dev.js')).mountFab(); } catch (e) { }
+  } else {
+    load();
+    // сохранённая сессия не должна давать доступ к Super Admin без ключа
+    if (S.session.role === 'admin' && !adminAllowed(tgUser())) S.session.role = 'owner';
+    def = await demoRoute(raw);
+  }
+  applyTheme();
 
   // ссылка из адресной строки не должна открывать экран чужой роли
-  // Сотруднику открыты и разделы салона: настоящий гейт теперь не этот
-  // список, а право маршрута (perm) — оно работает и на переходах, и на
-  // адресе из строки браузера, а раньше проверки не было вовсе.
-  // витрина для бизнеса (biz.) открыта всем: на неё приходят до того,
-  // как у человека появилась хоть какая-то роль
   const ROLE_OK = {
     owner: /^(o\.|ai\.|biz\.|inv\.|onb$)/, employee: /^(e\.|o\.|ai\.|biz\.|inv\.|onb$)/,
     client: /^(cl\.|biz\.|inv\.|onb$)/, admin: /^(sa\.|o\.|ai\.|biz\.|inv\.|onb$)/,
   };
   const h = location.hash.replace(/^#\/?/, '').split('?')[0];
   if (h && !(ROLE_OK[S.session.role] || /./).test(h)) location.hash = '';
+  // в серверном режиме стартовый экран решают данные, а не старый адрес в строке:
+  // роль могла поменяться (пригласили в команду, открыли другой салон)
+  if (ses && h && !h.startsWith('inv.')) location.hash = '';
 
   sub(() => render(false));
-  // Справочник уходит на сервер после любого изменения данных, с задержкой:
-  // бот читает оттуда салоны и услуги. Если сервера нет, sync молча
-  // отключается — приложение работает на localStorage, как раньше.
-  sub(() => pushCatalog());
   $('#boot') && $('#boot').remove();
   bootRoute(def);
-  // Записи из чата бота подтягиваем после первой отрисовки, чтобы не
-  // задерживать открытие: сеть может и не ответить.
-  syncOnBoot().catch(() => { });
-  window.addEventListener('resize', () => { });
+  if (ses) {
+    // не отправленное с прошлого раза и свежие чужие изменения
+    pushNow().then(() => pull()).catch(() => { });
+  }
 }
 
 boot();
 
 // отладочный доступ из консоли
-window.__zapis = { S, go, emit, applyTheme };
+window.__zapis = { S, go, emit, applyTheme, resetStack, enterCompany, enterAsClient, isServer };

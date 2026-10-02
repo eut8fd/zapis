@@ -12,18 +12,19 @@
    второй раз спрашивать незачем. Телефон Telegram отдаёт только по явному
    согласию, отдельным запросом: есть метод — кнопка, нет — поле для ввода.
    ========================================================= */
-import { S, co, acceptInvite, inviteById, inviteState, ROLES, emit } from '../store.js';
+import { S, co, acceptInvite, inviteById, inviteState, ROLES, emit, isServer } from '../store.js';
+import { enterCompany } from '../roles.js';
 import { esc, sheet, toast, avatar, loadingBlock, wait, t } from '../ui.js';
 import { icon } from '../icons.js';
 import { route, go, render, resetStack } from '../router.js';
 import { on } from '../bus.js';
 import { haptic, tgUsername, tgFullName, tgId, requestPhone, canRequestPhone } from '../tg.js';
-import { fetchInvite, patchInvite } from '../sync.js';
+import { fetchInvite, patchInvite, acceptInviteOnServer, session } from '../sync.js';
 
 const rr = () => render(false);
 
 // Состояние экрана: приглашение ещё грузится, уже загружено или не найдено.
-const st = { id: null, loading: true, inv: null, name: '', phone: '', asked: false };
+const st = { id: null, loading: true, inv: null, name: '', phone: '', asked: false, dead: null };
 
 /** Открыть экран приглашения. Зовётся из main.js по ссылке. */
 export function openInvite(id) {
@@ -41,13 +42,19 @@ route('inv.join', {
   async mount(p) {
     const id = p.id || st.id;
     // Пришли прямо по ссылке — состояние ещё пустое, поднимаем его здесь.
-    if (id !== st.id) { st.id = id; st.loading = true; st.inv = null; st.phone = ''; }
-    if (!st.name) st.name = tgFullName();
+    if (id !== st.id) { st.id = id; st.loading = true; st.inv = null; st.phone = ''; st.dead = null; }
+    // имя — из Telegram; вне Telegram сервер знает его из dev-входа
+    if (!st.name) st.name = tgFullName() || (((session() || {}).identity || {}).name) || '';
     if (!st.loading) return;
     // Сначала смотрим у себя: владелец, открывший собственную ссылку,
     // не должен ждать сети.
     let inv = inviteById(id);
-    if (!inv) inv = await fetchInvite(id);
+    if (!inv) {
+      const r = await fetchInvite(id);
+      // сервер отдаёт приглашение вместе с публичной карточкой компании
+      inv = r && r.invite ? r.invite : null;
+      if (r && r.state && r.state !== 'активна') st.dead = r.state;
+    }
     st.inv = inv;
     st.loading = false;
     rr();
@@ -57,7 +64,7 @@ route('inv.join', {
       return `<div class="wrap" style="padding-top:80px">${loadingBlock(t('Проверяем приглашение…'))}</div>`;
     }
     const inv = st.inv;
-    const state = inviteState(inv);
+    const state = st.dead || inviteState(inv);
     if (state !== 'активна') return dead(state);
 
     const c = co(inv.companyId);
@@ -154,6 +161,21 @@ on('inv.accept', async () => {
   capture();
   if (!String(st.name).trim()) { toast(t('Введите имя'), 'dan'); return; }
   const sh = sheet({ title: t('Входим в команду'), body: loadingBlock(t('Оформляем…')) });
+  if (isServer()) {
+    // Приглашение гасит сервер: он же заводит карточку и выдаёт свежую
+    // сессию, где человек уже в команде.
+    let res = null;
+    try { res = await acceptInviteOnServer(st.id, { name: st.name, phone: st.phone }); }
+    catch (e) { res = { ok: false, why: e.message }; }
+    sh.close();
+    if (!res || !res.ok) { toast(t('Ссылка не работает'), 'dan'); st.dead = (res && res.why) || 'нет'; rr(); return; }
+    const r = enterCompany(res.employee.companyId) || { r: 'e.home' };
+    emit();
+    haptic('success');
+    toast(t('Добро пожаловать в команду'));
+    resetStack(r.r);
+    return;
+  }
   await wait(900);
   const res = acceptInvite(st.id, {
     name: st.name, phone: st.phone,

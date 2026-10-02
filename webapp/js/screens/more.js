@@ -10,8 +10,11 @@
   catalogReady, catalogMissing, setLang, can, me,
   createInvite, invites, inviteState, revokeInvite, employeeAccess, ROLES as ACCESS,
   tickets, addTicket, replyTicket, TICKET_STATUS, TICKET_TOPICS,
-  companyInbox, unreadInbox, markInboxRead, markInboxAllRead, INBOX_KINDS,
+  companyInbox, unreadInbox, markInboxRead, markInboxAllRead, INBOX_KINDS, isServer,
 } from '../store.js';
+import { pushNow, serverInfo, session, botName } from '../sync.js';
+import { api } from '../api.js';
+import { enterCompany } from '../roles.js';
 import {
   esc, money, moneyShort, hhmm, dateLabel, relPast, avatar, emptyState, sheet, toast, promptSheet,
   confirmSheet, demoNote, segmented, bars, sparkline, donut, progress, nMin, nAppt, nVisit, dayKey, startOfDay,
@@ -208,7 +211,7 @@ on('tm.inviteFor', ds => {
   setTimeout(() => showInvite(inv.id), open ? 260 : 0);
 });
 
-const inviteLink = id => 'https://t.me/' + BOT_USERNAME + '?start=' + id;
+const inviteLink = id => 'https://t.me/' + botName() + '?start=' + id;
 
 async function showInvite(id) {
   const inv = invites().find(i => i.id === id);
@@ -538,7 +541,7 @@ route('o.employee', {
       const c = client(a.clientId);
       return `<button class="appt press" style="--c:${apptColor(a)};width:100%;text-align:left" data-a="ap.card" data-id="${a.id}">
           <div class="t">${hhmm(new Date(a.start))}<small>${a.duration}м</small></div>
-          <div class="grow"><div class="n">${esc(c.name)}</div><div class="s">${esc(apptTitle(a))}</div></div>
+          <div class="grow"><div class="n">${esc(c ? c.name : 'Клиент')}</div><div class="s">${esc(apptTitle(a))}</div></div>
           <div class="b sm">${moneyShort(a.price)}</div></button>`;
     }).join('') : `<div class="card pad center sm muted">Записей на сегодня нет</div>`}</div>
     </div>
@@ -1708,8 +1711,8 @@ route('o.broadcasts', {
         <div class="hr"></div>
         <div class="row" style="gap:16px">
           <div><div class="tiny dim">Получили</div><div class="b sm">${b.to}</div></div>
-          <div><div class="tiny dim">Открыли</div><div class="b sm">${b.open}</div></div>
-          <div><div class="tiny dim">Записались</div><div class="b sm" style="color:var(--ok)">${b.booked}</div></div>
+          ${b.real ? '' : `<div><div class="tiny dim">Открыли</div><div class="b sm">${b.open}</div></div>
+          <div><div class="tiny dim">Записались</div><div class="b sm" style="color:var(--ok)">${b.booked}</div></div>`}
           <div class="grow"></div>
           <div class="tiny dim">${relPast(new Date(b.sentAt), now())}</div>
         </div>
@@ -1761,7 +1764,9 @@ export function broadcastFlow(pre = {}) {
           <div class="ic" style="background:var(--p-soft);color:var(--p)">${icon('users', 18)}</div>
           <div class="grow"><div class="tl">${audience().t}</div><div class="st">${audience().n} получателей</div></div>
         </div>
-        <div class="tiny dim" style="margin-top:10px">В демо-режиме сообщения не уходят в Telegram — показываем реалистичный результат.</div>`,
+        <div class="tiny dim" style="margin-top:10px">${isServer()
+          ? 'Сообщение придёт клиентам от бота. Получат те, кто открывал бота: у остальных Telegram не знает чата.'
+          : 'В демо-режиме сообщения не уходят в Telegram — показываем реалистичный результат.'}</div>`,
       footer: `<div class="btns"><button class="btn gh" data-a="bc.test">Тест себе</button><button class="btn p" data-a="bc.send">Отправить</button></div>`,
     });
     else if (st.step === 4) s.set({
@@ -1774,12 +1779,12 @@ export function broadcastFlow(pre = {}) {
           <div class="t">Отправлено</div>
           <div class="s">${st.res.to} ${plural(st.res.to, ['клиенту', 'клиентам', 'клиентам'])}</div>
         </div>
-        <div class="grid3" style="margin-top:6px">
+        ${isServer() ? `<div class="tiny dim center" style="margin-top:6px">Сообщения поставлены в очередь бота и уйдут в ближайшую минуту.</div>` : `<div class="grid3" style="margin-top:6px">
           <div class="st-card center"><div class="v">${st.res.to}</div><div class="l">получили</div></div>
           <div class="st-card center"><div class="v">${st.res.open}</div><div class="l">открыли</div></div>
           <div class="st-card center"><div class="v" style="color:var(--ok)">${st.res.booked}</div><div class="l">записались</div></div>
         </div>
-        <div class="tiny dim center" style="margin-top:12px">Результат обновляется в разделе «Рассылки»</div>`,
+        <div class="tiny dim center" style="margin-top:12px">Результат обновляется в разделе «Рассылки»</div>`}`,
       footer: `<button class="btn p" data-a="bc.done">Понятно</button>`,
     });
   };
@@ -1807,11 +1812,34 @@ export function broadcastFlow(pre = {}) {
     m.value = storyVariants(st.aud === 'lost' ? 'back' : 'gaps')[Math.floor(Math.random() * 3)];
     m.disabled = false; haptic('success');
   });
-  on('bc.test', () => demoNote('Тестовая отправка', 'В демо-версии сообщения не уходят в Telegram по-настоящему — рассылка симулируется, чтобы показать весь сценарий целиком.', 'В рабочей версии тест приходит вам в личные сообщения от бота.'));
+  on('bc.test', async () => {
+    if (!isServer()) {
+      demoNote('Тестовая отправка', 'В демо-версии сообщения не уходят в Telegram по-настоящему — рассылка симулируется, чтобы показать весь сценарий целиком.', 'В рабочей версии тест приходит вам в личные сообщения от бота.');
+      return;
+    }
+    try {
+      await api.broadcast({ companyId: cid(), title: st.title, text: st.text, test: true });
+      toast('Тест отправлен вам в чат с ботом');
+    } catch (e) { toast(e.message || 'Не удалось отправить', 'dan'); }
+  });
   on('bc.send', async () => {
     st.step = 4; draw();
-    await wait(1600);
     const n = audience().n;
+    if (isServer()) {
+      // Настоящая отправка: сервер рассылает от имени бота тем клиентам,
+      // у кого известен telegram-id. «Открыли» Telegram не сообщает.
+      try {
+        const r = await api.broadcast({ companyId: cid(), title: st.title, text: st.text,
+          clientIds: audience().list.map(c => c.id) });
+        st.res = { to: r.to, open: 0, booked: 0 };
+        addBroadcast({ title: st.title, text: st.text, to: r.to, open: 0, booked: 0, real: true });
+      } catch (e) {
+        st.step = 3; draw(); toast(e.message || 'Не удалось отправить', 'dan'); return;
+      }
+      st.step = 5; draw(); haptic('success');
+      return;
+    }
+    await wait(1600);
     const open = Math.round(n * (0.55 + Math.random() * 0.2));
     const booked = Math.max(1, Math.round(open * (0.12 + Math.random() * 0.12)));
     st.res = { to: n, open, booked };
@@ -1842,9 +1870,13 @@ route('o.subscription', {
         <div class="tm" style="font-size:30px">${esc(c.plan)}</div>
         <div class="sv">${days > 0 ? 'Активен до ' + new Date(c.planUntil).getDate() + ' ' + MONTHS[new Date(c.planUntil).getMonth()] : 'Подписка истекла'}</div>
         <div class="hero-meta"><span>${icon('users', 13, 2)} ${emps().length} сотрудников</span><span>${icon('calendar', 13, 2)} ${s30.count} записей за месяц</span></div>
-        <button class="btn" data-a="sub.pay" data-p="${c.plan}">${days > 0 ? 'Продлить на месяц' : 'Оплатить'}</button>
+        <button class="btn" data-a="sub.pay" data-p="${c.plan}">${isServer() ? 'Продлить подписку' : (days > 0 ? 'Продлить на месяц' : 'Оплатить')}</button>
       </div>
     </div>
+    ${isServer() && serverInfo().paymentNote ? `<div class="wrap sec"><div class="card pad row" style="gap:10px">
+      <span style="color:var(--p)">${icon('card', 19)}</span>
+      <div class="sm" style="color:var(--tx-2);line-height:1.5">${esc(serverInfo().paymentNote)}</div>
+    </div></div>` : ''}
     ${days < 10 ? `<div class="wrap sec"><div class="card pad" style="border-color:var(--dan-soft);background:var(--dan-soft)">
       <div class="row" style="gap:8px;color:var(--dan)">${icon('alert', 18)}<b class="sm">${days > 0 ? 'Осталось ' + days + ' ' + plural(days, ['день', 'дня', 'дней']) : 'Подписка истекла'}</b></div>
       <div class="sm" style="margin-top:6px;color:var(--tx-2)">После окончания страница записи перестанет принимать новых клиентов.</div>
@@ -1862,10 +1894,44 @@ route('o.subscription', {
         </div>`).join('')}
       </div>
     </div>
-    <div class="wrap sec"><div class="tiny dim center">Оплата в демо-режиме симулируется. В продакшене — Telegram Payments или Kaspi.</div></div>`;
+    <div class="wrap sec"><div class="tiny dim center">${isServer()
+      ? 'Оплата по заявке: вы отправляете запрос, поддержка выставляет счёт и продлевает подписку после оплаты.'
+      : 'Оплата в демо-режиме симулируется. В продакшене — Telegram Payments или Kaspi.'}</div></div>`;
   },
 });
+
+/* Заявка на оплату. Платёжного провайдера пока нет, и делать вид, что
+   платёж прошёл, нельзя: владелец отправляет заявку, поддержка платформы
+   получает её сообщением, выставляет счёт и продлевает подписку в панели. */
+async function paymentRequest(p, { switching = false } = {}) {
+  const c = co();
+  const per = (PERIODS[p.period] || PERIODS.month).t;
+  const note = serverInfo().paymentNote;
+  const ok = await confirmSheet({
+    title: switching ? 'Перейти на ' + p.name + '?' : 'Продлить подписку?',
+    text: money(p.price) + ' за ' + per + '.\n\n' + (note || 'Мы свяжемся с вами в Telegram, пришлём счёт и продлим подписку сразу после оплаты.'),
+    ok: switching ? 'Отправить заявку' : 'Запросить счёт',
+  });
+  if (!ok) return;
+  addTicket({
+    topic: 'billing', from: 'company',
+    subject: (switching ? 'Переход на тариф ' : 'Продление подписки ') + p.name,
+    text: `Компания «${c.name}» (${c.id}). Тариф ${p.name}, ${money(p.price)} за ${per}. Текущий тариф ${c.plan}, оплачен до ${new Date(c.planUntil).toLocaleDateString('ru-RU')}.`,
+  });
+  await pushNow();
+  sheet({
+    title: 'Заявка отправлена',
+    body: `<div class="succ" style="padding:10px 0 16px">
+        <div class="check">${icon('check', 44, 3)}</div>
+        <div class="t" style="font-size:20px">Поддержка получила заявку</div>
+        <div class="s">${note ? esc(note) : 'Ответ придёт сообщением от бота и в раздел «Поддержка». После оплаты подписка продлится автоматически.'}</div>
+      </div>`,
+    footer: `<button class="btn p" data-a="nav" data-r="o.support">Открыть обращения</button>`,
+  });
+}
+
 on('sub.pay', async ds => {
+  if (isServer()) { const p = planById(co().plan) || plans()[0]; if (p) paymentRequest(p); return; }
   const s = sheet({ title: 'Оплата', body: loadingBlock('Проводим платёж…') });
   await wait(1500);
   const days = extendPlan(cid());
@@ -1874,6 +1940,7 @@ on('sub.pay', async ds => {
 on('sub.switch', async ds => {
   const p = planById(ds.p);
   if (!p) return;
+  if (isServer()) { paymentRequest(p, { switching: true }); return; }
   const per = (PERIODS[p.period] || PERIODS.month).t;
   const ok = await confirmSheet({ title: 'Перейти на ' + p.name + '?', text: money(p.price) + ' за ' + per + '. Спишем сразу после подтверждения.', ok: 'Перейти' });
   if (!ok) return;
@@ -1942,12 +2009,16 @@ route('o.settings', {
       </div>
     </div></div>
 
-    <div class="wrap sec"><div class="stack s">
-      ${row('shield', 'Демо-режим', 'Роли, компании, тестовая дата', 'dev.open')}
-      ${row('refresh', 'Сбросить демо-данные', 'Вернуть исходное состояние', 'set.reset')}
-    </div></div>
+    ${companiesSection()}
 
-    <div class="wrap sec"><div class="center tiny dim" data-a="set.secret" style="padding:10px;user-select:none">Zapis · демо-версия 2.0<br>Все данные хранятся только на вашем устройстве</div></div>`;
+    ${isServer() && !(session() && session().identity && session().identity.isAdmin) ? '' : `<div class="wrap sec"><div class="stack s">
+      ${row('shield', 'Демо-режим', 'Роли, компании, тестовая дата', 'dev.open')}
+      ${isServer() ? '' : row('refresh', 'Сбросить демо-данные', 'Вернуть исходное состояние', 'set.reset')}
+    </div></div>`}
+
+    <div class="wrap sec"><div class="center tiny dim" data-a="set.secret" style="padding:10px;user-select:none">${isServer()
+      ? 'Zapis · версия 3.0<br>Данные хранятся на сервере и доступны с любого устройства'
+      : 'Zapis · демо-версия 2.0<br>Все данные хранятся только на вашем устройстве'}</div></div>`;
   },
 });
 /* Салон попадает в справочник, из которого бот берёт его страницу
@@ -1966,6 +2037,31 @@ function catalogSection(c) {
     </div>
   </div>`;
 }
+
+/* Человек может работать в нескольких компаниях — владелец одной, мастер
+   в другой. Переключатель виден только тогда, когда их больше одной. */
+function companiesSection() {
+  if (!isServer()) return '';
+  const members = (session() || {}).memberships || [];
+  if (members.length < 2) return '';
+  return `<div class="wrap sec">
+    <div class="sec-t" style="margin-bottom:8px">Мои компании</div>
+    <div class="stack s">
+      ${members.map(m => `<button class="lrow press" style="border-radius:16px;border:1.5px solid ${m.companyId === cid() ? 'var(--p)' : 'var(--bd)'};width:100%;${m.companyId === cid() ? 'background:var(--p-soft)' : ''}" data-a="set.switchCo" data-id="${m.companyId}">
+        <div class="ic" style="${m.companyId === cid() ? 'background:var(--p);color:#fff' : ''}">${icon('building', 18)}</div>
+        <div class="grow" style="text-align:left"><div class="tl">${esc(m.companyName)}</div>
+          <div class="st">${m.isOwner ? 'Владелец' : (ACCESS[m.access] || ACCESS.staff).t}</div></div>
+        ${m.companyId === cid() ? `<span style="color:var(--p)">${icon('checkCircle', 19)}</span>` : icon('fwd', 17)}
+      </button>`).join('')}
+    </div>
+  </div>`;
+}
+on('set.switchCo', ds => {
+  const r = enterCompany(ds.id);
+  if (!r) return;
+  emit(); toast('Компания переключена');
+  go(r.r, {}, { root: true });
+});
 
 const row = (ic, t, s, a, extra = '') => `<button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="${a}" ${extra}>
   <div class="ic">${icon(ic, 18)}</div>
@@ -2200,24 +2296,58 @@ on('ch.apply', async () => {
   emit(); window.__ch.s.close(); toast('График применён ко всем');
 });
 
+/* Какие уведомления шлёт сервер по записям этой компании. Настройка
+   лежит в карточке компании (company.notify) и уходит на сервер вместе
+   с ней; сервер читает её при планировании каждого напоминания. */
+const NOTIFY_OPTS = [
+  ['rem24', 'За 24 часа до визита', 'Клиенту, вечером накануне'],
+  ['rem2', 'За 2 часа до визита', 'Клиенту, в день визита'],
+  ['review', 'После визита — просьба об отзыве', 'Клиенту, через полтора часа после'],
+  ['digest', 'Мастеру — сводка на день', 'Каждому мастеру утром, если есть записи'],
+];
+const notifyOf = (c = co()) => ({ rem24: true, rem2: true, review: true, digest: false, ...(c.notify || {}) });
 on('set.reminders', () => {
-  sheet({
-    title: 'Напоминания',
-    body: `<div class="stack s">
-      ${['За 24 часа до визита', 'За 2 часа до визита', 'После визита — просьба об отзыве', 'Мастеру — сводка на день'].map((t, i) => `
-        <div class="lrow" style="border-radius:14px;border:1px solid var(--bd)">
-          <div class="ic" style="background:var(--p-soft);color:var(--p)">${icon('bell', 18)}</div>
-          <div class="grow"><div class="tl" style="font-size:13.5px">${t}</div></div>
-          <button class="sw ${i < 3 ? 'on' : ''}" data-a="rm.t"></button></div>`).join('')}
-    </div>
-    <div class="tiny dim" style="margin-top:10px">Напоминания за 24 часа и за 2 часа бот отправляет сам. Проверить очередь можно в самом боте — «Очередь напоминаний».</div>`,
-    footer: `<button class="btn p" data-a="rm.test">${icon('send', 17)}Отправить тестовое</button>`,
-  });
+  const s = sheet({ title: 'Напоминания', body: '' });
+  const draw = () => {
+    const n = notifyOf();
+    s.set({
+      title: 'Напоминания',
+      body: `<div class="stack s">
+        ${NOTIFY_OPTS.map(([k, title, sub]) => `
+          <div class="lrow" style="border-radius:14px;border:1px solid var(--bd)">
+            <div class="ic" style="background:var(--p-soft);color:var(--p)">${icon('bell', 18)}</div>
+            <div class="grow"><div class="tl" style="font-size:13.5px">${title}</div><div class="st">${sub}</div></div>
+            <button class="sw ${n[k] ? 'on' : ''}" data-a="rm.t" data-k="${k}"></button></div>`).join('')}
+      </div>
+      <div class="tiny dim" style="margin-top:10px">${isServer()
+        ? 'Сообщения отправляет бот от имени салона. Клиент получает их, если открывал бота хотя бы раз — именно так он и попадает на страницу записи.'
+        : 'В демо напоминания не уходят: нет сервера, который их отправит. В рабочей версии их шлёт бот.'}</div>`,
+      footer: `<button class="btn p" data-a="rm.test">${icon('send', 17)}Отправить тестовое</button>`,
+    });
+  };
+  window.__rm = { s, draw };
+  draw();
 });
-on('rm.t', (ds, el) => el.classList.toggle('on'));
-on('rm.test', () => demoNote('Напоминания',
-  'Бот шлёт напоминания за 24 часа и за 2 часа — и по записям из чата, и по записям из приложения: они попадают в общий склад на сервере, и бот их видит.',
-  'Если сервер не запущен, приложение работает на localStorage — тогда до бота записи не доходят и напоминаний по ним не будет.'));
+on('rm.t', ds => {
+  const c = co();
+  const n = notifyOf(c);
+  n[ds.k] = !n[ds.k];
+  c.notify = n;
+  emit();
+  if (window.__rm) window.__rm.draw();
+});
+on('rm.test', async () => {
+  if (!isServer()) {
+    demoNote('Напоминания',
+      'В демо-версии напоминания не отправляются: нет сервера, который бы их отослал. В рабочей версии бот шлёт их за 24 часа и за 2 часа до визита, а также просит оценить визит после.',
+      'Запустите server/serve.py с токеном бота — и это сообщение станет настоящим.');
+    return;
+  }
+  try {
+    await api.notifyTest();
+    toast('Отправили вам сообщение в чат с ботом');
+  } catch (e) { toast(e.message || 'Не удалось отправить', 'dan'); }
+});
 on('set.ai', () => {
   const s = sheet({
     title: 'AI-помощник',

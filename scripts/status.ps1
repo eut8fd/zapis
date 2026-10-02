@@ -40,11 +40,11 @@ if ($url) {
   }
 }
 
-$bookings = "$root\bot\bookings.json"
-if (Test-Path $bookings) {
-  $n = (Get-Content $bookings -Raw | ConvertFrom-Json).Count
+$db = "$root\.run\zapis.db"
+if (Test-Path $db) {
+  $mb = [math]::Round((Get-Item $db).Length / 1MB, 2)
   Write-Host ''
-  Write-Host "  записей через бота: $n" -ForegroundColor DarkGray
+  Write-Host "  база сервера: .run\zapis.db ($mb МБ)" -ForegroundColor DarkGray
 }
 
 Write-Host ''

@@ -1,6 +1,6 @@
 import {
   S, co, cid, emp, staff, client, clients, appts, apptTitle, apptColor, apptEnd, now, today,
-  todayStats, empStats, nextAppt, dayAppts, clientStats, workDay, me, can, addStaffTicket, updateEmployee,
+  todayStats, empStats, nextAppt, dayAppts, clientStats, workDay, me, can, addStaffTicket, updateEmployee, isServer,
 } from '../store.js';
 import {
   esc, money, moneyShort, hhmm, dateLabel, relPast, avatar, greet, emptyState, nMin, nAppt, nVisit,
@@ -139,9 +139,9 @@ route('e.profile', {
       <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="emp.svcs" data-id="${e.id}">
         <div class="ic" style="background:var(--ai-soft);color:var(--ai)">${icon('briefcase', 18)}</div>
         <div class="grow" style="text-align:left"><div class="tl">Мои услуги</div><div class="st">${e.serviceIds.length} услуг</div></div>${icon('fwd', 17)}</button>
-      <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="dev.open">
+      ${isServer() ? '' : `<button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="dev.open">
         <div class="ic">${icon('shield', 18)}</div>
-        <div class="grow" style="text-align:left"><div class="tl">Демо-режим</div><div class="st">Сменить роль или компанию</div></div>${icon('fwd', 17)}</button>
+        <div class="grow" style="text-align:left"><div class="tl">Демо-режим</div><div class="st">Сменить роль или компанию</div></div>${icon('fwd', 17)}</button>`}
     </div></div>
 
     ${quietSection()}`;

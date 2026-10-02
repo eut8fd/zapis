@@ -36,10 +36,10 @@ Step 'Копирую проект'
 foreach ($d in @('webapp', 'bot', 'server', 'scripts')) {
   Copy-Item -LiteralPath (Join-Path $root $d) -Destination (Join-Path $Out $d) -Recurse -Force
 }
-# локальные данные тестов на новую машину не тащим
-foreach ($f in @('bot\users.json', 'bot\bookings.json')) {
+# локальные данные на новую машину не тащим: база и telegram-id людей
+foreach ($f in @('bot\users.json', '.run')) {
   $p = Join-Path $Out $f
-  if (Test-Path $p) { Remove-Item -LiteralPath $p -Force }
+  if (Test-Path $p) { Remove-Item -LiteralPath $p -Recurse -Force }
 }
 Get-ChildItem $Out -Recurse -Directory -Filter '__pycache__' | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 $n = (Get-ChildItem $Out -Recurse -File | Measure-Object).Count

@@ -1,5 +1,7 @@
 // Скрытая DEV-панель: роли, компании, тестовая дата, тестовые уведомления.
-import { S, emit, sub, now, allCompanies, emps, clients, staff, autoComplete, reset, nextAppt, co, client, apptTitle, setHome, isManager, setRole } from './store.js';
+import { S, emit, sub, now, allCompanies, emps, clients, staff, autoComplete, reset, nextAppt, co, client, apptTitle, setHome, isManager, setRole, isServer } from './store.js';
+import { session } from './sync.js';
+import { api } from './api.js';
 import { sheet, toast, esc, confirmSheet, hhmm, dateLabel, money, avatar, plural } from './ui.js';
 import { icon } from './icons.js';
 import { on } from './bus.js';
@@ -31,18 +33,58 @@ const TIME = [
   ['+7 дней', 7 * 86400000], ['−1 день', -86400000],
 ];
 
-/* кнопка вызова панели */
-function mountFab() {
+/* кнопка вызова панели. В серверном режиме панель — инструмент
+   администратора платформы: обычному владельцу переключать роли незачем,
+   а клиенту — тем более. */
+const adminHere = () => !!(session() && session().identity && session().identity.isAdmin);
+export function mountFab() {
   const host = document.querySelector('#devdock');
+  if (!host) return;
+  if (isServer() && !adminHere()) { host.innerHTML = ''; return; }
   host.innerHTML = `<button class="dev-fab ${S.shift ? 'on' : ''}" data-a="dev.open" title="Демо-панель">${icon('shield', 19)}</button>`;
 }
 mountFab();
 sub(mountFab);
 
 on('dev.open', () => {
-  const s = sheet({ title: 'Демо-панель', body: body() });
+  if (isServer() && !adminHere()) return;
+  const s = sheet({ title: isServer() ? 'Панель администратора' : 'Демо-панель', body: isServer() ? serverBody() : body() });
   window.__dev = s;
 });
+
+/* Панель в серверном режиме: открыть любую компанию как её владелец,
+   зайти в Super Admin, загрузить демо-данные на пустой сервер, проверить
+   доставку сообщений. Без сброса: удалять данные людей отсюда нельзя. */
+function serverBody() {
+  const cs = allCompanies();
+  return `
+  <div class="tiny muted b" style="margin-bottom:8px">РЕЖИМ</div>
+  <div class="role-grid" style="margin-bottom:18px">
+    <button class="role ${S.session.role !== 'admin' ? 'on' : ''}" data-a="dev.asOwner"><div class="t">Кабинет компании</div><div class="s">Глазами владельца</div></button>
+    <button class="role ${S.session.role === 'admin' ? 'on' : ''}" data-a="dev.role" data-v="admin"><div class="t">Super Admin</div><div class="s">Панель платформы</div></button>
+  </div>
+  <div class="tiny muted b" style="margin-bottom:8px">КОМПАНИЯ</div>
+  <div class="stack s" style="margin-bottom:18px">
+    ${cs.length ? cs.map(c => `<button class="lrow press" style="border-radius:14px;border:1.5px solid ${S.session.companyId === c.id ? 'var(--p)' : 'var(--bd)'};width:100%;${S.session.companyId === c.id ? 'background:var(--p-soft)' : ''}" data-a="dev.co" data-id="${c.id}">
+      ${avatar({ initials: c.initials, color: c.color, photo: c.logo }, 's', 'av-sq')}
+      <div class="grow" style="text-align:left"><div class="tl">${esc(c.name)}</div>
+        <div class="st">${emps(c.id).length} сотр. · ${clients(c.id).length} клиентов · ${c.plan}</div></div>
+      ${S.session.companyId === c.id ? `<span style="color:var(--p)">${icon('checkCircle', 19)}</span>` : ''}
+    </button>`).join('') : '<div class="sm muted">Компаний на сервере пока нет.</div>'}
+  </div>
+  <div class="tiny muted b" style="margin-bottom:8px">СЕРВЕР</div>
+  <div class="stack s">
+    <button class="lrow press" style="border-radius:14px;border:1px solid var(--bd);width:100%" data-a="dev.notifyTest">
+      <div class="ic" style="background:var(--p-soft);color:var(--p)">${icon('bell', 18)}</div>
+      <div class="grow" style="text-align:left"><div class="tl">Тестовое сообщение себе</div>
+        <div class="st">Проверить, что бот и адрес приложения настроены</div></div></button>
+    <button class="lrow press" style="border-radius:14px;border:1px solid var(--bd);width:100%" data-a="dev.seed">
+      <div class="ic" style="background:var(--ok-soft);color:var(--ok)">${icon('play', 18)}</div>
+      <div class="grow" style="text-align:left"><div class="tl">Загрузить демо-компании</div>
+        <div class="st">Beauty Studio Lumière, BLADE и другие — для показа</div></div></button>
+  </div>
+  <div class="tiny dim center" style="margin-top:14px">Панель видна только администраторам платформы.</div>`;
+}
 
 function body() {
   const cs = allCompanies().filter(c => !c.id.startsWith('bg'));
@@ -97,7 +139,39 @@ function body() {
   <div class="tiny dim center" style="margin-top:14px">Панель нужна только для демонстрации.<br>В продакшене она отключена.</div>`;
 }
 
-function redraw() { if (window.__dev) window.__dev.set({ title: 'Демо-панель', body: body() }); }
+function redraw() { if (window.__dev) window.__dev.set({ title: isServer() ? 'Панель администратора' : 'Демо-панель', body: isServer() ? serverBody() : body() }); }
+
+on('dev.asOwner', () => {
+  const c = allCompanies().find(x => x.id === S.session.companyId) || allCompanies()[0];
+  if (!c) { toast('Компаний нет', 'dan'); return; }
+  switchRole('owner', c.id);
+  window.__dev && window.__dev.close();
+});
+on('dev.notifyTest', async () => {
+  try { await api.notifyTest(); toast('Сообщение отправлено — проверьте чат с ботом'); }
+  catch (e) { toast(e.message || 'Не удалось', 'dan'); }
+});
+on('dev.seed', async () => {
+  const ok = await confirmSheet({
+    title: 'Загрузить демо-компании?',
+    text: 'На сервер добавятся демо-салоны с мастерами, услугами и историей записей. Они нужны для показа и не мешают настоящим компаниям.',
+    ok: 'Загрузить',
+  });
+  if (!ok) return;
+  const { buildSeed } = await import('./seed.js');
+  const { startOfDay } = await import('./ui.js');
+  const seed = buildSeed(startOfDay(new Date()));
+  const data = {};
+  // платформенные таблицы и журналы не трогаем: тарифы на сервере уже есть
+  ['companies', 'employees', 'services', 'clients', 'appointments', 'blocks', 'incomes', 'expenses', 'recurring', 'reviews', 'broadcasts']
+    .forEach(k => { data[k] = seed[k] || []; });
+  try {
+    const r = await api.admin.seed(data);
+    toast('Загружено записей: ' + r.applied);
+    window.__dev && window.__dev.close();
+    setTimeout(() => location.reload(), 600);
+  } catch (e) { toast(e.message || 'Не удалось загрузить', 'dan'); }
+});
 
 function rootFor(role) {
   return role === 'client' ? 'cl.company'
@@ -138,7 +212,8 @@ export function switchRole(role, companyId) {
 }
 
 on('dev.role', async ds => {
-  if (ds.v === 'admin' && !adminAllowed(tgUser())) { await askAdminCode(); return; }
+  if (isServer() && !adminHere()) return;
+  if (!isServer() && ds.v === 'admin' && !adminAllowed(tgUser())) { await askAdminCode(); return; }
   switchRole(ds.v);
   window.__dev && window.__dev.close();
   toast('Роль: ' + (ROLES.find(r => r[0] === ds.v) || [])[1]);

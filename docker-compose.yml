@@ -1,26 +1,38 @@
-# Полный стек на своём сервере: бот + статика + автоматический HTTPS.
+# Полный стек на своём сервере: сервер (API + Mini App + уведомления),
+# бот и автоматический HTTPS.
 #
-#   1) заполните .env (BOT_TOKEN, DOMAIN, WEBAPP_URL=https://<DOMAIN>)
+#   1) заполните .env: BOT_TOKEN, DOMAIN, WEBAPP_URL=https://<DOMAIN>,
+#      INTERNAL_TOKEN (любая длинная случайная строка), ADMIN_TG_IDS
 #   2) docker compose up -d
 #
 # Caddy сам получит сертификат Let's Encrypt для DOMAIN — ничего настраивать не нужно.
+# База SQLite живёт на томе app-data и переживает перезапуск и обновление.
 
 services:
-  bot:
-    build: .
-    restart: unless-stopped
-    env_file: .env
-    volumes:
-      - bot-data:/data
-    depends_on:
-      - web
-
   web:
     build: .
     restart: unless-stopped
     command: ["python", "-u", "server/serve.py", "8080"]
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+    volumes:
+      - app-data:/data
     expose:
       - "8080"
+
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+      # бот и сервер в разных контейнерах: ходит по сети, токен — из .env
+      SERVER_URL: http://web:8080
+    volumes:
+      - bot-data:/data
+    depends_on:
+      - web
 
   caddy:
     image: caddy:2-alpine
@@ -38,6 +50,7 @@ services:
       - web
 
 volumes:
+  app-data:
   bot-data:
   caddy-data:
   caddy-config:

@@ -5,8 +5,9 @@ import {
   notices, addNotice, removeNotice, NOTICE_KINDS, saSegments, saBroadcasts, addSaBroadcast,
   logs, logEvent, LOG_KINDS, errors, reportError, resolveError, clearResolvedErrors,
   tickets, addTicket, replyTicket, setTicketStatus, TICKET_STATUS, TICKET_TOPICS,
-  bans, activeBan, banEntity, liftBan, BAN_REASONS, platformUsers, platformHealth,
+  bans, activeBan, banEntity, liftBan, BAN_REASONS, platformUsers, platformHealth, isServer,
 } from '../store.js';
+import { api } from '../api.js';
 import {
   esc, money, moneyShort, num, dateLabel, relPast, avatar, emptyState, sheet, toast, confirmSheet,
   segmented, bars, sparkline, progress, plural, dayKey, startOfDay, MONTHS, wait, loadingBlock,
@@ -381,7 +382,7 @@ route('sa.settings', {
     return `
     <div class="top"><div class="grow"><div class="top-t">Система</div><div class="top-sub">Zapis SaaS</div></div></div>
     <div class="wrap sec" style="margin-top:4px"><div class="grid2">
-      <div class="st-card"><div class="l">Версия</div><div class="v" style="font-size:16px">2.0 demo</div></div>
+      <div class="st-card"><div class="l">Версия</div><div class="v" style="font-size:16px">${isServer() ? '3.0 сервер' : '2.0 demo'}</div></div>
       <div class="st-card"><div class="l">Записей всего</div><div class="v">${num(s.totalAppts)}</div></div>
     </div></div>
 
@@ -429,10 +430,10 @@ route('sa.settings', {
     <div class="wrap sec"><div class="stack s">
       <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="dev.open">
         <div class="ic">${icon('shield', 18)}</div>
-        <div class="grow" style="text-align:left"><div class="tl">Демо-панель</div><div class="st">Роли, компании, тестовая дата</div></div>${icon('fwd', 17)}</button>
-      <button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="set.reset">
+        <div class="grow" style="text-align:left"><div class="tl">${isServer() ? 'Панель администратора' : 'Демо-панель'}</div><div class="st">${isServer() ? 'Компании, тестовое сообщение, демо-данные' : 'Роли, компании, тестовая дата'}</div></div>${icon('fwd', 17)}</button>
+      ${isServer() ? '' : `<button class="lrow press" style="border-radius:16px;border:1px solid var(--bd);width:100%" data-a="set.reset">
         <div class="ic">${icon('refresh', 18)}</div>
-        <div class="grow" style="text-align:left"><div class="tl">Сбросить демо-данные</div><div class="st">Вернуть исходное состояние</div></div>${icon('fwd', 17)}</button>
+        <div class="grow" style="text-align:left"><div class="tl">Сбросить демо-данные</div><div class="st">Вернуть исходное состояние</div></div>${icon('fwd', 17)}</button>`}
       <button class="lrow press" style="border-radius:16px;border:1px solid var(--dan-soft);background:var(--dan-soft);width:100%" data-a="sa.lock">
         <div class="ic" style="background:var(--dan);color:#fff">${icon('lock', 18)}</div>
         <div class="grow" style="text-align:left"><div class="tl" style="color:var(--dan)">Выйти из Super Admin</div>
@@ -659,7 +660,7 @@ on('sb.new', () => {
       back: () => { st.step = 1; draw(); },
       body: `<div class="field"><label>Заголовок</label><input class="inp" id="_bt" value="${esc(st.title)}" placeholder="Например, Новые возможности календаря"></div>
         <div class="field"><label>Сообщение</label><textarea class="inp" id="_bm" style="min-height:140px" placeholder="Что рассказать владельцам">${esc(st.text)}</textarea></div>
-        <div class="tiny dim">Письмо придёт владельцу компании сообщением от бота.</div>`,
+        <div class="tiny dim">${isServer() ? 'Сообщение придёт владельцам компаний от бота — тем, кто открывал его.' : 'В демо письмо никуда не уходит — показываем результат.'}</div>`,
       footer: `<button class="btn p" data-a="sb.send">Отправить · ${cur().list.length}</button>`,
     });
     else if (st.step === 3) s.set({ title: 'Отправляем…', body: loadingBlock('Рассылаем ' + cur().list.length + ' сообщений…') });
@@ -694,9 +695,17 @@ on('sb.send', async () => {
   if (!b.st.text.trim()) { toast('Введите текст', 'dan'); return; }
   b.st.title = b.st.title.trim() || 'Сообщение от Zapis';
   b.st.step = 3; b.draw();
-  await wait(1500);
-  const n = b.cur().list.length;
-  const open = Math.round(n * (0.5 + Math.random() * 0.25));
+  let n = b.cur().list.length;
+  let open = 0;
+  if (isServer()) {
+    try {
+      const r = await api.admin.broadcast({ title: b.st.title, text: b.st.text, segment: b.st.seg });
+      n = r.to;
+    } catch (e) { b.st.step = 2; b.draw(); toast(e.message || 'Не удалось отправить', 'dan'); return; }
+  } else {
+    await wait(1500);
+    open = Math.round(n * (0.5 + Math.random() * 0.25));
+  }
   b.st.res = { to: n, open };
   addSaBroadcast({ title: b.st.title, text: b.st.text, segment: b.st.seg, to: n, open });
   b.st.step = 4; b.draw();
@@ -785,6 +794,29 @@ const coName = id => (allCompanies().find(c => c.id === id) || {}).name || '—'
 /* ---------- здоровье платформы ---------- */
 route('sa.health', {
   tab: 'sa.settings',
+  async mount() {
+    if (!isServer()) return;
+    const el = document.querySelector('#_srv');
+    if (!el) return;
+    try {
+      const { stats: s } = await api.admin.stats();
+      const ent = s.entities || {};
+      const line = (k, v) => `<div class="row between"><span class="sm muted">${k}</span><b class="sm">${esc(String(v))}</b></div>`;
+      el.innerHTML = `<div class="b sm" style="margin-bottom:8px">Сервер</div>
+        <div class="stack" style="gap:6px">
+          ${line('Бот', s.bot ? '@' + s.bot : (s.botToken ? 'токен задан' : 'токен не задан'))}
+          ${line('Адрес приложения', s.webappUrl || 'не задан')}
+          ${line('В очереди сообщений', s.queued)}
+          ${line('Не доставлено', s.failed)}
+          ${line('Отправлено с запуска', s.sent)}
+          ${line('Размер базы', (s.sizeBytes / 1024 / 1024).toFixed(2) + ' МБ')}
+          ${line('Компаний / записей', (ent.companies || 0) + ' / ' + (ent.appointments || 0))}
+          ${line('Пользователей', s.users)}
+        </div>`;
+    } catch (e) {
+      el.innerHTML = `<div class="b sm" style="margin-bottom:6px">Сервер</div><div class="sm" style="color:var(--dan)">${esc(e.message)}</div>`;
+    }
+  },
   render() {
     const h = platformHealth();
     const stor = h.storagePct;
@@ -805,16 +837,21 @@ route('sa.health', {
         <span class="bdg ${r[2]}">${r[1]}</span>${icon('fwd', 16)}</button>`).join('')}
     </div></div>
 
+    ${isServer() ? `<div class="wrap sec"><div class="card pad" id="_srv">
+      <div class="b sm" style="margin-bottom:6px">Сервер</div>
+      <div class="sm muted">Загружаем…</div>
+    </div></div>` : ''}
+
     <div class="wrap sec">
       <div class="card pad">
         <div class="row between" style="margin-bottom:8px">
-          <div class="b sm">Хранилище</div>
+          <div class="b sm">${isServer() ? 'Кэш на этом устройстве' : 'Хранилище'}</div>
           <div class="tiny ${stor > 80 ? '' : 'dim'}" style="${stor > 80 ? 'color:var(--dan)' : ''}">${h.storageMb} МБ из 5 МБ</div>
         </div>
         ${progress(stor, storColor)}
         <div class="tiny dim" style="margin-top:8px">
-          Демо держит данные в браузере, потолок — квота localStorage.
-          Фотографии занимают больше всего места. На сервере это ограничение снимается.
+          ${isServer() ? 'Копия ваших данных для быстрого открытия. Источник истины — сервер.'
+            : 'Демо держит данные в браузере, потолок — квота localStorage. Фотографии занимают больше всего места. На сервере это ограничение снимается.'}
         </div>
       </div>
     </div>

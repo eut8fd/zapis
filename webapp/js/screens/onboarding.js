@@ -1,4 +1,7 @@
-import { S, emit, now, today, createService, setHome, ADDR_TODO, PHONE_TODO, catalogMissing, co } from '../store.js';
+import { S, emit, now, today, createService, setHome, ADDR_TODO, PHONE_TODO, catalogMissing, co, isServer, person, ensurePerson } from '../store.js';
+import { pushNow, session, botName } from '../sync.js';
+import { enterAsClient, enterCompany } from '../roles.js';
+import { tgId, tgUsername, tgFullName } from '../tg.js';
 import { esc, money, sheet, toast, wait, nMin, WD_FULL, loadingBlock, plural, t } from '../ui.js';
 import { icon } from '../icons.js';
 import { route, go, render, resetStack } from '../router.js';
@@ -63,6 +66,11 @@ const DIRS = [
 ];
 const DIR_POPULAR = ['Салон красоты', 'Барбершоп', 'Массаж', 'Автосервис', 'Репетитор'];
 const dirByName = n => DIRS.reduce((a, g) => a.concat(g[1]), []).find(d => d[0] === n) || null;
+
+/** IANA-зона устройства; если браузер её не знает — пусто, сервер подставит свою. */
+function deviceTz() {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) { return ''; }
+}
 
 const HOURS0 = () => {
   const h = {};
@@ -246,7 +254,7 @@ function s5() {
 
   <div class="card pad" style="margin-top:10px">
     <div class="b" style="font-size:16px">${esc(c.name || ob.name)}</div>
-    <div class="sm muted" style="margin-top:2px">t.me/${esc(BOT_USERNAME)}?start=${esc(ob.companyId || '')}</div>
+    <div class="sm muted" style="margin-top:2px">t.me/${esc(botName())}?start=${esc(ob.companyId || '')}</div>
     <div class="hr"></div>
     <div class="sm" style="color:var(--tx-2)">${t('Тариф {p} · бесплатно 14 дней', { p: esc(c.plan || ob.plan) })}</div>
   </div>
@@ -358,7 +366,11 @@ export function startOnboarding(plan) {
   go('onb');
 }
 on('ob.back', () => { ob.step--; rr(); });
-on('ob.skip', () => { S.onboarded = true; emit(); resetStack('o.home'); });
+on('ob.skip', () => {
+  S.onboarded = true; emit();
+  // На сервере демо-кабинета нет: без своей компании показывать нечего, кроме витрины
+  resetStack(isServer() ? 'biz.start' : 'o.home');
+});
 
 on('ob.s2', () => {
   capture();
@@ -403,13 +415,23 @@ async function build() {
     about: '', plan: ob.plan || 'PRO', planUntil: new Date(now().getTime() + 14 * 86400000).toISOString(),
     slug: id, tgLink: BOT_USERNAME, initials, createdAt: now().toISOString(), hours, currency: '₸',
     logo: null, cover: null, finCats: { income: {}, expense: {} }, setup: { hours: true },
+    // Часовой пояс салона — пояс устройства владельца в момент создания:
+    // по нему сервер считает время напоминаний и свободные окна для бота.
+    tz: deviceTz(),
   });
   const ownerId = id + '_owner';
+  // Владелец — живой человек из Telegram, а не «Вы»: его имя видят клиенты
+  // в записях, а по telegram-id сервер узнаёт его в следующий раз.
+  const ses = session() || {};
+  const who = (ses.identity && ses.identity.name) || tgFullName() || 'Вы';
+  const ownerName = isServer() ? who : 'Вы';
   S.data.employees.push({
-    id: ownerId, companyId: id, name: 'Вы', role: 'Владелец', isOwner: true, active: true,
-    initials: 'В', color: '#4C6FFF', phone: '', schedule: JSON.parse(JSON.stringify(hours)),
+    id: ownerId, companyId: id, name: ownerName, role: 'Владелец', isOwner: true, active: true,
+    initials: ownerName.split(' ').filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || 'В',
+    color: '#4C6FFF', phone: ses.phone || '', schedule: JSON.parse(JSON.stringify(hours)),
     serviceIds: [], takesAppointments: true, access: 'owner', rating: '5.0',
     photo: null, since: null, showExp: true,
+    tg: tgUsername(), tgId: tgId() || (ses.identity && ses.identity.tgId) || '',
   });
   // сессию дополняем, а не подменяем: homeId, person и clientIds принадлежат
   // человеку, а не роли, и от заведения бизнеса пропадать не должны
@@ -424,12 +446,32 @@ async function build() {
   }
   S.onboarded = true;
   emit();
+  if (isServer()) {
+    // Компания создаётся на сервере сейчас, а не «когда-нибудь потом»:
+    // без этого следующий вход не нашёл бы членства.
+    const rej = await pushNow();
+    const bad = rej.find(x => x.col === 'companies' && x.id === id);
+    if (bad) {
+      s.close();
+      S.data.companies = S.data.companies.filter(c => c.id !== id);
+      S.data.employees = S.data.employees.filter(e => e.companyId !== id);
+      S.data.services = S.data.services.filter(x => x.companyId !== id);
+      toast(bad.reason || t('Не удалось создать компанию'), 'dan');
+      ob.step = 1; rr();
+      return;
+    }
+    // членство появилось — перечитываем сессию с сервера, чтобы роль была настоящей
+    const { api } = await import('../api.js');
+    const { adopt } = await import('../sync.js');
+    try { const fresh = await api.boot('owner'); if (fresh && fresh.ok) { adopt(fresh); enterCompany(id); } } catch (e) { }
+  }
   s.close();
   haptic('success');
   ob.step = 4; rr();
 }
 
 on('ob.openPage', () => {
+  if (isServer()) { enterAsClient(ob.companyId); emit(); resetStack('cl.company'); return; }
   S.session.role = 'client';
   const c = S.data.clients.find(x => x.companyId === ob.companyId);
   if (!c) {

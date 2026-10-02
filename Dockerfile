@@ -10,6 +10,8 @@ COPY bot/ /app/bot/
 COPY server/ /app/server/
 COPY webapp/ /app/webapp/
 COPY deploy/run.py /app/deploy/run.py
+# тесты в образ не нужны
+RUN rm -rf /app/bot/tests /app/server/tests
 
 RUN mkdir -p /data
 

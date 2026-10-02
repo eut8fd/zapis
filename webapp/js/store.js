@@ -18,6 +18,34 @@ export const S = {
   data: null, aiChat: {}, seenTips: {},
 };
 
+/* ---------- коллекции данных ----------
+   Единый список: по нему синхронизация считает разницу с сервером,
+   а загрузка дополняет недостающие массивы, чтобы экраны не падали
+   на старой базе. */
+export const DATA_COLS = [
+  'companies', 'employees', 'services', 'clients', 'appointments', 'blocks',
+  'incomes', 'expenses', 'recurring', 'reviews', 'broadcasts', 'invites',
+  'inbox', 'tickets', 'logs', 'errors', 'plans', 'notices', 'saBroadcasts', 'bans', 'notes',
+];
+export function ensureCols(data) {
+  DATA_COLS.forEach(k => { if (!Array.isArray(data[k])) data[k] = []; });
+  return data;
+}
+
+/* ---------- серверный режим ----------
+   true — данные приходят с сервера и уходят на него (sync.js). Экраны
+   спрашивают этот флаг там, где поведение демо и боя расходится:
+   фиктивная оплата, сброс демо, подписи «в демо уведомление не уходит». */
+let serverMode = false;
+export const isServer = () => serverMode;
+export function setServerMode(v) { serverMode = !!v; }
+
+/* После записи в localStorage зовём подписчика: в серверном режиме это
+   отправка разницы на сервер. Хук, а не импорт sync.js — иначе кольцо
+   store → sync → store. */
+let saveHook = null;
+export function onSave(fn) { saveHook = fn; }
+
 /* ---------- подписки ---------- */
 const subs = new Set();
 export const sub = fn => { subs.add(fn); return () => subs.delete(fn); };
@@ -37,7 +65,7 @@ export function shiftBy(ms) { S.shift += ms; emit(); }
 let quotaWarned = false;
 export function save() {
   try {
-    localStorage.setItem(KEY, JSON.stringify({ v: VER, anchor: S.anchor, shift: S.shift, theme: S.theme, lang: S.lang, aiMode: S.aiMode, onboarded: S.onboarded, session: S.session, data: S.data, aiChat: S.aiChat, seenTips: S.seenTips }));
+    localStorage.setItem(KEY, JSON.stringify({ v: VER, anchor: S.anchor, shift: S.shift, theme: S.theme, lang: S.lang, aiMode: S.aiMode, onboarded: S.onboarded, session: S.session, data: S.data, aiChat: S.aiChat, seenTips: S.seenTips, server: serverMode }));
     quotaWarned = false;
   } catch (e) {
     console.warn('save failed', e);
@@ -51,6 +79,36 @@ export function save() {
       )).catch(() => { });
     }
   }
+  if (saveHook) { try { saveHook(); } catch (e) { console.error(e); } }
+}
+
+/** Что лежит в localStorage, без разбора — для серверного режима, где
+    из кэша берутся только настройки устройства. */
+export function readCache() {
+  try { return JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) { return null; }
+}
+
+/**
+ * Загрузка в серверном режиме: данные уже пришли с сервера (их подставил
+ * sync.adopt), здесь — только настройки устройства из кэша: тема, язык,
+ * показанные подсказки, история AI-чата. Сдвиг дат демо не применяется:
+ * это настоящие записи настоящих людей.
+ */
+export function loadServer(cache) {
+  const raw = cache || readCache() || {};
+  S.theme = raw.theme || 'auto';
+  S.lang = raw.lang || S.lang;
+  S.aiMode = raw.aiMode || 'demo';
+  S.seenTips = raw.seenTips || {};
+  S.aiChat = raw.aiChat || {};
+  S.shift = 0;
+  S.anchor = startOfDay(new Date()).toISOString();
+  S.onboarded = true;
+  // сессию подставляет main.js по членству; из кэша берём только последнюю компанию
+  S.session = SESSION();
+  S.session.lastCompanyId = raw.session && raw.session.companyId || null;
+  ensureCols(S.data || (S.data = {}));
+  applyLang(S.lang);
 }
 
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
@@ -68,8 +126,9 @@ function shiftTree(node, ms) {
 export function load() {
   let raw = null;
   try { raw = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) { }
-  if (!raw || raw.v !== VER || !raw.data) { reset(false); applyLang(S.lang); return; }
+  if (!raw || raw.v !== VER || !raw.data || raw.server) { reset(false); applyLang(S.lang); return; }
   Object.assign(S, raw);
+  ensureCols(S.data);
   applyLang(S.lang);
   // Демо всегда «свежее»: переносим данные на текущий день
   const a = startOfDay(new Date(S.anchor));
@@ -211,7 +270,10 @@ export function setHome(companyId) {
   if (!c) return;
   S.session.homeId = companyId;
   S.session.companyId = companyId;
-  const rec = myClient(companyId) || clients(companyId)[0];
+  // В серверном режиме карточка — только своя: у владельца, смотрящего свою
+  // страницу глазами клиента, в данных лежат все клиенты салона, и первый
+  // попавшийся стал бы «им». В демо персона клиента берётся из сида.
+  const rec = myClient(companyId) || (serverMode ? null : clients(companyId)[0]);
   if (rec) {
     S.session.clientIds = { ...(S.session.clientIds || {}), [companyId]: rec.id };
     S.session.clientId = rec.id;
@@ -1414,6 +1476,8 @@ export function clearResolvedErrors() {
    почему — было негде посмотреть. Теперь у компании есть своя почта.
 --------------------------------------------------- */
 export const INBOX_KINDS = {
+  booking: { t: 'Запись', icon: 'calendarPlus', color: '#4C6FFF' },
+  cancel: { t: 'Отмена', icon: 'xCircle', color: '#F04462' },
   blocked: { t: 'Блокировка', icon: 'ban', color: '#F04462' },
   unblocked: { t: 'Блокировка снята', icon: 'checkCircle', color: '#12B76A' },
   plan: { t: 'Тариф', icon: 'card', color: '#0EA5E9' },
@@ -1701,7 +1765,7 @@ export function platformHealth() {
   })();
   const openTickets = tickets().filter(t => t.status !== 'closed');
   return {
-    version: '2.0 demo',
+    version: serverMode ? '3.0' : '2.0 demo',
     dataVersion: VER,
     storageBytes: raw,
     storageMb: +(raw / 1024 / 1024).toFixed(2),
