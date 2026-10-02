@@ -12,9 +12,15 @@
   --sf:#FFFFFF; --sf-2:#F7F8FA; --sf-3:#EFF1F5;
   --tx:#0D1220; --tx-2:#5A6478; --tx-3:#8C95A8;
   --bd:rgba(16,24,40,.08); --bd-2:rgba(16,24,40,.14);
-  --sh-1:0 1px 2px rgba(16,24,40,.05);
-  --sh-2:0 4px 16px -4px rgba(16,24,40,.10), 0 1px 3px rgba(16,24,40,.04);
-  --sh-3:0 18px 44px -12px rgba(16,24,40,.22);
+  /* тени с холодным оттенком: нейтрально-серые на белом выглядят грязно */
+  --sh-1:0 1px 2px rgba(26,38,70,.06);
+  --sh-2:0 6px 18px -6px rgba(26,38,70,.13), 0 1px 3px rgba(26,38,70,.05);
+  --sh-3:0 18px 44px -12px rgba(26,38,70,.24);
+  /* блик сверху и стекло: интерфейс освещён, а не плоский */
+  --hl:rgba(255,255,255,.75);
+  --glass:color-mix(in srgb,var(--sf) 86%,transparent);
+  --glass-bg:color-mix(in srgb,var(--bg) 76%,transparent);
+  --e-spring:cubic-bezier(.34,1.4,.64,1);
   --sk:linear-gradient(90deg,var(--sf-3) 25%,var(--sf-2) 50%,var(--sf-3) 75%);
 
   --r-s:12px; --r-m:16px; --r-l:20px; --r-xl:26px; --r-full:999px;
@@ -46,6 +52,9 @@
   --sh-1:0 1px 2px rgba(0,0,0,.4);
   --sh-2:0 6px 20px -6px rgba(0,0,0,.55);
   --sh-3:0 20px 50px -12px rgba(0,0,0,.7);
+  --hl:rgba(255,255,255,.07);
+  --glass:color-mix(in srgb,var(--sf) 84%,transparent);
+  --glass-bg:color-mix(in srgb,var(--bg) 72%,transparent);
   --sk:linear-gradient(90deg,var(--sf-2) 25%,var(--sf-3) 50%,var(--sf-2) 75%);
   /* на тёмном шаги нужны крупнее: глаз хуже различает близкие тёмные тона */
   --heat-0:var(--sf-2);
@@ -74,7 +83,13 @@ svg{display:inline-block;vertical-align:middle;flex:none}
 
 /* ---------- boot ---------- */
 .boot{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;background:var(--bg);z-index:100}
-.boot-logo{width:64px;height:64px;border-radius:20px;background:linear-gradient(135deg,var(--p),var(--ai));box-shadow:0 10px 30px -6px var(--p-glow);animation:pop .5s var(--e)}
+.boot-logo{
+  width:68px;height:68px;border-radius:22px;display:grid;place-items:center;color:#fff;
+  background:linear-gradient(135deg,var(--p),var(--ai));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.3),0 14px 34px -8px var(--p-glow);
+  animation:pop .5s var(--e),breathe 2.2s 1s ease-in-out infinite
+}
+@keyframes breathe{0%,100%{box-shadow:inset 0 1px 0 rgba(255,255,255,.3),0 14px 34px -8px var(--p-glow)}50%{box-shadow:inset 0 1px 0 rgba(255,255,255,.3),0 18px 44px -6px var(--p-glow)}}
 .boot-bar{width:140px;height:4px;border-radius:4px;background:var(--sf-3);overflow:hidden}
 .boot-bar i{display:block;height:100%;width:40%;border-radius:4px;background:var(--p);animation:load 1s infinite var(--e)}
 @keyframes load{0%{transform:translateX(-100%)}100%{transform:translateX(350%)}}
@@ -83,7 +98,6 @@ svg{display:inline-block;vertical-align:middle;flex:none}
 #app{min-height:100%;display:flex;flex-direction:column}
 .screen{
   flex:1;padding:calc(var(--safe-t) + 8px) 0 calc(var(--tab-h) + var(--safe-b) + 24px);
-  background:var(--bg);
 }
 .screen.no-tab{padding-bottom:calc(var(--safe-b) + 28px)}
 .screen.has-fab{padding-bottom:calc(var(--tab-h) + var(--safe-b) + 100px)}
@@ -116,14 +130,14 @@ svg{display:inline-block;vertical-align:middle;flex:none}
 /* ---------- topbar ---------- */
 .top{
   position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:10px;
-  padding:calc(var(--safe-t) + 6px) 12px 10px;background:var(--bg);
+  padding:calc(var(--safe-t) + 6px) 12px 10px;
+  background:var(--glass-bg);backdrop-filter:saturate(180%) blur(18px);-webkit-backdrop-filter:saturate(180%) blur(18px)
 }
-.top.blur{background:color-mix(in srgb,var(--bg) 78%,transparent);backdrop-filter:saturate(180%) blur(16px);-webkit-backdrop-filter:saturate(180%) blur(16px)}
 .top-t{font-size:19px;font-weight:750;letter-spacing:-.02em;flex:1;min-width:0}
 .top-sub{font-size:12px;color:var(--tx-3);font-weight:500;margin-top:-2px}
 .ico-btn{
   width:38px;height:38px;border-radius:var(--r-full);display:grid;place-items:center;
-  background:var(--sf);color:var(--tx);box-shadow:var(--sh-1);border:1px solid var(--bd);
+  background:var(--sf);color:var(--tx);box-shadow:inset 0 1px 0 var(--hl),var(--sh-1);border:1px solid var(--bd);
   transition:transform .15s var(--e),background .15s
 }
 .ico-btn:active{transform:scale(.9)}
@@ -138,28 +152,33 @@ svg{display:inline-block;vertical-align:middle;flex:none}
 .tabbar{
   position:fixed;left:0;right:0;bottom:0;z-index:40;display:flex;
   height:calc(var(--tab-h) + var(--safe-b));padding-bottom:var(--safe-b);
-  background:color-mix(in srgb,var(--sf) 88%,transparent);
-  backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px);
-  border-top:1px solid var(--bd);
+  background:var(--glass);
+  backdrop-filter:saturate(180%) blur(24px);-webkit-backdrop-filter:saturate(180%) blur(24px);
+  border-top:1px solid var(--bd);box-shadow:inset 0 1px 0 var(--hl);
 }
-.tab{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--tx-3);transition:color .18s}
-.tab .lb{font-size:10.5px;font-weight:600;letter-spacing:.01em}
+.tab{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;color:var(--tx-3);transition:color .2s}
+.tab .lb{font-size:10.5px;font-weight:600;letter-spacing:.01em;transition:font-weight .2s}
+/* подложка под иконкой: появляется под активной и уходит у остальных */
+.tab-ic{width:50px;height:30px;display:grid;place-items:center;border-radius:15px;transition:background .28s var(--e),transform .28s var(--e-spring)}
 .tab.on{color:var(--p)}
-.tab.on.tab-pulse svg{animation:tabpop .3s var(--e)}
-@keyframes tabpop{0%{transform:scale(.8)}60%{transform:scale(1.12)}100%{transform:scale(1)}}
+.tab.on .lb{font-weight:700}
+.tab.on .tab-ic{background:var(--p-soft)}
+.tab.on.tab-pulse .tab-ic{animation:tabpop .36s var(--e-spring)}
+@keyframes tabpop{0%{transform:scale(.82)}100%{transform:scale(1)}}
 
 /* ---------- fab ---------- */
 .fab{
   position:fixed;right:16px;bottom:calc(var(--tab-h) + var(--safe-b) + 16px);z-index:41;
   width:54px;height:54px;border-radius:19px;display:grid;place-items:center;color:#fff;
-  background:linear-gradient(135deg,var(--p),var(--p-2));box-shadow:0 12px 26px -8px var(--p-glow),0 2px 6px rgba(0,0,0,.14);
-  transition:transform .18s var(--e)
+  background:linear-gradient(135deg,var(--p),var(--p-2));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.28),0 12px 26px -8px var(--p-glow),0 2px 6px rgba(0,0,0,.14);
+  transition:transform .22s var(--e-spring);animation:pop .4s var(--e) both
 }
 .fab:active{transform:scale(.9) rotate(45deg)}
 @keyframes pop{0%{transform:scale(.6);opacity:0}100%{transform:scale(1);opacity:1}}
 
 /* ---------- cards ---------- */
-.card{background:var(--sf);border-radius:var(--r-l);box-shadow:var(--sh-2);border:1px solid var(--bd);overflow:hidden}
+.card{background:var(--sf);border-radius:var(--r-l);box-shadow:inset 0 1px 0 var(--hl),var(--sh-2);border:1px solid var(--bd);overflow:hidden}
 .card.pad{padding:16px}
 .card.flat{box-shadow:none;background:var(--sf-2);border-color:transparent}
 .press{transition:transform .14s var(--e),opacity .14s}
@@ -187,7 +206,7 @@ svg{display:inline-block;vertical-align:middle;flex:none}
 .chev{color:var(--tx-3);flex:none}
 
 /* ---------- avatar ---------- */
-.av{border-radius:var(--r-full);display:grid;place-items:center;color:#fff;font-weight:700;flex:none;letter-spacing:-.02em;background:var(--p);overflow:hidden}
+.av{border-radius:var(--r-full);display:grid;place-items:center;color:#fff;font-weight:700;flex:none;letter-spacing:-.02em;background:var(--p);overflow:hidden;box-shadow:inset 0 1px 0 rgba(255,255,255,.28),inset 0 -1px 0 rgba(0,0,0,.08)}
 .av.s{width:36px;height:36px;font-size:13px}
 .av.m{width:46px;height:46px;font-size:15px}
 .av.l{width:64px;height:64px;font-size:21px}
@@ -289,7 +308,7 @@ svg{display:inline-block;vertical-align:middle;flex:none}
   background:var(--sf-3);color:var(--tx);transition:transform .14s var(--e),opacity .14s;width:100%
 }
 .btn:active{transform:scale(.97)}
-.btn.p{background:linear-gradient(135deg,var(--p),var(--p-2));color:#fff;box-shadow:0 8px 20px -8px var(--p-glow)}
+.btn.p{background:linear-gradient(135deg,var(--p),var(--p-2));color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.24),0 8px 20px -8px var(--p-glow)}
 .btn.ai{background:linear-gradient(135deg,var(--ai),#6D5BF6);color:#fff;box-shadow:0 8px 20px -8px rgba(139,92,246,.5)}
 .btn.ok{background:var(--ok);color:#fff}
 .btn.dan{background:var(--dan-soft);color:var(--dan)}
@@ -342,7 +361,7 @@ svg{display:inline-block;vertical-align:middle;flex:none}
   white-space:nowrap;transition:transform .14s var(--e)
 }
 .chip:active{transform:scale(.94)}
-.chip.on{background:var(--tx);color:var(--bg);border-color:transparent}
+.chip.on{background:var(--tx);color:var(--bg);border-color:transparent;box-shadow:var(--sh-1)}
 .chip.p.on{background:var(--p);color:#fff}
 
 /* segmented */
@@ -401,8 +420,9 @@ svg{display:inline-block;vertical-align:middle;flex:none}
   background:linear-gradient(135deg,#4C6FFF 0%,#6D5BF6 55%,#8B5CF6 100%);
   box-shadow:0 16px 34px -14px var(--p-glow)
 }
-.hero::after{content:"";position:absolute;right:-40px;top:-60px;width:180px;height:180px;border-radius:50%;background:rgba(255,255,255,.10)}
-.hero::before{content:"";position:absolute;right:20px;bottom:-70px;width:130px;height:130px;border-radius:50%;background:rgba(255,255,255,.07)}
+.hero::after{content:"";position:absolute;right:-40px;top:-60px;width:180px;height:180px;border-radius:50%;background:rgba(255,255,255,.12);filter:blur(2px);animation:drift 16s ease-in-out infinite alternate}
+.hero::before{content:"";position:absolute;right:20px;bottom:-70px;width:130px;height:130px;border-radius:50%;background:rgba(255,255,255,.08);animation:drift 22s ease-in-out infinite alternate-reverse}
+@keyframes drift{from{transform:translate3d(0,0,0) scale(1)}to{transform:translate3d(-22px,16px,0) scale(1.12)}}
 .hero .lb{font-size:11.5px;font-weight:700;opacity:.8;text-transform:uppercase;letter-spacing:.06em}
 .hero .tm{font-size:30px;font-weight:780;letter-spacing:-.03em;line-height:1.05;margin-top:6px}
 .hero .nm{font-size:17px;font-weight:700;margin-top:8px}
@@ -592,17 +612,19 @@ svg{display:inline-block;vertical-align:middle;flex:none}
   width:100%;height:50px;padding:0 14px;border-radius:var(--r-m);background:var(--sf-2);
   border:1.5px solid transparent;outline:none;font-size:15px;transition:border-color .18s,background .18s
 }
-.inp:focus{border-color:var(--p);background:var(--sf)}
+.inp:focus{border-color:var(--p);background:var(--sf);box-shadow:0 0 0 4px var(--p-soft)}
 textarea.inp{height:auto;min-height:92px;padding:12px 14px;resize:none;line-height:1.45}
 .inp-row{display:flex;gap:10px}
 .inp-row>*{flex:1}
 .pick{display:flex;flex-wrap:wrap;gap:8px}
 .pick .o{padding:9px 14px;border-radius:12px;background:var(--sf-2);font-size:13.5px;font-weight:600;color:var(--tx-2);border:1.5px solid transparent;transition:.15s}
 .pick .o.on{background:var(--p-soft);color:var(--p);border-color:var(--p)}
-.sw{width:46px;height:28px;border-radius:14px;background:var(--sf-3);position:relative;transition:background .2s var(--e);flex:none}
-.sw::after{content:"";position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;background:#fff;box-shadow:var(--sh-1);transition:transform .2s var(--e)}
-.sw.on{background:var(--ok)}
-.sw.on::after{transform:translateX(18px)}
+.sw{width:48px;height:29px;border-radius:15px;background:var(--sf-3);position:relative;transition:background .25s var(--e);flex:none;box-shadow:inset 0 1px 2px rgba(0,0,0,.08)}
+.sw::after{content:"";position:absolute;top:2.5px;left:2.5px;width:24px;height:24px;border-radius:50%;background:#fff;box-shadow:0 2px 6px rgba(0,0,0,.22),0 0 0 .5px rgba(0,0,0,.04);transition:transform .34s var(--e-spring)}
+.sw.on{background:var(--ok);box-shadow:none}
+.sw.on::after{transform:translateX(19px)}
+.sw:active::after{transform:scaleX(1.12)}
+.sw.on:active::after{transform:translateX(17px) scaleX(1.12)}
 .search{display:flex;align-items:center;gap:9px;height:44px;padding:0 14px;border-radius:14px;background:var(--sf-2);color:var(--tx-3)}
 .search input{flex:1;background:none;border:0;outline:none;font-size:15px;color:var(--tx)}
 
@@ -706,7 +728,7 @@ textarea.inp{height:auto;min-height:92px;padding:12px 14px;resize:none;line-heig
 
 /* ---------- empty ---------- */
 .empty{display:flex;flex-direction:column;align-items:center;text-align:center;padding:38px 26px;gap:6px;animation:scr .3s var(--e)}
-.empty .il{width:84px;height:84px;border-radius:28px;display:grid;place-items:center;background:var(--sf-2);color:var(--tx-3);margin-bottom:8px}
+.empty .il{width:84px;height:84px;border-radius:28px;display:grid;place-items:center;background:radial-gradient(80% 80% at 50% 20%,var(--sf) 0,var(--sf-2) 100%);color:var(--tx-3);margin-bottom:8px;box-shadow:inset 0 1px 0 var(--hl),0 0 0 1px var(--bd)}
 .empty .t{font-size:16px;font-weight:700}
 .empty .s{font-size:13.5px;color:var(--tx-3);max-width:260px;line-height:1.45}
 .empty .btn{margin-top:14px;width:auto;padding:0 24px}
@@ -715,8 +737,9 @@ textarea.inp{height:auto;min-height:92px;padding:12px 14px;resize:none;line-heig
 #toasts{position:fixed;left:0;right:0;top:calc(var(--safe-t) + 8px);z-index:90;display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none}
 .toast{
   display:flex;align-items:center;gap:9px;max-width:88%;padding:11px 16px;border-radius:var(--r-full);
-  background:var(--tx);color:var(--bg);font-size:13.5px;font-weight:600;box-shadow:var(--sh-3);
-  animation:tin .3s var(--e)
+  background:color-mix(in srgb,var(--tx) 92%,transparent);color:var(--bg);font-size:13.5px;font-weight:600;box-shadow:var(--sh-3);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  animation:tin .42s var(--e-spring)
 }
 .toast.out{animation:tout .25s var(--e) forwards}
 .toast.ok{background:var(--ok);color:#fff}
@@ -880,7 +903,7 @@ body[data-tgback="1"] .top>.ico-btn[data-a="back"]{display:none}
 
 @media(prefers-reduced-motion:reduce){
   .screen.nav-enter,.sheet.swapping .sheet-h>*,.sheet.swapping .sheet-b,.sheet.swapping .sheet-f,
-  .cal-today,.cal-content{animation:none!important}
+  .cal-today,.cal-content,.rise,.hero::before,.hero::after,.ai-hero::after,.boot-logo,.fab{animation:none!important}
   .sheet,.bd-mask{transition-duration:.01ms!important}
 }
 
@@ -1058,4 +1081,62 @@ body[data-tgback="1"] .top>.ico-btn[data-a="back"]{display:none}
   position:absolute;top:-2px;right:-2px;min-width:16px;height:16px;padding:0 4px;
   border-radius:9px;background:var(--dan);color:#fff;font-size:10px;font-weight:750;
   font-style:normal;line-height:16px;text-align:center;border:2px solid var(--sf)
+}
+
+
+/* ---------- свет ----------
+   Фон подсвечен сверху мягким пятном фирменного цвета — экран выглядит
+   освещённым, карточки на нём читаются объёмнее. Пятно одно и лежит под
+   содержимым (z-index −1), фильтров нет: телефону это ничего не стоит. */
+body{position:relative}
+body::before{
+  content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+  background:radial-gradient(70% 34% at 50% -6%,color-mix(in srgb,var(--p) 13%,transparent),transparent 72%)
+}
+[data-theme="dark"] body::before{
+  background:
+    radial-gradient(60% 32% at 18% -4%,rgba(109,139,255,.17),transparent 70%),
+    radial-gradient(50% 28% at 92% 2%,rgba(167,139,250,.11),transparent 70%)
+}
+/* в тёмной теме у поверхностей есть верхняя кромка — так стекло ловит свет */
+[data-theme="dark"] :is(.kpi,.mkpi,.st-card,.statbar,.appt,.svc,.mcard,.ai-card,.ins,.wcol,.mcal,.cal-range-day,.cat-tile,.biz-fact,.tip,.appt-info){
+  background-image:linear-gradient(180deg,rgba(255,255,255,.035),transparent 46%)
+}
+/* плитки с иконками: тонкий блик, чтобы цветная подложка не была плоской */
+.mcard .ic,.tint,.lrow .ic,.tip-ic,.ai-card .ic,.appt-review-icon,.act{box-shadow:inset 0 1px 0 rgba(255,255,255,.4)}
+[data-theme="dark"] :is(.mcard .ic,.tint,.lrow .ic,.tip-ic,.ai-card .ic,.appt-review-icon,.act){box-shadow:inset 0 1px 0 rgba(255,255,255,.08)}
+.sheet{box-shadow:inset 0 1px 0 var(--hl),var(--sh-3)}
+.kpi,.mkpi,.st-card,.statbar,.mcard,.ai-card,.ins,.wcol,.mcal,.cal-range-day,.cat-tile,.biz-fact{box-shadow:inset 0 1px 0 var(--hl),var(--sh-1)}
+.appt,.svc{box-shadow:inset 0 1px 0 var(--hl)}
+.hero,.ai-hero{box-shadow:inset 0 1px 0 rgba(255,255,255,.22),0 16px 34px -14px var(--p-glow)}
+.ai-hero{box-shadow:inset 0 1px 0 rgba(255,255,255,.22),0 16px 34px -14px rgba(139,92,246,.5)}
+.ai-hero::after{animation:drift 18s ease-in-out infinite alternate}
+.btn.ai{box-shadow:inset 0 1px 0 rgba(255,255,255,.24),0 8px 20px -8px rgba(139,92,246,.5)}
+.btn.ok{box-shadow:inset 0 1px 0 rgba(255,255,255,.24)}
+.slot.on,.dcard.on,.wk .d.on,.mc-cell.on{box-shadow:inset 0 1px 0 rgba(255,255,255,.26),0 8px 18px -8px var(--p-glow)}
+.seg button.on{box-shadow:inset 0 1px 0 var(--hl),var(--sh-1)}
+
+/* ---------- числа ----------
+   Табличные цифры: суммы и время не «дышат» при смене значения. */
+.kpi .v,.mkpi .v,.mkpi .m,.st-card .v,.statbar .cell strong,.appt .t,.hero .tm,.wcol .n,.hist-d .n,
+.appt-info-row>b,.svc .pr,.tp .v,.wheel-i,.cal-day-overview b,.biz-fact b{font-variant-numeric:tabular-nums}
+
+/* ---------- движение ----------
+   Карточки нового экрана поднимаются каскадом: номер задаёт router.js
+   в --i первым элементам, остальное появляется сразу. Только при смене
+   экрана — перерисовка по данным ничего не двигает. */
+.rise{animation:rise .5s var(--e-nav) both;animation-delay:calc(var(--i,0) * 38ms)}
+@keyframes rise{from{opacity:0;transform:translate3d(0,14px,0) scale(.985)}to{opacity:1;transform:none}}
+.press,.mcard,.svc,.appt,.lrow[data-a],.ai-card,.cat-tile,.upc-body,.hist-main{transition:transform .22s var(--e-spring),opacity .14s}
+.btn,.ico-btn,.chip,.slot,.act,.dcard,.wk .d,.col-dot,.star,.fab,.mc-cell{transition:transform .22s var(--e-spring),background .15s,color .15s,box-shadow .2s}
+.btn:active,.fab:active{transform:scale(.96)}
+.fab:active{transform:scale(.92) rotate(45deg)}
+/* отклик указателя на десктопе: карточка приподнимается, кнопка светлеет */
+@media(hover:hover){
+  .press:hover,.mcard:hover,.svc:hover,.appt:hover,.ai-card:hover,.cat-tile:hover{transform:translateY(-1px)}
+  .mcard:hover,.svc:hover,.appt:hover{box-shadow:inset 0 1px 0 var(--hl),var(--sh-2)}
+  .btn.p:hover,.btn.ai:hover,.fab:hover{filter:brightness(1.06)}
+  .ico-btn:hover{background:var(--sf-2)}
+  .tab:hover{color:var(--tx-2)}
+  .tab.on:hover{color:var(--p)}
 }

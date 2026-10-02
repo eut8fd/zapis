@@ -1,5 +1,5 @@
 import { $, esc, t as tr, topSheet, closeAllSheets, onSheetsChanged } from './ui.js';
-import { icon } from './icons.js';
+import { icon, iconFill } from './icons.js';
 import { haptic, setBackButton } from './tg.js';
 import { S, reportError, can, roleName, me } from './store.js';
 
@@ -121,7 +121,7 @@ function tabbar() {
   const active = (typeof def.tab === 'function' ? def.tab() : def.tab) || cur.r;
   return `<nav class="tabbar">${tabs.map(t => `
     <button class="tab ${active === t.r ? 'on' : ''} ${active === t.r && tabPulse === t.r ? 'tab-pulse' : ''}" data-a="tab" data-r="${t.r}">
-      ${icon(t.i, 23, active === t.r ? 2.1 : 1.8)}<span class="lb">${esc(tr(t.t))}</span>
+      <span class="tab-ic">${active === t.r ? iconFill(t.i, 24) : icon(t.i, 24, 1.9)}</span><span class="lb">${esc(tr(t.t))}</span>
     </button>`).join('')}</nav>`;
 }
 
@@ -175,9 +175,13 @@ export function render(fresh = false) {
     // Telegram WebView по-разному реализует View Transitions: на части
     // устройств снимки мерцают и меняют размер fixed-кнопок. Однослойная
     // CSS-анимация предсказуема и не накладывает старый интерфейс на новый.
-    const enter = animate ? ` nav-enter nav-${motion}` : '';
+    // Переход по стеку двигает весь экран; смена вкладки — только
+    // карточки, каскадом. Двойное движение смотрится суетливо.
+    const cascade = animate && (motion === 'tab' || motion === 'replace');
+    const enter = animate && !cascade ? ` nav-enter nav-${motion}` : '';
     app.innerHTML = `<div class="screen ${noTab ? 'no-tab' : ''} ${def.fab ? 'has-fab' : ''}${enter}" id="screen">${html}</div>` +
       (noTab ? '' : tabbar()) + (def.fab ? def.fab() : '');
+    if (cascade) stagger($('#screen'));
     tabPulse = null;
     if (fresh) window.scrollTo(0, 0);
     if (def.mount) { try { def.mount(e.p, $('#screen')); } catch (err) { console.error(err); } }
@@ -185,6 +189,22 @@ export function render(fresh = false) {
     rendering = false;
   };
   paint();
+}
+
+/* Каскад появления: первым карточкам экрана по порядку в DOM
+   выдаётся номер — CSS превращает его в задержку. Вложенные не
+   считаем (карточка внутри карточки поднималась бы дважды), дальше
+   десятка с лишним элементов — не ждём: они ниже экрана. */
+const RISE = '.card,.kpis,.kpi,.mkpi,.grid2,.grid3,.hero,.ai-hero,.statbar,.appt,.svc,.mcard,.ai-card,.ins,.wgrid,.mcal,.cal-range-day,.cat-tile,.biz-fact,.st-card,.empty,.pub-cta,.sec-h,.chips,.acts,.cal-view-switch,.pub-hero,.cal-summary-wrap,.setup-list';
+function stagger(root) {
+  if (!root) return;
+  let i = 0;
+  for (const el of root.querySelectorAll(RISE)) {
+    if (i >= 16) break;
+    if (el.parentElement && el.parentElement.closest(RISE)) continue;
+    el.classList.add('rise');
+    el.style.setProperty('--i', i++);
+  }
 }
 
 /* ---------- инициализация ---------- */
