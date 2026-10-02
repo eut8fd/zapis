@@ -86,7 +86,8 @@ def money(n, currency='₸'):
         n = int(round(float(n)))
     except (TypeError, ValueError):
         return ''
-    return '{:,}'.format(n).replace(',', ' ') + ' ' + (currency or '₸')
+    # валюту задаёт владелец — в HTML сообщения она идёт только экранированной
+    return '{:,}'.format(n).replace(',', ' ') + ' ' + esc(currency or '₸')
 
 
 def duration_text(m):

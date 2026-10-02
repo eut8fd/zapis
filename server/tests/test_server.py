@@ -426,6 +426,28 @@ class ReviewFindings(ServerCase):
         self.assertEqual(len(rows), 2)
         self.assertTrue(any(n['sent_at'] is None for n in rows))   # новое напоминание на новую дату
 
+    def test_06_public_fields_are_sanitized(self):
+        st, boot = self.call('POST', '/api/v2/boot', {'start': 'owner'}, user='11:Owner R')
+        c = boot['data']['companies'][0]
+        c['cover'] = "x');\"><img src=x onerror=alert(1)>"
+        c['logo'] = 'data:image/jpeg;base64,/9j/4AAQSkZJRg=='
+        c['color'] = 'red;background:url(x)'
+        c['currency'] = '<a href=x>₸</a>'
+        c['hours']['1']['from'] = '<img onerror=1>'
+        c['cats'] = {'bad': {'t': 'x', 'color': 'javascript:alert(1)'}}
+        r = self.push({'companies': [c]}, user='11:Owner R')
+        self.assertEqual(r['rejected'], [])
+        saved = serve.STORE.body('companies', 'co_r1')
+        self.assertIsNone(saved['cover'])
+        self.assertTrue(saved['logo'].startswith('data:image/jpeg;base64,'))
+        self.assertEqual(saved['color'], '#4C6FFF')
+        self.assertEqual(saved['currency'], '₸')
+        self.assertEqual(saved['hours']['1']['from'], '09:00')
+        self.assertEqual(saved['cats']['bad']['color'], '#7C8AA5')
+        # и в уведомлении валюта экранирована
+        import notify
+        self.assertIn('&lt;', notify.money(10, '<b>'))
+
 
 if __name__ == '__main__':
     unittest.main()

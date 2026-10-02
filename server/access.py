@@ -16,6 +16,7 @@
 Один человек может быть владельцем одной компании и клиентом другой —
 роль считается для каждой компании отдельно.
 """
+import re
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -452,6 +453,106 @@ def check_inbox(scope, body, existing, ctx):
     raise Denied('нет доступа к уведомлениям компании')
 
 
+# ------------------------------------------------------------------ санитизация
+# Эти поля экраны подставляют в атрибуты HTML (style="background:url('…')",
+# style="color:…") и в текст сообщений Telegram. Владелец салона пишет их
+# на сервер, а читают их клиенты — чужие люди. Поэтому сервер пропускает
+# только безопасные значения: цвет — только hex, картинка — только data-URL
+# без кавычек и пробелов, время — только ЧЧ:ММ.
+COLOR_RE = re.compile(r'^#[0-9a-fA-F]{6}$')
+IMAGE_RE = re.compile(r'^data:image/(png|jpeg|jpg|webp|gif|svg\+xml)(;base64)?,[A-Za-z0-9+/=%._~!*()\-]*$')
+TIME_RE = re.compile(r'^([01]\d|2[0-3]):[0-5]\d$')
+TEXT_LIMITS = {'name': 80, 'short': 40, 'cat': 60, 'city': 60, 'addr': 160, 'phone': 32, 'about': 600,
+               'role': 60, 'desc': 300, 'note': 2000, 'tg': 64, 'slug': 64, 'tgLink': 64}
+
+
+def safe_color(v, default='#4C6FFF'):
+    return v if isinstance(v, str) and COLOR_RE.match(v) else default
+
+
+def safe_image(v):
+    return v if isinstance(v, str) and len(v) <= MAX_IMAGE and IMAGE_RE.match(v) else None
+
+
+MAX_IMAGE = 600 * 1024
+
+
+def safe_time(v, default):
+    return v if isinstance(v, str) and TIME_RE.match(v) else default
+
+
+def safe_week(week):
+    """Недельный график: {0..6: {on, from, to, breaks}} с проверенными временами."""
+    out = {}
+    src = week if isinstance(week, dict) else {}
+    for d in range(7):
+        w = src.get(str(d)) or src.get(d) or {}
+        if not isinstance(w, dict):
+            w = {}
+        frm = safe_time(w.get('from'), '09:00')
+        to = safe_time(w.get('to'), '20:00')
+        breaks = []
+        for b in (w.get('breaks') or [])[:10]:
+            if isinstance(b, dict) and TIME_RE.match(str(b.get('from', ''))) and TIME_RE.match(str(b.get('to', ''))):
+                breaks.append({'from': b['from'], 'to': b['to']})
+        out[str(d)] = {'on': bool(w.get('on')), 'from': frm, 'to': to, 'breaks': breaks}
+    return out
+
+
+def clip_text(body, fields=TEXT_LIMITS):
+    for k, n in fields.items():
+        if k in body and body[k] is not None:
+            body[k] = str(body[k])[:n]
+
+
+def sanitize(col, body):
+    if col == 'companies':
+        clip_text(body)
+        body['color'] = safe_color(body.get('color'))
+        body['logo'] = safe_image(body.get('logo'))
+        body['cover'] = safe_image(body.get('cover'))
+        body['hours'] = safe_week(body.get('hours'))
+        cur = str(body.get('currency') or '₸')
+        body['currency'] = cur[:4] if cur and not re.search(r'[<>&"\']', cur) else '₸'
+        for group in ('cats',):
+            cats = body.get(group)
+            if isinstance(cats, dict):
+                for k, v in list(cats.items()):
+                    if not isinstance(v, dict):
+                        cats.pop(k)
+                        continue
+                    v['t'] = str(v.get('t') or '')[:60]
+                    v['color'] = safe_color(v.get('color'), '#7C8AA5')
+        fin = body.get('finCats')
+        if isinstance(fin, dict):
+            for kind in ('income', 'expense'):
+                for k, v in list((fin.get(kind) or {}).items()):
+                    if not isinstance(v, dict):
+                        fin[kind].pop(k)
+                        continue
+                    v['t'] = str(v.get('t') or '')[:60]
+                    v['color'] = safe_color(v.get('color'), '#7C8AA5')
+    elif col == 'employees':
+        clip_text(body)
+        body['color'] = safe_color(body.get('color'))
+        body['photo'] = safe_image(body.get('photo'))
+        body['schedule'] = safe_week(body.get('schedule'))
+    elif col == 'services':
+        clip_text(body)
+        body['color'] = safe_color(body.get('color'))
+        body['photo'] = safe_image(body.get('photo'))
+        try:
+            body['price'] = max(0, int(body.get('price') or 0))
+            body['duration'] = max(5, min(24 * 60, int(body.get('duration') or 60)))
+        except (TypeError, ValueError):
+            raise Denied('цена и длительность должны быть числами')
+    elif col == 'clients':
+        clip_text(body)
+        body['color'] = safe_color(body.get('color'))
+        if 'photo' in body:
+            body['photo'] = safe_image(body.get('photo'))
+
+
 def check_write(ctx, col, body, existing, scope, store, tz, company):
     """
     Проверить и при необходимости поправить сущность перед записью.
@@ -460,6 +561,7 @@ def check_write(ctx, col, body, existing, scope, store, tz, company):
     role = scope.role if scope else None
     if ctx.is_admin:
         role = 'admin'
+    sanitize(col, body)
     if col in ('plans', 'notices', 'saBroadcasts', 'bans'):
         if role != 'admin':
             raise Denied('только для администратора платформы')
@@ -566,6 +668,7 @@ def owner_employee(company, identity):
 def normalize_new_company(body, plans, trial_days, tz):
     """Новая компания: пробный период и тариф задаёт платформа, не клиент."""
     from datetime import timedelta
+    sanitize('companies', body)
     ids = [p['id'] for p in plans] or ['PRO']
     if body.get('plan') not in ids:
         body['plan'] = 'PRO' if 'PRO' in ids else ids[0]

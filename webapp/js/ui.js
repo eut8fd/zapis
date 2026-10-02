@@ -109,7 +109,7 @@ export function avatar(p, size = 'm', cls = '') {
   const c = p && p.color ? p.color : 'var(--p)';
   // Фото важнее инициалов: если оно есть, показываем его (§65, §66)
   if (p && p.photo) {
-    return `<div class="av ${size} ${cls} av-photo" style="background-image:url('${p.photo}')"></div>`;
+    return `<div class="av ${size} ${cls} av-photo" style="background-image:url('${esc(p.photo)}')"></div>`;
   }
   const st = `background:linear-gradient(145deg,${c},color-mix(in srgb,${c} 72%,#1a2030))`;
   return `<div class="av ${size} ${cls}" style="${st}">${esc(p && p.initials || '?')}</div>`;
@@ -221,7 +221,7 @@ export function photoField({ src, label, hint = '', actPick, actDel, ic = 'image
   return `<div class="field"><label>${esc(label)}</label>
     <div class="ph-row">
       <button class="ph-box ${round ? 'round' : ''} ${src ? 'has' : ''}" data-a="${actPick}"
-        ${src ? `style="background-image:url('${src}')"` : ''}>
+        ${src ? `style="background-image:url('${esc(src)}')"` : ''}>
         ${src ? '' : icon(ic, 24)}
       </button>
       <div class="grow">

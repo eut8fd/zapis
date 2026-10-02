@@ -68,7 +68,7 @@ route('cl.company', {
     // два разных блока подряд читались как склейка. Градиент поверх фото
     // нужен, чтобы белый текст оставался читаемым на любом снимке.
     const heroBg = c.cover
-      ? `background-image:linear-gradient(170deg,rgba(12,16,32,.30) 0%,rgba(12,16,32,.78) 100%),url('${c.cover}')`
+      ? `background-image:linear-gradient(170deg,rgba(12,16,32,.30) 0%,rgba(12,16,32,.78) 100%),url('${esc(c.cover)}')`
       : `background-image:${brandGradient(col)}`;
     // Подписка салона кончилась — сервер запись не примет. Говорим об этом
     // сразу, а не отказом после выбора времени.
@@ -77,7 +77,7 @@ route('cl.company', {
     return `
     <div class="pub-hero ${c.cover ? 'has-cover' : ''}" style="${heroBg}">
       <div class="row between">
-        ${c.logo ? `<div class="av l av-sq av-photo pub-logo" style="background-image:url('${c.logo}')"></div>`
+        ${c.logo ? `<div class="av l av-sq av-photo pub-logo" style="background-image:url('${esc(c.logo)}')"></div>`
         : `<div class="av l av-sq pub-logo" style="background:rgba(255,255,255,.2)">${esc(c.initials)}</div>`}
         <div class="row" style="gap:8px">
           ${langBtn('pub-share')}
@@ -87,7 +87,7 @@ route('cl.company', {
       <div class="nm">${esc(c.name)}</div>
       <div class="pub-meta">
         <span class="pill">${icon('pin', 13, 2.4)}${esc(c.city)}</span>
-        <span class="pill">${icon('clock', 13, 2.4)}${hoursToday.on ? hoursToday.from + ' — ' + hoursToday.to : t('сегодня выходной')}</span>
+        <span class="pill">${icon('clock', 13, 2.4)}${hoursToday.on ? esc(hoursToday.from + ' — ' + hoursToday.to) : t('сегодня выходной')}</span>
       </div>
       <div class="pub-addr">${esc(c.addr)}</div>
     </div>
@@ -117,7 +117,7 @@ route('cl.company', {
         <button class="sec-a" data-a="cl.start">${t('Все {n}', { n: svcs().length })} ${icon('fwd', 14, 2.4)}</button></div>
       <div class="wrap stack s">
         ${list.map(s => `<button class="svc press" style="width:100%" data-a="cl.startSvc" data-id="${s.id}">
-          ${s.photo ? `<div class="svc-ph" style="background-image:url('${s.photo}')"></div>`
+          ${s.photo ? `<div class="svc-ph" style="background-image:url('${esc(s.photo)}')"></div>`
         : `<div class="tint" style="background:${s.color}1f;color:${s.color}">${catIcon(s.cat, 18)}</div>`}
           <div class="grow" style="text-align:left"><div class="b" style="font-size:14.5px">${esc(s.name)}</div>
             <div class="tiny muted">${nMin(s.duration)}</div></div>
@@ -369,7 +369,7 @@ function step1() {
       <div class="sec-h"><div class="sec-t" style="font-size:13px;color:var(--tx-3);text-transform:uppercase;letter-spacing:.05em">${t(CATN[cat] || 'Услуги')}</div></div>
       <div class="wrap stack s">
         ${byCat[cat].map(s => `<button class="svc press" style="width:100%" data-a="bk.svc" data-id="${s.id}">
-          ${s.photo ? `<div class="svc-ph" style="background-image:url('${s.photo}')"></div>`
+          ${s.photo ? `<div class="svc-ph" style="background-image:url('${esc(s.photo)}')"></div>`
         : `<div class="tint" style="background:${s.color}1f;color:${s.color}">${catIcon(s.cat, 18)}</div>`}
           <div class="grow" style="text-align:left">
             <div class="b" style="font-size:14.5px">${esc(s.name)}</div>

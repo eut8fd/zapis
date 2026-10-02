@@ -213,7 +213,7 @@ def money(n, cur='₸'):
         n = int(round(float(n)))
     except (TypeError, ValueError):
         return ''
-    return '{:,}'.format(n).replace(',', ' ') + ' ' + (cur or '₸')
+    return '{:,}'.format(n).replace(',', ' ') + ' ' + esc(cur or '₸')
 
 
 def dur_text(m):

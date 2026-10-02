@@ -259,7 +259,7 @@ route('o.services', {
           ${byCat[cat].map(s => {
           const stat = s30.byService.find(x => x.name === s.name);
           return `<button class="svc press" style="width:100%" data-a="sv.open" data-id="${s.id}">
-              ${s.photo ? `<div class="svc-ph" style="background-image:url('${s.photo}')"></div>`
+              ${s.photo ? `<div class="svc-ph" style="background-image:url('${esc(s.photo)}')"></div>`
               : `<div class="tint" style="background:${s.color}1f;color:${s.color}">${catIcon(s.cat, 18)}</div>`}
               <div class="grow" style="text-align:left">
                 <div class="b" style="font-size:14.5px">${esc(s.name)}</div>
@@ -1960,7 +1960,7 @@ route('o.settings', {
 
     <div class="wrap sec" style="margin-top:4px">
       <div class="card" style="padding:0;overflow:hidden">
-        ${c.cover ? `<div class="cover" style="background-image:url('${c.cover}')"></div>` : ''}
+        ${c.cover ? `<div class="cover" style="background-image:url('${esc(c.cover)}')"></div>` : ''}
         <div class="pad row" style="gap:14px">
           ${avatar({ initials: c.initials, color: c.color, photo: c.logo }, 'l', 'av-sq')}
           <div class="grow"><div class="b" style="font-size:16px">${esc(c.name)}</div>

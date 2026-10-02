@@ -15,6 +15,7 @@
 Данные — в SQLite (`server/db.py`), права — в `server/access.py`,
 уведомления в Telegram шлёт поток из `server/notify.py`.
 """
+import hmac
 import http.server
 import json
 import os
@@ -190,6 +191,7 @@ def find_or_create_client(cid, tg_id, name, username, phone=''):
         'initials': access.initials(name), 'color': '#06AED4',
         'createdAt': access.now_iso(), 'note': '', 'ai': None, 'tags': [],
     }
+    access.sanitize('clients', rec)
     STORE.put('clients', rec, by=str(tg_id))
     return rec
 
@@ -399,6 +401,7 @@ def apply_push(ctx, payload):
                     if not str(body.get('name') or '').strip() or body.get('name') == 'Вы':
                         body['name'] = ctx.identity.name
                         body['initials'] = access.initials(ctx.identity.name)
+                    access.sanitize(col, body)
                     STORE.put(col, body, by=ctx.tg_id)
                     new_companies[cid]['_owned'] = 'owner'
                     ctx.reload()
@@ -528,6 +531,7 @@ def accept_invite(ctx, inv_id, person):
         e['tg'] = ctx.identity.username
         e['tgId'] = ctx.tg_id
         e['linkedAt'] = access.now_iso()
+        access.sanitize('employees', e)
         STORE.put('employees', e, by=ctx.tg_id)
         inv['usedAt'] = access.now_iso()
         inv['usedBy'] = e['id']
@@ -722,7 +726,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def _internal(self):
         tok = self.headers.get('X-Internal-Token') or ''
-        if not tok or tok != config.internal_token():
+        if not tok or not hmac.compare_digest(tok, config.internal_token()):
             raise ApiError(403, 'внутренний маршрут', 'forbidden')
 
     # ---------------------------------------------------------- маршруты
