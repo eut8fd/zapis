@@ -350,6 +350,56 @@ def on_ticket(store, ticket, identity):
     notify_admins(store, 'admin_ticket', ticket['id'], text, buttons([app_button('Открыть панель', 'admin')]))
 
 
+def on_plan_changed(store, old, new):
+    """Администратор продлил или сменил тариф — владелец должен узнать сразу."""
+    until = slots.parse_iso(new.get('planUntil'))
+    tz = company_tz(new)
+    when = until.astimezone(tz).strftime('%d.%m.%Y') if until else '—'
+    changed_plan = old.get('plan') != new.get('plan')
+    title = ('Тариф изменён: %s' % new.get('plan')) if changed_plan else 'Подписка продлена'
+    text = 'Тариф %s действует до %s.' % (new.get('plan'), when)
+    company_inbox(store, new['id'], 'plan', title, text, go_to='o.subscription', ref_id='plan:%s' % when)
+    for e in store.bodies('employees', new['id']):
+        if e.get('isOwner') and e.get('tgId'):
+            store.schedule('plan:%s:%s:%s' % (new['id'], when, e['tgId']), e['tgId'], 'plan',
+                           '💳 <b>%s</b>\n\n%s\n%s' % (esc(title), esc(new.get('name', '')), esc(text)),
+                           time.time(), ref='plan:%s' % new['id'], company_id=new['id'],
+                           buttons=buttons([app_button('Подписка', 'owner_sub')]))
+
+
+def expiring_plans(store, now=None, days=3):
+    """За три дня до конца подписки — владельцу. Ключ по дате окончания:
+    после продления придёт новое, повторно по той же дате — нет."""
+    now = now or datetime.now(timezone.utc)
+    n = 0
+    for c in store.all_companies():
+        until = slots.parse_iso(c.get('planUntil'))
+        if not until or c.get('status') == 'blocked':
+            continue
+        left = until - now
+        if not (timedelta(0) <= left <= timedelta(days=days)):
+            continue
+        tz = company_tz(c)
+        when = until.astimezone(tz).strftime('%d.%m.%Y')
+        for e in store.bodies('employees', c['id']):
+            if not (e.get('isOwner') and e.get('tgId')):
+                continue
+            key = 'expiring:%s:%s:%s' % (c['id'], when, e['tgId'])
+            if store.scheduled(key):
+                continue
+            text = ('⏳ <b>Подписка заканчивается %s</b>\n\n%s · тариф %s\n\nПосле окончания страница записи '
+                    'перестанет принимать новых клиентов. Продлить можно в приложении.'
+                    % (esc(when), esc(c.get('name', '')), esc(c.get('plan', ''))))
+            store.schedule(key, e['tgId'], 'expiring', text, now.timestamp(), ref='plan:%s' % c['id'],
+                           company_id=c['id'], buttons=buttons([app_button('Продлить', 'owner_sub')]))
+            n += 1
+            # карточка в колокольчике — одна на дату окончания, вместе с первым сообщением
+            company_inbox(store, c['id'], 'plan', 'Подписка заканчивается %s' % when,
+                          'После окончания страница записи перестанет принимать новых клиентов.',
+                          go_to='o.subscription', ref_id='expiring:%s:%s' % (c['id'], when))
+    return n
+
+
 def on_invite_accepted(store, employee, company):
     """Владельцу — что в команде появился человек."""
     owners = [e for e in store.bodies('employees', company['id']) if e.get('isOwner') and e.get('tgId')]
@@ -495,6 +545,7 @@ class Sender(threading.Thread):
             self._last_daily = ts
             auto_complete(self.store, now_dt)
             daily_digests(self.store, now_dt)
+            expiring_plans(self.store, now_dt)
         for n in self.store.due_notifications(ts):
             late = ts - n['due_at']
             if n['kind'] in ('rem24', 'rem2') and late > LATE_LIMIT_MIN * 60:

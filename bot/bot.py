@@ -145,6 +145,14 @@ def company(cid):
 
 def company_id_of(uid):
     cid = state(uid).get('company')
+    if not cid:
+        # users.json мог не пережить переезд контейнера — сервер помнит салон
+        try:
+            cid = (api.user(uid) or {}).get('home') or ''
+            if cid:
+                set_state(uid, company=cid)
+        except api.ServerError:
+            cid = ''
     return cid if cid and company(cid) else None
 
 

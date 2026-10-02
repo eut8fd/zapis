@@ -19,11 +19,12 @@
    Сервер может отказать (чужая запись, занятое время) — тогда локальная
    копия откатывается к серверной и человек видит причину.
    ========================================================= */
-import { S, emit, onSave, allCompanies, setServerMode, DATA_COLS } from './store.js';
+import { S, emit, save, onSave, allCompanies, setServerMode, DATA_COLS } from './store.js';
 import { api, canAuth, ApiError } from './api.js';
 import { BOT_USERNAME } from './config.js';
 
 const PENDING_KEY = 'zapis.sync.pending';
+const SESSION_KEY = 'zapis.session.v1';
 const PULL_EVERY = 30000;
 
 const st = {
@@ -68,6 +69,9 @@ export function adopt(sessionPayload) {
   st.mode = 'server';
   st.session = { ...sessionPayload };
   delete st.session.data;
+  // Сессию запоминаем: без сети приложение откроется на последних данных,
+  // а не на демо-сиде, который человеку ни о чём не говорит.
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify({ ...st.session, seq: sessionPayload.seq || 0 })); } catch (e) { }
   st.seq = sessionPayload.seq || 0;
   const data = sessionPayload.data || {};
   const next = {};
@@ -75,8 +79,42 @@ export function adopt(sessionPayload) {
   S.data = next;
   takeSnapshot();
   setServerMode(true);
+  // Кэш пишется сразу, а не по первому изменению: иначе человек, который
+  // только посмотрел расписание, без сети откроет демо-сид вместо своего салона.
+  save();
   startPolling();
 }
+
+/**
+ * Сервер не ответил, но в кэше лежит состояние с прошлого серверного
+ * входа: открываемся на нём. Правки копятся в pending и уйдут, когда
+ * сеть вернётся; чужие изменения подтянутся первым же pull.
+ */
+export function adoptOffline(cache) {
+  let ses = null;
+  try { ses = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch (e) { ses = null; }
+  if (!ses || !cache || !cache.data || !cache.server) return null;
+  st.mode = 'server';
+  st.session = ses;
+  st.seq = ses.seq || 0;
+  st.offline = true;
+  const next = {};
+  DATA_COLS.forEach(k => { next[k] = Array.isArray(cache.data[k]) ? cache.data[k] : []; });
+  S.data = next;
+  takeSnapshot();
+  // всё, что не ушло в прошлый раз, остаётся грязным относительно снимка
+  const pending = readPending();
+  if (pending) {
+    Object.keys(pending.upsert || {}).forEach(col => (pending.upsert[col] || []).forEach(e => {
+      if (st.snapshot[col]) st.snapshot[col].delete(e.id);
+    }));
+  }
+  setServerMode(true);
+  startPolling();
+  return ses;
+}
+
+export const isOffline = () => !!st.offline;
 
 /* ---------------- снимок и разница ---------------- */
 function takeSnapshot() {
@@ -257,6 +295,11 @@ export async function pull() {
     const n = applyChanges(r.changes || []);
     st.seq = r.seq || st.seq;
     st.failures = 0;
+    if (st.offline) {
+      // сеть вернулась: дальше работаем как обычно
+      st.offline = false;
+      import('./ui.js').then(u => u.toast('Связь с сервером восстановлена')).catch(() => { });
+    }
     if (n) emit();
     return n;
   } catch (e) {

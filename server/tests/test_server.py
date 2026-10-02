@@ -448,6 +448,24 @@ class ReviewFindings(ServerCase):
         import notify
         self.assertIn('&lt;', notify.money(10, '<b>'))
 
+    def test_07_admin_extends_plan_and_expiring_notice(self):
+        c = serve.STORE.body('companies', 'co_r1')
+        c['planUntil'] = slots.to_iso(datetime.now(timezone.utc) + timedelta(days=2))
+        r = self.push({'companies': [c]}, user='999:Admin')
+        self.assertEqual(r['rejected'], [])
+        kinds = {n['kind'] for n in serve.STORE.notifications_for(ref='plan:co_r1')}
+        self.assertIn('plan', kinds)                         # владельцу — «подписка продлена»
+        self.assertEqual(serve.STORE.bodies('inbox', 'co_r1')[-1]['kind'], 'plan')
+        import notify
+        self.assertEqual(notify.expiring_plans(serve.STORE), 1)
+        self.assertEqual(notify.expiring_plans(serve.STORE), 0)   # повторно по той же дате — нет
+        # владелец не может продлить себе подписку сам
+        c = serve.STORE.body('companies', 'co_r1')
+        c['planUntil'] = '2040-01-01T00:00:00.000Z'
+        r = self.push({'companies': [c]}, user='11:Owner R')
+        self.assertEqual(r['rejected'], [])
+        self.assertNotEqual(serve.STORE.body('companies', 'co_r1')['planUntil'], '2040-01-01T00:00:00.000Z')
+
 
 if __name__ == '__main__':
     unittest.main()

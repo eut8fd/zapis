@@ -1,13 +1,13 @@
 import {
-  S, load, loadServer, sub, emit, reportError, setHome, viewCompany, ensurePerson, homeId,
-  isServer, allCompanies, emps, co,
+  S, load, loadServer, sub, emit, save, reportError, setHome, viewCompany, ensurePerson, homeId,
+  isServer, allCompanies, emps, co, readCache,
 } from './store.js';
 import { initTelegram, tgColorScheme, startParam, tgUser, tgId, tgUsername, tg } from './tg.js';
 import { adminAllowed, unlockWithCode } from './config.js';
 import { bindDelegation, on } from './bus.js';
 import { render, bootRoute, go, back, routes, resetStack } from './router.js';
 import { $ } from './ui.js';
-import { connect, adopt, session, pushNow, pull } from './sync.js';
+import { connect, adopt, adoptOffline, session, pushNow, pull } from './sync.js';
 import { parseStart, SECTIONS, enterCompany, enterAsClient } from './roles.js';
 
 /* ---------- тема ---------- */
@@ -180,13 +180,25 @@ async function boot() {
   ]);
 
   let def;
-  if (ses) {
-    loadServer();
-    adopt(ses);
+  // Сервер молчит, но прошлый вход был серверным: показываем последние данные,
+  // а не демо-сид. Правки накопятся и уйдут, когда сеть вернётся.
+  let offline = null;
+  if (!ses) {
+    const cache = readCache();
+    if (cache && cache.server && cache.data) {
+      loadServer(cache);
+      offline = adoptOffline(cache);
+    }
+  }
+  if (ses || offline) {
+    if (ses) { loadServer(); adopt(ses); }
     def = serverRoute(raw);
     document.body.dataset.server = '1';
     // кнопка демо-панели рисовалась при импорте, до того как стал известен режим
     try { (await import('./dev.js')).mountFab(); } catch (e) { }
+    if (offline) {
+      import('./ui.js').then(u => u.toast('Нет связи с сервером — показываем последние данные', 'dan')).catch(() => { });
+    }
   } else {
     load();
     // сохранённая сессия не должна давать доступ к Super Admin без ключа
@@ -209,7 +221,9 @@ async function boot() {
   sub(() => render(false));
   $('#boot') && $('#boot').remove();
   bootRoute(def);
-  if (ses) {
+  if (ses || offline) {
+    // роль и салон, выбранные при входе, нужны и офлайн-запуску
+    save();
     // не отправленное с прошлого раза и свежие чужие изменения
     pushNow().then(() => pull()).catch(() => { });
   }

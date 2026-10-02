@@ -357,6 +357,11 @@ class Store:
             c.commit()
             return c.execute('SELECT last_insert_rowid()').fetchone()[0]
 
+    def scheduled(self, key):
+        """Есть ли уведомление с таким ключом — отправленное или ещё в очереди.
+        Нужно периодическим задачам, чтобы не ставить одно и то же каждые 10 минут."""
+        return self.conn().execute('SELECT 1 FROM notifications WHERE key=?', (key,)).fetchone() is not None
+
     def cancel_notifications(self, ref, kinds=None):
         """Снять неотправленные уведомления по записи (отмена, перенос)."""
         with self._wlock:

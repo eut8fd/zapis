@@ -467,6 +467,9 @@ def apply_push(ctx, payload):
                 notify.on_appointment(STORE, old, new, role)
             elif col == 'tickets' and old is None:
                 notify.on_ticket(STORE, new, ctx.identity)
+            elif col == 'companies' and old is not None and ctx.is_admin and (
+                    old.get('planUntil') != new.get('planUntil') or old.get('plan') != new.get('plan')):
+                notify.on_plan_changed(STORE, old, new)
             elif col == 'clients' and role == 'client':
                 STORE.touch_user(ctx.tg_id, name=new.get('name'), phone=new.get('phone'))
             elif col == 'employees' and str(new.get('tgId') or '') == ctx.tg_id:
